@@ -1,17 +1,22 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteBase /
   
+  # Ensure clean MIME types on LiteSpeed/Apache
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType application/manifest+json .webmanifest
+  AddType image/svg+xml .svg
+
   # Serve existing files and directories directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
 
-  # Route all other URLs to index.html for React SPA
+  # Route all other URLs to index.html for Single Page Application
   RewriteRule ^ index.html [L]
 </IfModule>
 
-# Security Headers & Compression
+# Security Headers & Caching
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set X-Frame-Options "SAMEORIGIN"
