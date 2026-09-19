@@ -1,0 +1,171 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions for Attribute-Based Access Control (ABAC)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function userEmail() {
+      return isSignedIn() && request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
+    function isSuperAdminEmail() {
+      return userEmail() == 'dateandtimecalculator@gmail.com';
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserRole() {
+      return hasUserDoc() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role : '';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (isSuperAdminEmail() || getUserRole() == 'admin');
+    }
+
+    function isSupervisor() {
+      return isAdmin() || getUserRole() == 'supervisor';
+    }
+
+    function isTutor() {
+      return isSupervisor() || getUserRole() == 'tutor';
+    }
+
+    // 1. User Profiles & RBAC
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isSupervisor();
+      allow list: if isSupervisor();
+      // Allow self-registration for student/parent, or full creation by supervisor/admin
+      allow create: if isSignedIn() && (
+        isSupervisor() || 
+        (request.auth.uid == userId && request.resource.data.role in ['student', 'parent'] && request.resource.data.status in ['pending_approval', 'active'])
+      );
+      // Allow owner to update non-sensitive profile fields, or supervisor/admin to manage everything
+      allow update: if isSupervisor() || (
+        isOwner(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'uid', 'email'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 2. Students Collection
+    match /students/{studentId} {
+      allow read: if isSignedIn();
+      allow write: if isSupervisor();
+    }
+
+    // 3. Tutors Collection
+    match /tutors/{tutorId} {
+      allow read: if isSignedIn();
+      allow write: if isSupervisor();
+    }
+
+    // 4. Timetable Classes
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow write: if isSupervisor();
+    }
+
+    // 5. Daily Lesson Recitation Logs
+    match /lessons/{lessonId} {
+      allow read: if isSignedIn();
+      allow create, update: if isTutor();
+      allow delete: if isSupervisor();
+    }
+
+    // 6. Student Attendance
+    match /attendance/{attendanceId} {
+      allow read: if isSignedIn();
+      allow create, update: if isTutor();
+      allow delete: if isSupervisor();
+    }
+
+    // 7. Tutor Attendance & Shift Logging
+    match /tutor_attendance/{tutorAttendanceId} {
+      allow read: if isSignedIn();
+      allow create, update: if isTutor();
+      allow delete: if isSupervisor();
+    }
+
+    // 8. Tuition Fees & Invoices
+    match /fees/{feeId} {
+      allow read: if isSignedIn();
+      allow create: if isSupervisor();
+      // Allow student/parent to upload payment proof & receipt details, or admin/supervisor to manage full billing
+      allow update: if isSupervisor() || (
+        isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'paymentSubmittedAt', 'paymentSubmittedBy', 'paymentReference', 
+          'paymentMtcnNumber', 'paymentSenderName', 'paymentRemittanceService', 
+          'paymentProofNote', 'receiptImage', 'receiptOriginalFileName', 
+          'receiptCompressedSizeKB', 'receiptReductionPercent'
+        ])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 9. Tutor Salaries
+    match /salaries/{salaryId} {
+      allow read: if isTutor();
+      allow write: if isSupervisor();
+    }
+
+    // 10. Referrals
+    match /referrals/{referralId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSupervisor();
+      allow delete: if isAdmin();
+    }
+
+    // 11. Announcements
+    match /announcements/{announcementId} {
+      allow read: if isSignedIn();
+      allow write: if isSupervisor();
+    }
+
+    // 12. Real-Time Chat Messages
+    match /messages/{messageId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+      allow update: if isSignedIn();
+      allow delete: if isSupervisor() || (isSignedIn() && resource.data.senderId == request.auth.uid);
+    }
+
+    // 13. Trash & Recovery Records
+    match /trash_records/{trashId} {
+      allow read, write: if isSupervisor();
+    }
+
+    // 14. User Session Monitoring
+    match /user_sessions/{sessionId} {
+      allow read: if isSupervisor();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // 15. WebRTC Live Calls & Signaling
+    match /calls/{callId} {
+      allow read, write: if isSignedIn();
+
+      match /callerCandidates/{candidateId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /receiverCandidates/{candidateId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+  }
+}

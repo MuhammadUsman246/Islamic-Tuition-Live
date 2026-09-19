@@ -1,0 +1,274 @@
+{
+  "entities": {
+    "user": {
+      "title": "UserProfile",
+      "description": "User profile with role-based access information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique authentication UID" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Full display name" },
+        "role": { "type": "string", "enum": ["admin", "supervisor", "tutor", "student", "parent"], "description": "RBAC role" },
+        "status": { "type": "string", "enum": ["active", "suspended", "inactive"], "description": "Account status" },
+        "tutorId": { "type": "string", "description": "Operational tutor identifier if role is tutor" },
+        "studentId": { "type": "string", "description": "Operational student identifier if role is student" },
+        "linkedStudentIds": { "type": "array", "description": "Array of student IDs linked to parent" },
+        "phone": { "type": "string", "description": "Contact phone number" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" }
+      },
+      "required": ["uid", "email", "displayName", "role", "status"]
+    },
+    "student": {
+      "title": "Student",
+      "description": "Student record with course progress and enrollment status",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Student ID like STU-101" },
+        "name": { "type": "string", "description": "Student full name" },
+        "email": { "type": "string", "format": "email", "description": "Student email address" },
+        "phone": { "type": "string", "description": "Student phone number" },
+        "parentName": { "type": "string", "description": "Parent or guardian name" },
+        "parentEmail": { "type": "string", "format": "email", "description": "Parent email" },
+        "parentPhone": { "type": "string", "description": "Parent phone number" },
+        "assignedTutorId": { "type": "string", "description": "Assigned tutor ID (e.g. Tutor 1)" },
+        "status": { "type": "string", "enum": ["Trial", "Active", "Confirmed", "On Hold", "Inactive"], "description": "Enrollment status" },
+        "courseType": { "type": "string", "description": "Course type (Nazra, Hifz, Tajweed, etc.)" },
+        "country": { "type": "string", "description": "Country of residence" },
+        "timezone": { "type": "string", "description": "Student IANA timezone" },
+        "trialSessionsCompleted": { "type": "number", "description": "Number of trial sessions completed" },
+        "trialSessionsTotal": { "type": "number", "description": "Total trial sessions (usually 5)" },
+        "trialStatus": { "type": "string", "description": "Trial progress status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["studentId", "name", "assignedTutorId", "status", "courseType"]
+    },
+    "tutor": {
+      "title": "Tutor",
+      "description": "Academy instructor profile and operational settings",
+      "type": "object",
+      "properties": {
+        "tutorId": { "type": "string", "description": "Tutor ID like Tutor 1" },
+        "realName": { "type": "string", "description": "Tutor real name" },
+        "email": { "type": "string", "format": "email", "description": "Tutor email address" },
+        "phone": { "type": "string", "description": "Tutor phone number" },
+        "zoomLink": { "type": "string", "description": "Permanent Zoom meeting room URL" },
+        "status": { "type": "string", "enum": ["Active", "Inactive", "On Leave"], "description": "Tutor status" },
+        "hourlyRatePKR": { "type": "number", "description": "Hourly rate in PKR" },
+        "monthlySalaryPKR": { "type": "number", "description": "Fixed monthly salary in PKR" },
+        "assignedStudentIds": { "type": "array", "description": "Array of assigned student IDs" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Profile creation timestamp" }
+      },
+      "required": ["tutorId", "realName", "status"]
+    },
+    "class": {
+      "title": "TimetableClass",
+      "description": "Weekly recurring timetable class slot",
+      "type": "object",
+      "properties": {
+        "tutorId": { "type": "string", "description": "Tutor identifier" },
+        "studentId": { "type": "string", "description": "Student identifier" },
+        "studentName": { "type": "string", "description": "Student display name" },
+        "dayOfWeek": { "type": "string", "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], "description": "Day of week" },
+        "startTimePKT": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "description": "Start time in PKT (e.g. 05:00)" },
+        "durationMinutes": { "type": "number", "description": "Duration in minutes (typically 30)" },
+        "status": { "type": "string", "enum": ["Scheduled", "Completed", "Cancelled", "Rescheduled"], "description": "Class status" },
+        "isRecurring": { "type": "boolean", "description": "Whether class recurs weekly" },
+        "isWeekend": { "type": "boolean", "description": "Weekend flag" },
+        "notes": { "type": "string", "description": "Session instructions or notes" }
+      },
+      "required": ["tutorId", "studentId", "studentName", "dayOfWeek", "startTimePKT", "durationMinutes", "status"]
+    },
+    "lesson": {
+      "title": "Lesson",
+      "description": "Daily recitation lesson log and student progress entry",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Student ID" },
+        "studentName": { "type": "string", "description": "Student Name" },
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "date": { "type": "string", "format": "date", "description": "Date of lesson" },
+        "month": { "type": "string", "description": "Billing month string" },
+        "lessonType": { "type": "string", "description": "Course type" },
+        "lessonCovered": { "type": "string", "description": "Portion covered" },
+        "revision": { "type": "string", "description": "Revision portion" },
+        "mistakes": { "type": "string", "description": "Identified mistakes" },
+        "weakAreas": { "type": "string", "description": "Tajweed weak areas" },
+        "homework": { "type": "string", "description": "Assigned homework" },
+        "teacherRemarks": { "type": "string", "description": "Teacher remarks" },
+        "nextLesson": { "type": "string", "description": "Next lesson objective" },
+        "performance": { "type": "string", "enum": ["Excellent", "Good", "Average", "Needs Practice"], "description": "Performance grade" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp" }
+      },
+      "required": ["studentId", "studentName", "tutorId", "date", "lessonType", "lessonCovered", "performance"]
+    },
+    "attendance": {
+      "title": "AttendanceRecord",
+      "description": "Student class attendance record",
+      "type": "object",
+      "properties": {
+        "classId": { "type": "string", "description": "Class identifier" },
+        "studentId": { "type": "string", "description": "Student ID" },
+        "studentName": { "type": "string", "description": "Student Name" },
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "date": { "type": "string", "format": "date", "description": "Session date" },
+        "status": { "type": "string", "enum": ["Present", "Late", "Absent", "Cancelled", "Make-up"], "description": "Attendance status" },
+        "markedBy": { "type": "string", "description": "Name of user who marked attendance" },
+        "markedAt": { "type": "string", "format": "date-time", "description": "Timestamp" }
+      },
+      "required": ["studentId", "tutorId", "date", "status"]
+    },
+    "tutorAttendance": {
+      "title": "TutorAttendanceRecord",
+      "description": "Tutor shift login and attendance record",
+      "type": "object",
+      "properties": {
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "tutorName": { "type": "string", "description": "Tutor Name" },
+        "date": { "type": "string", "format": "date", "description": "Date" },
+        "loginTime": { "type": "string", "description": "Time of login in PKT" },
+        "status": { "type": "string", "enum": ["Present", "Absent", "Late", "Excused", "On Time", "Leave"], "description": "Shift status" },
+        "lateDurationMinutes": { "type": "number", "description": "Minutes late if any" }
+      },
+      "required": ["tutorId", "tutorName", "date", "status"]
+    },
+    "fee": {
+      "title": "StudentFee",
+      "description": "Student tuition invoice and payment status",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string", "description": "Invoice number" },
+        "studentId": { "type": "string", "description": "Student ID" },
+        "studentName": { "type": "string", "description": "Student Name" },
+        "parentName": { "type": "string", "description": "Parent Name" },
+        "amount": { "type": "number", "description": "Tuition amount" },
+        "currency": { "type": "string", "enum": ["USD", "CAD", "GBP", "EUR", "AUD", "PKR"], "description": "Currency" },
+        "billingPeriod": { "type": "string", "description": "Billing period month" },
+        "dueDate": { "type": "string", "format": "date", "description": "Payment due date" },
+        "status": { "type": "string", "enum": ["Paid", "Pending", "Overdue", "Waived", "Payment Submitted"], "description": "Invoice payment status" },
+        "paymentMethod": { "type": "string", "description": "Payment method" },
+        "paymentSubmittedAt": { "type": "string", "description": "Timestamp when student or parent notified payment" },
+        "paymentSubmittedBy": { "type": "string", "description": "Parent or Student" },
+        "paymentReference": { "type": "string", "description": "Payment transaction or reference code" },
+        "paymentMtcnNumber": { "type": "string", "description": "MTCN / PIN for Western Union, Ria, MoneyGram" },
+        "paymentSenderName": { "type": "string", "description": "Sender full name as on remittance voucher" },
+        "paymentRemittanceService": { "type": "string", "description": "Remittance service provider name" },
+        "paymentProofNote": { "type": "string", "description": "Notes from student or parent" },
+        "receiptImage": { "type": "string", "description": "WebP compressed base64 data URL for payment receipt slip" },
+        "receiptOriginalFileName": { "type": "string", "description": "Original uploaded image filename" },
+        "receiptCompressedSizeKB": { "type": "number", "description": "Compressed WebP image size in KB" },
+        "receiptReductionPercent": { "type": "number", "description": "Percentage file size reduced" },
+        "adminConfirmedBy": { "type": "string", "description": "Admin username who verified payment" },
+        "adminConfirmedAt": { "type": "string", "description": "Timestamp when admin confirmed payment" }
+      },
+      "required": ["invoiceNumber", "studentId", "studentName", "amount", "currency", "status", "dueDate"]
+    },
+    "salary": {
+      "title": "TutorSalary",
+      "description": "Tutor monthly salary disbursement record",
+      "type": "object",
+      "properties": {
+        "tutorId": { "type": "string", "description": "Tutor ID" },
+        "tutorName": { "type": "string", "description": "Tutor Name" },
+        "monthlySalary": { "type": "number", "description": "Salary amount in PKR" },
+        "currency": { "type": "string", "enum": ["PKR"], "description": "PKR currency" },
+        "month": { "type": "string", "description": "Month" },
+        "status": { "type": "string", "enum": ["Paid", "Unpaid"], "description": "Disbursement status" }
+      },
+      "required": ["tutorId", "tutorName", "monthlySalary", "month", "status"]
+    },
+    "referral": {
+      "title": "Referral",
+      "description": "Student and parent referral tracking",
+      "type": "object",
+      "properties": {
+        "referrerName": { "type": "string", "description": "Referrer name" },
+        "referredStudentId": { "type": "string", "description": "Referred student ID" },
+        "referredStudentName": { "type": "string", "description": "Referred student name" },
+        "date": { "type": "string", "format": "date", "description": "Referral date" },
+        "rewardAmount": { "type": "number", "description": "Reward credit amount" },
+        "currency": { "type": "string", "enum": ["USD"], "description": "Currency" },
+        "status": { "type": "string", "description": "Approval/credit status" }
+      },
+      "required": ["referrerName", "referredStudentName", "date", "rewardAmount", "status"]
+    },
+    "announcement": {
+      "title": "Announcement",
+      "description": "Academy notice with multi-role targeting",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Announcement title" },
+        "content": { "type": "string", "description": "Announcement body" },
+        "targetRoles": { "type": "array", "description": "Targeted audience roles" },
+        "pinned": { "type": "boolean", "description": "Pinned status" },
+        "authorName": { "type": "string", "description": "Author name" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp" }
+      },
+      "required": ["title", "content", "targetRoles", "createdAt"]
+    },
+    "message": {
+      "title": "ChatMessage",
+      "description": "Academy direct and thread chat message",
+      "type": "object",
+      "properties": {
+        "threadId": { "type": "string", "description": "Chat channel or thread ID" },
+        "senderId": { "type": "string", "description": "Sender User UID" },
+        "senderName": { "type": "string", "description": "Sender Display Name" },
+        "senderRole": { "type": "string", "description": "Sender Role" },
+        "text": { "type": "string", "description": "Message text" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Message timestamp" },
+        "read": { "type": "boolean", "description": "Read flag" }
+      },
+      "required": ["threadId", "senderId", "senderName", "senderRole", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User profiles and RBAC credentials"
+    },
+    "/students/{studentId}": {
+      "schema": "student",
+      "description": "Student enrollment and progress tracking records"
+    },
+    "/tutors/{tutorId}": {
+      "schema": "tutor",
+      "description": "Tutors faculty records and compensation parameters"
+    },
+    "/classes/{classId}": {
+      "schema": "class",
+      "description": "Weekly recurring timetable schedule slots"
+    },
+    "/lessons/{lessonId}": {
+      "schema": "lesson",
+      "description": "Daily student lesson logs and Quran recitation checkpoints"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "attendance",
+      "description": "Daily student attendance records"
+    },
+    "/tutor_attendance/{tutorAttendanceId}": {
+      "schema": "tutorAttendance",
+      "description": "Tutor operational shift attendance records"
+    },
+    "/fees/{feeId}": {
+      "schema": "fee",
+      "description": "Student tuition billing invoices and payments"
+    },
+    "/salaries/{salaryId}": {
+      "schema": "salary",
+      "description": "Monthly faculty salary records"
+    },
+    "/referrals/{referralId}": {
+      "schema": "referral",
+      "description": "Student referral reward tracking"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "announcement",
+      "description": "Targeted academy announcements"
+    },
+    "/messages/{messageId}": {
+      "schema": "message",
+      "description": "Real-time thread and channel chat messages"
+    }
+  }
+}

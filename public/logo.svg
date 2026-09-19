@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 320" width="100%" height="100%">
+  <!-- Left Side: Quran Calligraphic Emblem -->
+  <g transform="translate(10, 0) scale(0.6)">
+    <!-- Top Madd (Golden / Amber) -->
+    <path d="M142 85 C180 50, 220 90, 256 65 C285 45, 305 60, 300 78 C295 95, 275 90, 250 102 C210 120, 160 115, 142 85 Z" fill="#E5A93C" />
+
+    <!-- Alif (Golden / Amber) -->
+    <path d="M203 108 L244 108 L244 415 L203 415 Z" fill="#E5A93C" />
+
+    <!-- Qaf Top Two Dots (Green) -->
+    <circle cx="400" cy="205" r="24" fill="#1B8354" />
+    <circle cx="452" cy="205" r="24" fill="#1B8354" />
+
+    <!-- Noon Dot (Green) -->
+    <circle cx="68" cy="298" r="23" fill="#1B8354" />
+
+    <!-- Noon Crescent Curve (Green) -->
+    <path d="M122 265 C157 265, 157 325, 155 355 C150 435, 85 480, 18 480 C15 460, 30 435, 55 420 C95 398, 120 365, 122 290 Z" fill="#1B8354" />
+
+    <!-- Ra Curve (Golden / Amber) -->
+    <path d="M292 265 C336 265, 330 330, 328 360 C322 430, 280 472, 245 482 C255 462, 270 440, 285 405 C295 380, 296 350, 292 280 Z" fill="#E5A93C" />
+
+    <!-- Qaf Head & Connector Block (Green) -->
+    <path d="M336 265 L474 265 L474 415 L336 415 Z" fill="#1B8354" />
+    <!-- Qaf Inner White Hole / Counter -->
+    <rect x="405" y="298" width="34" height="34" rx="4" fill="#FFFFFF" />
+  </g>
+
+  <!-- Right Side: Academy Typography & Sub-banner -->
+  <g transform="translate(320, 35)">
+    <!-- Line 1: LEARN QURAN ONLINE -->
+    <text x="0" y="55" font-family="'Poppins', 'Arial Black', -apple-system, sans-serif" font-weight="800" font-size="44" fill="#E5A93C" letter-spacing="1.5">LEARN QURAN ONLINE</text>
+
+    <!-- Line 2: ISLAMIC TUITION -->
+    <text x="0" y="125" font-family="'Poppins', 'Arial Black', -apple-system, sans-serif" font-weight="900" font-size="62" fill="#1B8354" letter-spacing="0.5">ISLAMIC TUITION</text>
+
+    <!-- Line 3: Pill Banner for Online Quran Academy -->
+    <rect x="0" y="155" width="640" height="60" rx="10" ry="10" fill="#E5A93C" />
+    <text x="320" y="198" font-family="'Poppins', -apple-system, sans-serif" font-weight="700" font-size="34" fill="#FFFFFF" text-anchor="middle" letter-spacing="0.5">Online Quran Academy</text>
+  </g>
+</svg>

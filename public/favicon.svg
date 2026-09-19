@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Favicon / Quran Calligraphic Emblem -->
+  <g transform="translate(256, 256) scale(0.9) translate(-256, -256)">
+    <!-- Top Madd (Golden / Amber) -->
+    <path d="M142 85 C180 50, 220 90, 256 65 C285 45, 305 60, 300 78 C295 95, 275 90, 250 102 C210 120, 160 115, 142 85 Z" fill="#E5A93C" />
+
+    <!-- Alif (Golden / Amber) -->
+    <path d="M203 108 L244 108 L244 415 L203 415 Z" fill="#E5A93C" />
+
+    <!-- Qaf Top Two Dots (Green) -->
+    <circle cx="400" cy="205" r="24" fill="#1B8354" />
+    <circle cx="452" cy="205" r="24" fill="#1B8354" />
+
+    <!-- Noon Dot (Green) -->
+    <circle cx="68" cy="298" r="23" fill="#1B8354" />
+
+    <!-- Noon Crescent Curve (Green) -->
+    <path d="M122 265 C157 265, 157 325, 155 355 C150 435, 85 480, 18 480 C15 460, 30 435, 55 420 C95 398, 120 365, 122 290 Z" fill="#1B8354" />
+
+    <!-- Ra Curve (Golden / Amber) -->
+    <path d="M292 265 C336 265, 330 330, 328 360 C322 430, 280 472, 245 482 C255 462, 270 440, 285 405 C295 380, 296 350, 292 280 Z" fill="#E5A93C" />
+
+    <!-- Qaf Head & Connector Block (Green) -->
+    <path d="M336 265 L474 265 L474 415 L336 415 Z" fill="#1B8354" />
+    <!-- Qaf Inner White Hole / Counter -->
+    <rect x="405" y="298" width="34" height="34" rx="4" fill="#FFFFFF" />
+  </g>
+</svg>
