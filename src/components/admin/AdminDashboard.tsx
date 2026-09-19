@@ -4754,13 +4754,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span className="font-bold text-[#161F1A] block">Academy Leadership & Administration</span>
                   {(() => {
                     const adminsAndSupervisors = systemUsers.filter(u => u.role === 'admin' || u.role === 'supervisor');
-                    const hasOwnerInList = adminsAndSupervisors.some(u => (u.email || '').toLowerCase() === 'dateandtimecalculator@gmail.com');
+                    const hasOwnerInList = adminsAndSupervisors.some(u => {
+                      const em = (u.email || '').toLowerCase();
+                      return em === 'muhammadusmanabbasi100@gmail.com' || em === 'dateandtimecalculator@gmail.com';
+                    });
                     const displayList = hasOwnerInList
                       ? adminsAndSupervisors
                       : [
                           {
                             uid: 'primary_admin',
-                            email: 'dateandtimecalculator@gmail.com',
+                            email: 'muhammadusmanabbasi100@gmail.com',
                             displayName: 'Academy Director (Admin)',
                             role: 'admin' as const,
                             status: 'active' as const,
@@ -4795,7 +4798,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               >
                                 Reset Key
                               </button>
-                              {u.email !== 'dateandtimecalculator@gmail.com' && (
+                              {u.email !== 'dateandtimecalculator@gmail.com' && u.email !== 'muhammadusmanabbasi100@gmail.com' && (
                                 <button
                                   onClick={() => handleDeleteSystemUser(u)}
                                   className="p-1 text-gray-400 hover:text-rose-600 rounded cursor-pointer"

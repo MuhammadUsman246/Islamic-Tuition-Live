@@ -21,7 +21,11 @@ app.get('/api/health', (req: Request, res: Response) => {
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true as const,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

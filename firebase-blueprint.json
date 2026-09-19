@@ -219,6 +219,49 @@
         "read": { "type": "boolean", "description": "Read flag" }
       },
       "required": ["threadId", "senderId", "senderName", "senderRole", "timestamp"]
+    },
+    "settings": {
+      "title": "AcademySettings",
+      "description": "Institutional academy configurations and contact info",
+      "type": "object",
+      "properties": {
+        "academyName": { "type": "string" },
+        "operationalTimezone": { "type": "string" },
+        "contactEmail": { "type": "string", "format": "email" },
+        "contactPhone": { "type": "string" },
+        "defaultZoomLink": { "type": "string" }
+      },
+      "required": ["academyName", "contactEmail"]
+    },
+    "call": {
+      "title": "ActiveCallSession",
+      "description": "WebRTC live audio and video calling sessions",
+      "type": "object",
+      "properties": {
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerRole": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "receiverName": { "type": "string" },
+        "receiverRole": { "type": "string" },
+        "threadId": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callerId", "receiverId", "type", "status", "startedAt"]
+    },
+    "trashRecord": {
+      "title": "TrashRecord",
+      "description": "Soft-deleted archive records for recovery and audit",
+      "type": "object",
+      "properties": {
+        "originalId": { "type": "string" },
+        "itemType": { "type": "string" },
+        "title": { "type": "string" },
+        "deletedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["originalId", "itemType", "title", "deletedAt"]
     }
   },
   "firestore": {
@@ -269,6 +312,18 @@
     "/messages/{messageId}": {
       "schema": "message",
       "description": "Real-time thread and channel chat messages"
+    },
+    "/settings/{settingId}": {
+      "schema": "settings",
+      "description": "Institutional academy configurations and contact info"
+    },
+    "/calls/{callId}": {
+      "schema": "call",
+      "description": "WebRTC live audio and video calling sessions"
+    },
+    "/deleted_records/{trashId}": {
+      "schema": "trashRecord",
+      "description": "Soft-deleted archive records for recovery and audit"
     }
   }
 }

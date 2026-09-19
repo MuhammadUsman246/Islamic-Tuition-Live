@@ -2,10 +2,90 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function() {
+        // Filter any console messages containing [vite] or HMR noise
+        var isViteLog = function(args) {
+          if (!args) return false;
+          for (var i = 0; i < args.length; i++) {
+            var item = args[i];
+            if (!item) continue;
+            var str = typeof item === 'string' ? item : (item.message || (typeof item.toString === 'function' ? item.toString() : ''));
+            if (typeof str === 'string' && (
+              str.indexOf('[vite]') !== -1 ||
+              str.indexOf('vite-hmr') !== -1 ||
+              str.indexOf('[hmr]') !== -1 ||
+              str.indexOf('vite-plugin-pwa') !== -1 ||
+              str.indexOf('WebSocket closed without opened') !== -1
+            )) {
+              return true;
+            }
+          }
+          return false;
+        };
+
+        var origError = console.error;
+        console.error = function() {
+          if (isViteLog(arguments)) return;
+          origError.apply(console, arguments);
+        };
+
+        var origWarn = console.warn;
+        console.warn = function() {
+          if (isViteLog(arguments)) return;
+          origWarn.apply(console, arguments);
+        };
+
+        // Neutralize Vite HMR WebSocket in container preview where HMR is disabled
+        if (typeof window !== 'undefined' && window.WebSocket) {
+          var RealWebSocket = window.WebSocket;
+          window.WebSocket = function(url, protocols) {
+            var isHmr = false;
+            if (protocols === 'vite-hmr') isHmr = true;
+            if (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1) isHmr = true;
+            if (typeof url === 'string' && (url.indexOf('token=') !== -1 && url.indexOf('vite') !== -1)) isHmr = true;
+
+            if (isHmr) {
+              var target = new EventTarget();
+              target.readyState = 1; // WebSocket.OPEN
+              target.OPEN = 1;
+              target.CLOSED = 3;
+              target.CLOSING = 2;
+              target.CONNECTING = 0;
+              target.url = typeof url === 'string' ? url : '';
+              target.protocol = 'vite-hmr';
+              target.send = function() {};
+              target.close = function() {
+                target.readyState = 3;
+                target.dispatchEvent(new Event('close'));
+              };
+              return target;
+            }
+            return new RealWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = RealWebSocket.prototype;
+          window.WebSocket.OPEN = RealWebSocket.OPEN || 1;
+          window.WebSocket.CONNECTING = RealWebSocket.CONNECTING || 0;
+          window.WebSocket.CLOSING = RealWebSocket.CLOSING || 2;
+          window.WebSocket.CLOSED = RealWebSocket.CLOSED || 3;
+        }
+
+        // Suppress unhandled rejections related to vite websocket
+        window.addEventListener('unhandledrejection', function(e) {
+          if (e && e.reason) {
+            var msg = e.reason.message || String(e.reason);
+            if (msg.indexOf('WebSocket closed without opened') !== -1 || msg.indexOf('vite') !== -1) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
+        });
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
-    <title>IslamicTuition Portal</title>
+    <title>Islamic Tuition LMS</title>
     <meta name="description" content="Online Quran Academy Management Portal for IslamicTuition with real-time timetables, student & tutor tracking, structured Quran & Qaida lessons, and multi-role access." />
-    <meta property="og:title" content="IslamicTuition Portal" />
+    <meta property="og:title" content="Islamic Tuition LMS" />
     <meta property="og:description" content="Online Quran Academy Management Portal for IslamicTuition with real-time timetables, student & tutor tracking, structured Quran & Qaida lessons, and multi-role access." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />

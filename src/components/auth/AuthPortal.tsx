@@ -364,7 +364,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                         required
                         value={signInEmail}
                         onChange={(e) => setSignInEmail(e.target.value)}
-                        placeholder="e.g. dateandtimecalculator@gmail.com"
+                        placeholder="name@example.com"
                         className="w-full pl-9 pr-3 py-2 border border-[#D5D0C6] rounded-xl focus:ring-2 focus:ring-[#2D8B5C]/20 focus:border-[#2D8B5C] outline-hidden bg-white"
                       />
                     </div>

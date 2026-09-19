@@ -117,7 +117,7 @@ service cloud.firestore {
 
     // 9. Tutor Salaries
     match /salaries/{salaryId} {
-      allow read: if isTutor();
+      allow read: if isSignedIn();
       allow write: if isSupervisor();
     }
 
@@ -138,13 +138,16 @@ service cloud.firestore {
     // 12. Real-Time Chat Messages
     match /messages/{messageId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+      allow create: if isSignedIn();
       allow update: if isSignedIn();
       allow delete: if isSupervisor() || (isSignedIn() && resource.data.senderId == request.auth.uid);
     }
 
     // 13. Trash & Recovery Records
     match /trash_records/{trashId} {
+      allow read, write: if isSupervisor();
+    }
+    match /deleted_records/{trashId} {
       allow read, write: if isSupervisor();
     }
 
@@ -166,6 +169,12 @@ service cloud.firestore {
       match /receiverCandidates/{candidateId} {
         allow read, write: if isSignedIn();
       }
+    }
+
+    // 16. Academy Settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isSupervisor();
     }
   }
 }

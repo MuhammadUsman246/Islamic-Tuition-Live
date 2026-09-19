@@ -1,11 +1,12 @@
 {
-  "projectId": "gen-lang-client-0240683126",
-  "appId": "1:382458591011:web:b212f066343e94bcc33e96",
-  "apiKey": "AIzaSyCu1U6oA_rPdalzGE0I1G1x4H3Eo87Lp-Q",
-  "authDomain": "gen-lang-client-0240683126.firebaseapp.com",
-  "storageBucket": "gen-lang-client-0240683126.firebasestorage.app",
-  "messagingSenderId": "382458591011",
+  "projectId": "islamic-tuition-portal-3ab59",
+  "appId": "1:215566399306:web:eb67f2d19b26a2154873b3",
+  "apiKey": "AIzaSyCpIfgRb2qFlXL3phpQQn6f2sdPm75JQSw",
+  "authDomain": "islamic-tuition-portal-3ab59.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "islamic-tuition-portal-3ab59.firebasestorage.app",
+  "messagingSenderId": "215566399306",
   "measurementId": "",
-  "oAuthClientId": "382458591011-se1goa42nrqi581lejfv3krgphom16jh.apps.googleusercontent.com",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

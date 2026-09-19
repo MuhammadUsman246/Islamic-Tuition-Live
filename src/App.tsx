@@ -63,6 +63,7 @@ import {
 
 const MainPortal: React.FC = () => {
   const {
+    currentUser,
     userProfile,
     actualRole,
     activeRole,
@@ -123,16 +124,16 @@ const MainPortal: React.FC = () => {
 
   // Live subscription to unread message count
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!currentUser || !currentUserId) return;
     const unsub = subscribeToUnreadMessages(currentUserId, role, (total) => {
       setUnreadMessagesTotal(total);
     });
     return () => unsub();
-  }, [currentUserId, role]);
+  }, [currentUser, currentUserId, role]);
 
   // Live subscription to incoming messages across the whole application for alerts
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!currentUser || !currentUserId) return;
     const unsub = subscribeToIncomingMessages(currentUserId, role, (newMsg) => {
       // Play non-intrusive sound alert
       playNotificationChime();
@@ -160,18 +161,18 @@ const MainPortal: React.FC = () => {
     });
 
     return () => unsub();
-  }, [currentUserId, role]);
+  }, [currentUser, currentUserId, role]);
 
   // Live subscription to incoming calls globally across the academy portal
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!currentUser || !currentUserId) return;
     const unsub = subscribeToIncomingCalls(currentUserId, role, (incomingCall) => {
       if (incomingCall) {
         setActiveCallSession(incomingCall);
       }
     });
     return () => unsub();
-  }, [currentUserId, role]);
+  }, [currentUser, currentUserId, role]);
 
   // Switch default tab when role changes
   useEffect(() => {
@@ -282,21 +283,23 @@ const MainPortal: React.FC = () => {
 
   // Real-time subscribe to tutors list to capture Live Availability Status immediately
   useEffect(() => {
+    if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const unsub = subscribeToTutors((updatedTutors) => {
       setTutors(updatedTutors);
     });
     return () => unsub();
-  }, [role]);
+  }, [currentUser, role]);
 
   // Real-time subscribe to lessons so tutor entries immediately replicate to spreadsheets in Admin & Supervisor dashboards
   useEffect(() => {
+    if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const unsub = subscribeToLessons((updatedLessons) => {
       setLessons(updatedLessons);
     });
     return () => unsub();
-  }, [role]);
+  }, [currentUser, role]);
 
   // Loading Screen
   if (authLoading) {
@@ -312,7 +315,7 @@ const MainPortal: React.FC = () => {
         <button
           type="button"
           onClick={() => {
-            forceEnterApp('dateandtimecalculator@gmail.com');
+            forceEnterApp('muhammadusmanabbasi100@gmail.com');
           }}
           className="text-xs text-[#2D8B5C] underline hover:text-[#1E5C3D] font-medium cursor-pointer pt-2"
         >

@@ -1,5 +1,5 @@
 {
-  "name": "IslamicTuition Portal",
+  "name": "Islamic Tuition LMS",
   "description": "Online Quran Academy Management Portal for IslamicTuition with real-time timetables, student & tutor tracking, structured Quran & Qaida lessons, and multi-role access.",
   "requestFramePermissions": ["camera", "microphone", "display-capture"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

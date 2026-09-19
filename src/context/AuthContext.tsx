@@ -200,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Default to Academic Director Admin
       targetProfile = {
         uid: 'auth_owner_admin',
-        email: 'dateandtimecalculator@gmail.com',
+        email: 'muhammadusmanabbasi100@gmail.com',
         displayName: 'Academic Director (Owner)',
         role: 'admin',
         status: 'active',
