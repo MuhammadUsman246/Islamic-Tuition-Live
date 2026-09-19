@@ -1,18 +1,37 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
+  RewriteBase /
 
-  # If dist directory exists, route all traffic through dist
+  # 1. If requesting a real file or folder in root, serve it directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # 2. If requesting a file that exists inside /dist/, rewrite directly to dist/
   RewriteCond %{REQUEST_URI} !^/dist/
-  RewriteCond %{DOCUMENT_ROOT}/dist%{REQUEST_URI} -f [OR]
-  RewriteCond %{DOCUMENT_ROOT}/dist%{REQUEST_URI} -d
+  RewriteCond %{DOCUMENT_ROOT}/dist/$1 -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -f
   RewriteRule ^(.*)$ dist/$1 [L]
 
-  # For SPA client-side routes, route to dist/index.html
+  # 3. If file exists in dist without DOCUMENT_ROOT prefix check
+  RewriteCond %{REQUEST_URI} !^/dist/
+  RewriteCond dist/$1 -f
+  RewriteRule ^(.*)$ dist/$1 [L]
+
+  # 4. Fallback all remaining SPA routes to dist/index.html (or index.html)
   RewriteCond %{REQUEST_URI} !^/dist/
   RewriteRule ^(.*)$ dist/index.html [L]
 </IfModule>
 
-# Security Headers
+# MIME Types to prevent Strict MIME errors
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType image/svg+xml .svg
+  AddType application/manifest+json .webmanifest .json
+</IfModule>
+
+# Security & CORS Headers
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set X-Frame-Options "SAMEORIGIN"
