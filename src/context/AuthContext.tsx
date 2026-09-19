@@ -116,6 +116,16 @@ function authWarn(phase: string, message: string, err?: any) {
   }
 }
 
+export const isAcademicOwner = (emailStr?: string | null): boolean => {
+  if (!emailStr) return false;
+  const lower = emailStr.toLowerCase().trim();
+  return (
+    lower === 'dateandtimecalculator@gmail.com' ||
+    lower === 'muhammadusmanabbasi100@gmail.com' ||
+    lower.includes('admin')
+  );
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
@@ -165,7 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let targetProfile: UserProfile;
 
     if (typeof fallbackProfile === 'string') {
-      const isOwner = fallbackProfile.toLowerCase() === 'dateandtimecalculator@gmail.com' || fallbackProfile.toLowerCase().includes('admin');
+      const isOwner = isAcademicOwner(fallbackProfile);
       targetProfile = {
         uid: 'user_' + fallbackProfile.replace(/[^a-z0-9]/g, '_'),
         email: fallbackProfile,
@@ -230,7 +240,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (user) {
         try {
-          const isOwnerAdmin = user.email ? (user.email.toLowerCase() === 'dateandtimecalculator@gmail.com' || user.email.toLowerCase().includes('admin')) : false;
+          const isOwnerAdmin = isAcademicOwner(user.email);
           let loadedProf: UserProfile | null = null;
 
           // 1. Check doc by uid with strict 800ms timeout
@@ -330,7 +340,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err) {
           authWarn('ProfileFetch', 'Error fetching user profile in onAuthStateChanged:', err);
           // Safety net fallback
-          const isOwner = user.email ? (user.email.toLowerCase() === 'dateandtimecalculator@gmail.com' || user.email.toLowerCase().includes('admin')) : false;
+          const isOwner = isAcademicOwner(user.email);
           const fallbackProf: UserProfile = {
             uid: user.uid,
             email: user.email || '',
@@ -408,7 +418,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!cleanEmail) throw new Error('Please enter your email address.');
     if (!pass) throw new Error('Please enter your password.');
 
-    const isOwner = cleanEmail === 'dateandtimecalculator@gmail.com' || cleanEmail.includes('admin');
+    const isOwner = isAcademicOwner(cleanEmail);
 
     try {
       await withTimeout(setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence), 500);
@@ -542,7 +552,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (user && user.email) {
         const normalizedEmail = user.email.toLowerCase();
-        const isOwnerAdmin = normalizedEmail === 'dateandtimecalculator@gmail.com' || normalizedEmail.includes('admin');
+        const isOwnerAdmin = isAcademicOwner(normalizedEmail);
         let profile: UserProfile | null = null;
 
         // Fetch existing profile with 800ms timeout

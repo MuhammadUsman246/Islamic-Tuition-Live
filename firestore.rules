@@ -21,7 +21,7 @@ service cloud.firestore {
     }
 
     function isSuperAdminEmail() {
-      return userEmail() == 'dateandtimecalculator@gmail.com';
+      return userEmail() == 'dateandtimecalculator@gmail.com' || userEmail() == 'muhammadusmanabbasi100@gmail.com';
     }
 
     function hasUserDoc() {

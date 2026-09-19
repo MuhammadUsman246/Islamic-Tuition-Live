@@ -117,7 +117,7 @@ export async function clearAllAcademyData(): Promise<{ success: boolean; cleared
       const usersToDelete = usersSnap.docs.filter(d => {
         const data = d.data();
         const email = (data.email || '').toLowerCase().trim();
-        return email !== 'dateandtimecalculator@gmail.com';
+        return email !== 'dateandtimecalculator@gmail.com' && email !== 'muhammadusmanabbasi100@gmail.com';
       });
 
       for (let i = 0; i < usersToDelete.length; i += 400) {
