@@ -61,6 +61,7 @@ import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { ClassModal } from '../modals/ClassModal';
 import { StudentModal } from '../modals/StudentModal';
+import { BulkImportModal } from '../modals/BulkImportModal';
 import { TutorModal } from '../modals/TutorModal';
 import { FeeModal } from '../modals/FeeModal';
 import { FamilyGroupModal } from '../modals/FamilyGroupModal';
@@ -164,6 +165,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isLessonModalOpen, setIsLessonModalOpen] = useState<boolean>(false);
   const [selectedStudentForLesson, setSelectedStudentForLesson] = useState<string>('');
   const [isStudentModalOpen, setIsStudentModalOpen] = useState<boolean>(false);
+  const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState<boolean>(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
   const [isFeeModalOpen, setIsFeeModalOpen] = useState<boolean>(false);
@@ -2526,12 +2528,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div className="flex items-center space-x-3">
                   <button
+                    onClick={() => setIsBulkImportModalOpen(true)}
+                    className="px-4 py-1.5 bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold rounded-lg hover:bg-gray-50 flex items-center space-x-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 text-[#2D8B5C]" />
+                    <span>Bulk Import Tutor 2 & 3</span>
+                  </button>
+                  <button
                     id="register_student_button"
                     onClick={() => {
                       setSelectedStudent(null);
                       setIsStudentModalOpen(true);
                     }}
-                    className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs"
+                    className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Add New Student</span>
@@ -5067,6 +5076,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         tutors={tutors}
         students={students}
         initialStudent={selectedStudent}
+      />
+
+      <BulkImportModal
+        isOpen={isBulkImportModalOpen}
+        onClose={() => setIsBulkImportModalOpen(false)}
+        onSuccess={async () => {
+          await onRefreshData();
+          setIsBulkImportModalOpen(false);
+        }}
+        students={students}
+        tutors={tutors}
       />
 
       <TutorModal
