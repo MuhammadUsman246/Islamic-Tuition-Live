@@ -270,6 +270,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
     }
   };
 
+  if (!isOpen) return null;
+
   const pendingCount = items.filter((item) => item.status === 'pending').length;
   const duplicateCount = items.filter((item) => item.status === 'duplicate').length;
   const importedCount = items.filter((item) => item.status === 'imported').length;
