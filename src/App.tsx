@@ -47,6 +47,7 @@ import {
 } from './utils/chatMediaUtils';
 import { InAppMessageToast } from './components/chat/InAppMessageToast';
 import { LiveCallModal } from './components/chat/LiveCallModal';
+import { AdminLogoutAuthModal } from './components/modals/AdminLogoutAuthModal';
 import {
   Loader2,
   Eye,
@@ -72,6 +73,8 @@ const MainPortal: React.FC = () => {
     adminViewingTargetId,
     setAdminViewingRole,
     forceEnterApp,
+    isLogoutAuthModalOpen,
+    closeLogoutAuthModal,
     loading: authLoading
   } = useAuth();
 
@@ -249,7 +252,7 @@ const MainPortal: React.FC = () => {
       const data = await fetchAllAcademyData(forceRefresh);
 
       setStudents(data.students);
-      setTutors(data.tutors && data.tutors.length >= 19 ? data.tutors : INITIAL_TUTOR_ENTITIES);
+      setTutors(data.tutors && data.tutors.length >= 20 ? data.tutors : INITIAL_TUTOR_ENTITIES);
       setClasses(data.classes);
       setLessons(data.lessons);
       setFees(data.fees);
@@ -582,6 +585,12 @@ const MainPortal: React.FC = () => {
           onClose={() => setActiveCallSession(null)}
         />
       )}
+
+      {/* Protected Admin Logout Authorization Modal for Faculty Terminals */}
+      <AdminLogoutAuthModal
+        isOpen={isLogoutAuthModalOpen}
+        onClose={closeLogoutAuthModal}
+      />
     </div>
   );
 };

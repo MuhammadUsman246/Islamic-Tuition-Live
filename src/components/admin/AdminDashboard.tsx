@@ -521,7 +521,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsLoadingUsers(true);
     try {
       const users = await getSystemUsers();
-      setSystemUsers(users && users.length >= 19 ? users : INITIAL_TUTOR_USER_PROFILES);
+      setSystemUsers(users && users.length >= 20 ? users : INITIAL_TUTOR_USER_PROFILES);
     } catch (err) {
       console.warn("Could not load system users:", err);
       setSystemUsers(INITIAL_TUTOR_USER_PROFILES);

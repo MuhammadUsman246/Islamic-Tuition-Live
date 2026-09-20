@@ -93,6 +93,11 @@ export interface AuthContextType {
   checkApprovalStatus: () => Promise<void>;
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
   forceEnterApp: (fallbackProfile?: Partial<UserProfile> | string) => void;
+  isLogoutAuthModalOpen: boolean;
+  openLogoutAuthModal: () => void;
+  closeLogoutAuthModal: () => void;
+  confirmAdminLogout: (adminPassword: string, customAdminEmail?: string) => Promise<boolean>;
+  forceLogout: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -145,6 +150,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [adminViewingTargetId, setAdminViewingTargetId] = useState<string | null>(null);
   const [currentPersonaId, setCurrentPersonaId] = useState<string>('admin_owner');
   const [loading, setLoading] = useState<boolean>(true);
+  const [isLogoutAuthModalOpen, setIsLogoutAuthModalOpen] = useState<boolean>(false);
 
   const actualRole: UserRole | null = userProfile?.role || null;
   // Effective role: allows admin inspection, AND allows dual parent/student users to toggle roles
@@ -289,9 +295,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          // 4. Check registered institutional tutors (Tutor 1 - Tutor 19)
+          // 4. Check registered institutional tutors (Tutor 1 - Tutor 20)
           if (!loadedProf && user.email) {
-            const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t => t.email.toLowerCase() === user.email?.toLowerCase());
+            const userEmailClean = user.email.toLowerCase().trim();
+            const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t => 
+              t.email.toLowerCase() === userEmailClean ||
+              (t.tutorNumber === 20 && userEmailClean === 'tutor20islamictuition@gmail.com')
+            );
             if (matchedTutor) {
               loadedProf = {
                 uid: user.uid,
@@ -751,20 +761,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
-  const logout = async () => {
-    authLog('logout', 'Signing out user session...');
+  const openLogoutAuthModal = () => setIsLogoutAuthModalOpen(true);
+  const closeLogoutAuthModal = () => setIsLogoutAuthModalOpen(false);
+
+  const forceLogout = async () => {
+    authLog('forceLogout', 'Signing out user session unconditionally...');
     try {
       await fbSignOut(auth);
     } catch (err) {
-      authWarn('logout', 'Sign out notice:', err);
+      authWarn('forceLogout', 'Sign out notice:', err);
     }
     localStorage.removeItem('it_cached_user_profile');
     setUserProfile(null);
     setCurrentUser(null);
     setAdminViewingRoleState(null);
     setAdminViewingTargetId(null);
+    setIsLogoutAuthModalOpen(false);
     setLoading(false);
-    authLog('logout', 'Session cleared successfully.');
+    authLog('forceLogout', 'Session cleared successfully.');
+  };
+
+  const logout = async () => {
+    // If authenticated account is a tutor terminal (actualRole === 'tutor'),
+    // prohibit direct logout. Require Director/Admin authorization password.
+    if (actualRole === 'tutor' || (!adminViewingRole && activeRole === 'tutor')) {
+      authLog('logout', 'Tutor logout attempt intercepted: Admin authorization password required.');
+      setIsLogoutAuthModalOpen(true);
+      return;
+    }
+
+    await forceLogout();
+  };
+
+  const confirmAdminLogout = async (adminPassword: string, customAdminEmail?: string): Promise<boolean> => {
+    const trimmedPass = adminPassword.trim();
+    if (!trimmedPass) return false;
+
+    // 1. Check known Director Master Passwords
+    const storedMasterPass = localStorage.getItem('it_admin_master_password');
+    const isMaster = 
+      trimmedPass === 'admin123' ||
+      trimmedPass === 'IslamicAdmin2026' ||
+      trimmedPass === 'Admin@2026' ||
+      trimmedPass === 'Admin1234' ||
+      trimmedPass === 'bRasuais@admin' ||
+      trimmedPass === 'bRasuais@2026' ||
+      (storedMasterPass && trimmedPass === storedMasterPass);
+
+    if (isMaster) {
+      authLog('confirmAdminLogout', 'Authorized via Master Director Credential.');
+      await forceLogout();
+      return true;
+    }
+
+    // 2. Attempt authentication against Firebase for Academy Director accounts
+    const adminEmails = [
+      customAdminEmail,
+      'muhammadusmanabbasi100@gmail.com',
+      'admin@islamictuition.com',
+      'dateandtimecalculator@gmail.com'
+    ].filter(Boolean) as string[];
+
+    for (const email of adminEmails) {
+      try {
+        await signInWithEmailAndPassword(auth, email, trimmedPass);
+        authLog('confirmAdminLogout', `Authorized via Firebase Director Sign-In (${email}).`);
+        await forceLogout();
+        return true;
+      } catch (err) {
+        // Continue checking other admin accounts
+      }
+    }
+
+    authWarn('confirmAdminLogout', 'Invalid admin password entered for tutor logout.');
+    return false;
   };
 
   return (
@@ -789,6 +859,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         checkApprovalStatus,
         updateUserProfile,
         forceEnterApp,
+        isLogoutAuthModalOpen,
+        openLogoutAuthModal,
+        closeLogoutAuthModal,
+        confirmAdminLogout,
+        forceLogout,
         logout
       }}
     >

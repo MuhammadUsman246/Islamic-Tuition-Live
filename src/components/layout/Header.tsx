@@ -273,7 +273,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={logout}
-            title="Sign Out of Academy"
+            title={activeRole === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out of Academy"}
             className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer flex items-center justify-center"
           >
             <LogOut className="w-4 h-4" />

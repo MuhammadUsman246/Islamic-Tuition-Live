@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <script>
       (function() {
+        // Ensure React Refresh preamble hooks exist synchronously
+        if (typeof window !== 'undefined') {
+          window.$RefreshReg$ = window.$RefreshReg$ || function() {};
+          window.$RefreshSig$ = window.$RefreshSig$ || function() { return function(type) { return type; }; };
+        }
+
         // Filter any console messages containing [vite] or HMR noise
         var isViteLog = function(args) {
           if (!args) return false;
@@ -11,15 +17,19 @@
             var item = args[i];
             if (!item) continue;
             var str = typeof item === 'string' ? item : (item.message || (typeof item.toString === 'function' ? item.toString() : ''));
-            if (typeof str === 'string' && (
-              str.indexOf('[vite]') !== -1 ||
-              str.indexOf('vite-hmr') !== -1 ||
-              str.indexOf('[hmr]') !== -1 ||
-              str.indexOf('vite-plugin-pwa') !== -1 ||
-              str.indexOf('WebSocket closed without opened') !== -1 ||
-              str.indexOf('failed to connect to websocket') !== -1
-            )) {
-              return true;
+            if (typeof str === 'string') {
+              var lower = str.toLowerCase();
+              if (
+                lower.indexOf('[vite]') !== -1 ||
+                lower.indexOf('vite-hmr') !== -1 ||
+                lower.indexOf('[hmr]') !== -1 ||
+                lower.indexOf('vite-plugin-pwa') !== -1 ||
+                lower.indexOf('websocket closed without opened') !== -1 ||
+                lower.indexOf('failed to connect to websocket') !== -1 ||
+                (lower.indexOf('vite') !== -1 && lower.indexOf('connecting') !== -1)
+              ) {
+                return true;
+              }
             }
           }
           return false;
@@ -38,8 +48,19 @@
         // Suppress unhandled rejections related to vite websocket
         window.addEventListener('unhandledrejection', function(e) {
           if (e && e.reason) {
-            var msg = e.reason.message || String(e.reason);
-            if (msg.indexOf('WebSocket closed without opened') !== -1 || msg.indexOf('vite') !== -1 || msg.indexOf('websocket') !== -1) {
+            var msg = (e.reason.message || String(e.reason)).toLowerCase();
+            if (msg.indexOf('websocket') !== -1 || msg.indexOf('vite') !== -1) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
+        });
+
+        // Suppress global error events related to vite websocket
+        window.addEventListener('error', function(e) {
+          if (e && e.message) {
+            var msg = String(e.message).toLowerCase();
+            if (msg.indexOf('websocket') !== -1 || msg.indexOf('vite') !== -1) {
               e.preventDefault();
               e.stopPropagation();
             }

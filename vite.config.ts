@@ -1,14 +1,17 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
-import { VitePWA } from 'vite-plugin-pwa';
+import { defineConfig, PluginOption } from 'vite';
 
-export default defineConfig(() => {
-  return {
-    plugins: [
-      react(),
-      tailwindcss(),
+export default defineConfig(async ({ command }) => {
+  const plugins: PluginOption[] = [
+    react(),
+    tailwindcss(),
+  ];
+
+  if (command === 'build') {
+    const { VitePWA } = await import('vite-plugin-pwa');
+    plugins.push(
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
@@ -117,10 +120,28 @@ export default defineConfig(() => {
           enabled: false
         }
       })
-    ],
+    );
+  } else {
+    plugins.push({
+      name: 'virtual-pwa-register-dev',
+      resolveId(id: string) {
+        if (id === 'virtual:pwa-register') {
+          return '\0virtual:pwa-register';
+        }
+      },
+      load(id: string) {
+        if (id === '\0virtual:pwa-register') {
+          return 'export function registerSW(options = {}) { return () => {}; }';
+        }
+      },
+    });
+  }
+
+  return {
+    plugins,
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(process.cwd(), '.'),
       },
     },
     server: {

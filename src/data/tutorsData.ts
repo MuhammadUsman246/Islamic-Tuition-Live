@@ -261,6 +261,19 @@ export const INITIAL_REGISTERED_TUTORS: RegisteredTutorConfig[] = [
     status: 'Active',
     role: 'tutor',
     zoomLink: 'https://us05web.zoom.us/j/4591007665?pwd=DgmAjEaRsUkjWnf4tBSUMaZaxocbBD.1'
+  },
+  {
+    tutorNumber: 20,
+    tutorId: 'Tutor 20',
+    displayName: 'Tutor 20',
+    email: 'tutor020islamictuition@gmail.com',
+    password: 'bRasuais@20',
+    salaryPKR: 23000,
+    realName: '',
+    phone: '',
+    status: 'Active',
+    role: 'tutor',
+    zoomLink: 'https://us05web.zoom.us/j/2533071345?pwd=azhQi99M8VhPHQSqAvNl2xt60g7knJ.1'
   }
 ];
 

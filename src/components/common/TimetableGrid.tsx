@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { TimetableClass, DayOfWeek, UserRole, PKT_TIME_SLOTS, Student, Tutor } from '../../types';
 import { Sparkles, Plus, Clock, Calendar, Filter, Search, LayoutGrid, List, Star, X } from 'lucide-react';
 import { ClassDetailModal } from '../modals/ClassDetailModal';
@@ -103,11 +103,20 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 }) => {
   const currentTeachingDay = getCurrentTeachingDay();
 
-  // Requirement 1: By default, show Monday–Friday only. Weekends appear only when enabled.
-  const [showWeekend, setShowWeekend] = useState<boolean>(() => {
-    const today = getCurrentTeachingDay();
-    return today === 'Saturday' || today === 'Sunday';
-  });
+  // Check if any active classes exist on Saturday or Sunday
+  const hasWeekendClasses = useMemo(() => {
+    return classes.some(c => c.dayOfWeek === 'Saturday' || c.dayOfWeek === 'Sunday');
+  }, [classes]);
+
+  // Requirement: By default only set sheet days to Mon-Fri (no Saturday & Sunday).
+  // Saturday and Sunday only appear if user clicks 7 Days or if admin added weekend slots.
+  const [showWeekend, setShowWeekend] = useState<boolean>(() => hasWeekendClasses);
+
+  useEffect(() => {
+    if (hasWeekendClasses) {
+      setShowWeekend(true);
+    }
+  }, [hasWeekendClasses]);
   const [selectedTutorFilter, setSelectedTutorFilter] = useState<string>(currentTutorId || 'all');
 
   useEffect(() => {
@@ -308,15 +317,17 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
           {/* Weekend Toggle: Mon-Fri by default */}
           <button
+            id="timetable_weekend_toggle_btn"
+            type="button"
             onClick={() => setShowWeekend(!showWeekend)}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer flex items-center space-x-1 ${
               showWeekend 
-                ? 'bg-[#2D8B5C] text-white border-[#2D8B5C] shadow-2xs font-semibold' 
-                : 'bg-white text-[#5A6B61] border-[#D5D0C6] hover:bg-gray-50'
+                ? 'bg-[#2D8B5C] text-white border-[#2D8B5C] shadow-2xs' 
+                : 'bg-white text-[#5A6B61] border-[#D5D0C6] hover:bg-gray-100 hover:text-[#161F1A]'
             }`}
-            title="Toggle Saturday and Sunday view"
+            title={showWeekend ? "Switch to Mon–Fri (5 days)" : "Click to show full 7 Days (Mon–Sun)"}
           >
-            {showWeekend ? '7 Days' : '+ Weekends'}
+            <span>{showWeekend ? '7 Days' : '+ 7 Days'}</span>
           </button>
 
         </div>

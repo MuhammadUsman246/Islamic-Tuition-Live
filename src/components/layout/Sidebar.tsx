@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, Tutor } from '../../types';
-import { subscribeToUnreadMessages, subscribeToTutors, updateTutor } from '../../services/dataService';
+import { subscribeToUnreadMessages } from '../../services/dataService';
 
 interface SidebarProps {
   currentTab: string;
@@ -47,48 +47,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
     : (userProfile?.uid || 'user');
 
   const [internalUnreadCount, setInternalUnreadCount] = useState<number>(0);
-  const [currentTutorRecord, setCurrentTutorRecord] = useState<Tutor | null>(null);
-  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
-
-  useEffect(() => {
-    if (role !== 'tutor') {
-      setCurrentTutorRecord(null);
-      return;
-    }
-    // If tutors list is already provided by parent App, avoid duplicate subscription
-    if (passedTutors && passedTutors.length > 0) {
-      const match = passedTutors.find(t => 
-        (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
-        (userProfile?.email && t.email && t.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
-      );
-      if (match) setCurrentTutorRecord(match);
-      return;
-    }
-
-    const unsub = subscribeToTutors((tutorList) => {
-      const match = tutorList.find(t => 
-        (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
-        (userProfile?.email && t.email && t.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
-      );
-      if (match) {
-        setCurrentTutorRecord(match);
-      }
-    });
-    return () => unsub();
-  }, [role, userProfile?.tutorId, userProfile?.email, passedTutors]);
-
-  const handleToggleAvailability = async () => {
-    if (!currentTutorRecord || isTogglingStatus) return;
-    setIsTogglingStatus(true);
-    const newStatus = currentTutorRecord.availabilityStatus === 'Available' ? 'Busy' : 'Available';
-    try {
-      await updateTutor(currentTutorRecord.id, { availabilityStatus: newStatus });
-    } catch (err) {
-      console.error("Failed to update availability status:", err);
-    } finally {
-      setIsTogglingStatus(false);
-    }
-  };
 
   useEffect(() => {
     if (passedUnreadCount !== undefined) return;
@@ -205,37 +163,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
         </span>
       </div>
 
-      {/* Real-time Availability Status Toggle for Tutors */}
-      {role === 'tutor' && currentTutorRecord && (
-        <div className="px-4 py-3 bg-[#0d1812] border-b border-[#263e32] space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-[#95a89e] uppercase tracking-wider font-semibold">Live Availability</span>
-            <div className="flex items-center space-x-1.5">
-              <span className={`w-2 h-2 rounded-full ${
-                currentTutorRecord.availabilityStatus === 'Available' ? 'bg-[#25D366] animate-pulse' : 'bg-red-500'
-              }`} />
-              <span className={`text-[11px] font-bold ${
-                currentTutorRecord.availabilityStatus === 'Available' ? 'text-[#6de0a2]' : 'text-red-400'
-              }`}>
-                {currentTutorRecord.availabilityStatus || 'Busy'}
-              </span>
-            </div>
-          </div>
-          
-          <button
-            onClick={handleToggleAvailability}
-            disabled={isTogglingStatus}
-            className={`w-full py-1.5 rounded-md text-xs font-extrabold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-              currentTutorRecord.availabilityStatus === 'Available'
-                ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/35'
-                : 'bg-[#2D8B5C]/20 hover:bg-[#2D8B5C]/30 text-[#6de0a2] border border-[#2D8B5C]/35'
-            }`}
-          >
-            <span>Set to {currentTutorRecord.availabilityStatus === 'Available' ? 'Busy' : 'Available'}</span>
-          </button>
-        </div>
-      )}
-
       {/* Navigation Options & Settings header */}
       <div className="px-4 pt-3 pb-1 flex items-center justify-between text-[11px] font-semibold text-[#8ba295] uppercase tracking-wider">
         <span>Options & Settings</span>
@@ -284,15 +211,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
             <p className="text-xs font-medium text-white truncate">
               {userProfile?.displayName || 'Authorized User'}
             </p>
-            <p className="text-[11px] text-[#7d9487] truncate">
-              {userProfile?.email}
-            </p>
+            {role === 'tutor' ? (
+              <p className="text-[11px] text-[#7d9487] truncate">
+                Faculty Portal • {userProfile?.tutorId || 'Active'}
+              </p>
+            ) : (
+              <p className="text-[11px] text-[#7d9487] truncate">
+                {userProfile?.email}
+              </p>
+            )}
           </div>
           <button
             id="sidebar_logout_button"
             onClick={logout}
-            title="Sign Out"
-            className="p-1.5 text-[#95a89e] hover:text-white hover:bg-[#233a2e] rounded-md transition-colors"
+            title={role === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out"}
+            className="p-1.5 text-[#95a89e] hover:text-white hover:bg-[#233a2e] rounded-md transition-colors cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
           </button>

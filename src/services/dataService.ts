@@ -684,7 +684,7 @@ export async function deleteStudent(id: string): Promise<string> {
 let hasSynchronizedRegisteredTutors = false;
 
 /**
- * Ensures all 19 official tutor accounts (Tutor 1 - Tutor 19) are registered and synchronized
+ * Ensures all 20 official tutor accounts (Tutor 1 - Tutor 20) are registered and synchronized
  * with their unique IDs, permanent Zoom links, PKR 23,000 salaries, active status, and Firebase Auth credentials.
  */
 export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: boolean; count: number; tutors: Tutor[] }> {
@@ -781,11 +781,11 @@ export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: b
 }
 
 export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
-  if (CACHE.tutors && CACHE.tutors.length >= 19 && !forceRefresh) {
+  if (CACHE.tutors && CACHE.tutors.length >= 20 && !forceRefresh) {
     return CACHE.tutors;
   }
   const stored = loadCachedCollection<Tutor[]>('tutors');
-  if (stored && stored.length >= 19 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
+  if (stored && stored.length >= 20 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
     CACHE.tutors = stored;
     return stored;
   }
@@ -851,7 +851,7 @@ export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => vo
   return safeOnSnapshot(
     collection(db, TUTORS_COL),
     (snap) => {
-      if (!snap.empty && snap.docs.length >= 19) {
+      if (!snap.empty && snap.docs.length >= 20) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
         items.sort((a, b) => {
           const numA = parseInt(a.tutorId.replace(/\D/g, '')) || 0;
@@ -2766,7 +2766,7 @@ export const registerUserAccount = registerFirebaseUserWithProfile;
  * Fetch all registered institutional users from Firestore
  */
 export async function getSystemUsers(forceRefresh = false): Promise<UserProfile[]> {
-  if (CACHE.systemUsers && CACHE.systemUsers.length >= 19 && !forceRefresh) {
+  if (CACHE.systemUsers && CACHE.systemUsers.length >= 20 && !forceRefresh) {
     return CACHE.systemUsers;
   }
 
@@ -2786,7 +2786,7 @@ export async function getSystemUsers(forceRefresh = false): Promise<UserProfile[
 
   const usersMap = new Map<string, UserProfile>();
 
-  // 1. Baseline: all 19 official tutor user profiles
+  // 1. Baseline: all 20 official tutor user profiles
   INITIAL_TUTOR_USER_PROFILES.forEach(u => {
     usersMap.set(u.email.toLowerCase(), { ...u });
   });
@@ -3245,7 +3245,7 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
 
   const fallbackData = {
     students: CACHE.students || (isCleanDataMode() ? [] : SEED_STUDENTS),
-    tutors: (CACHE.tutors && CACHE.tutors.length >= 19) ? CACHE.tutors : INITIAL_TUTOR_ENTITIES,
+    tutors: (CACHE.tutors && CACHE.tutors.length >= 20) ? CACHE.tutors : INITIAL_TUTOR_ENTITIES,
     classes: CACHE.classes || (isCleanDataMode() ? [] : SEED_CLASSES),
     lessons: CACHE.lessons || (isCleanDataMode() ? [] : SEED_LESSONS),
     fees: CACHE.fees || (isCleanDataMode() ? [] : SEED_FEES),
@@ -3277,7 +3277,7 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
     console.log(`[DataService] fetchAllAcademyData completed in ${Date.now() - fetchStart}ms`);
     return {
       students,
-      tutors: tutors && tutors.length >= 19 ? tutors : INITIAL_TUTOR_ENTITIES,
+      tutors: tutors && tutors.length >= 20 ? tutors : INITIAL_TUTOR_ENTITIES,
       classes,
       lessons,
       fees,

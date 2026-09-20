@@ -28,6 +28,7 @@ import {
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
+import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
 import { sanitizeStudentForTutor, addLesson, addAttendanceRecord, updateClass } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
@@ -201,6 +202,15 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     await onRefreshData();
   };
 
+  const handleLaunchZoomDesktop = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!tutor?.zoomLink) {
+      alert('No permanent Zoom classroom link has been registered for your faculty profile. Please contact the Academic Director.');
+      return;
+    }
+    launchTutorZoomDesktop(tutor.zoomLink);
+  };
+
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
       {/* Top Banner: Permanent Zoom Classroom & Quick Log Lesson */}
@@ -221,18 +231,18 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* Permanent Zoom Action Button */}
-          <a
+          {/* Permanent Zoom Action Button - Launches directly into local Zoom desktop application */}
+          <button
+            type="button"
             id="tutor_zoom_launch_button"
-            href={tutor?.zoomLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-5 py-2.5 rounded-xl bg-[#E8A93E] hover:bg-[#C98A1E] text-white font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs"
+            onClick={handleLaunchZoomDesktop}
+            className="px-5 py-2.5 rounded-xl bg-[#E8A93E] hover:bg-[#C98A1E] text-white font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs cursor-pointer"
+            title="Launch and start your permanent Zoom classroom directly in your logged-in desktop application"
           >
             <Video className="w-4 h-4" />
             <span>Launch Zoom Classroom</span>
             <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          </button>
 
           {/* Quick Log Lesson Button */}
           <button
