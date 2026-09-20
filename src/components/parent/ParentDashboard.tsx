@@ -140,6 +140,12 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     myChildren[0]?.studentId || ''
   );
 
+  useEffect(() => {
+    if (myChildren.length > 0 && (!selectedChildId || !myChildren.some(c => c.studentId === selectedChildId))) {
+      setSelectedChildId(myChildren[0].studentId);
+    }
+  }, [myChildren, selectedChildId]);
+
   const activeChild = myChildren.find(c => c.studentId === selectedChildId) || myChildren[0] || null;
   const activeTutor = tutors.find(t => t.tutorId === activeChild?.assignedTutorId) || null;
 

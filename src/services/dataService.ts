@@ -2679,49 +2679,73 @@ export async function registerSelfStudentOrParent(params: {
     throw new Error('Email and password are required.');
   }
 
+  const cleanEmail = params.email.trim().toLowerCase();
+
   if (params.password.length < 6) {
     throw new Error('Password must be at least 6 characters.');
   }
 
   // 1. Create real Firebase Auth account using primary auth
-  const cred = await createUserWithEmailAndPassword(auth, params.email, params.password);
+  const cred = await createUserWithEmailAndPassword(auth, cleanEmail, params.password);
   const uid = cred.user.uid;
 
-  // 2. Persist profile in Firestore with status 'pending_approval' (NEVER write password to Firestore)
+  let linkedChildren: string[] = [];
+  let generatedStudentId: string | undefined = undefined;
+
+  // 2. Check existing student records in 'students' collection for auto-linking
+  if (params.role === 'parent') {
+    try {
+      const parentSnap = await getDocs(query(collection(db, STUDENTS_COL), where('parentEmail', '==', cleanEmail)));
+      if (!parentSnap.empty) {
+        linkedChildren = parentSnap.docs.map(d => (d.data() as Student).studentId).filter(Boolean);
+      }
+    } catch (err) {
+      console.warn('Parent registration children auto-link notice:', err);
+    }
+  } else if (params.role === 'student') {
+    generatedStudentId = `STU-${Math.floor(100 + Math.random() * 900)}`;
+  }
+
+  // 3. Persist profile in Firestore with status 'active' (NEVER write password to Firestore)
   const newProfile: UserProfile = {
     uid,
-    email: params.email,
-    displayName: params.displayName,
+    email: cleanEmail,
+    displayName: params.displayName.trim(),
     role: params.role,
-    status: 'pending_approval',
-    phone: params.phone || '',
+    status: 'active',
+    phone: params.phone ? params.phone.trim() : '',
     country: params.country || 'USA',
     timezone: params.timezone || 'America/New_York',
     courseType: params.courseType || 'Quran Reading / Nazra',
-    parentName: params.parentName || '',
-    parentEmail: params.parentEmail || '',
+    parentName: params.parentName ? params.parentName.trim() : '',
+    parentEmail: params.parentEmail ? params.parentEmail.trim().toLowerCase() : '',
+    ...(linkedChildren.length > 0 ? { linkedStudentIds: linkedChildren } : {}),
+    ...(generatedStudentId ? { studentId: generatedStudentId } : {}),
     createdAt: new Date().toISOString()
   };
 
   await setDoc(doc(db, USERS_COL, uid), sanitizeFirestoreObject(newProfile));
+  const emailDocId = cleanEmail.replace(/[@.]/g, '_');
+  if (emailDocId !== uid) {
+    await setDoc(doc(db, USERS_COL, emailDocId), sanitizeFirestoreObject(newProfile));
+  }
 
-  // 3. Create entry in students collection if student
-  if (params.role === 'student') {
+  // 4. Create entry in students collection if student
+  if (params.role === 'student' && generatedStudentId) {
     try {
-      const studentId = `STU-${Math.floor(100 + Math.random() * 900)}`;
       const newStudentDoc: Omit<Student, 'id'> = {
-        studentId,
-        name: params.displayName,
-        email: params.email,
-        phone: params.phone || '',
-        parentName: params.parentName || `${params.displayName}'s Parent`,
-        parentEmail: params.parentEmail || params.email,
-        parentPhone: params.phone || '',
+        studentId: generatedStudentId,
+        name: params.displayName.trim(),
+        email: cleanEmail,
+        phone: params.phone ? params.phone.trim() : '',
+        parentName: params.parentName ? params.parentName.trim() : `${params.displayName.trim()}'s Parent`,
+        parentEmail: params.parentEmail ? params.parentEmail.trim().toLowerCase() : cleanEmail,
+        parentPhone: params.phone ? params.phone.trim() : '',
         assignedTutorId: 'Tutor 1',
         country: params.country || 'USA',
         timezone: params.timezone || 'America/New_York',
         courseType: params.courseType || 'Quran Reading / Nazra',
-        status: 'Pending',
+        status: 'Active',
         trialSessionsCompleted: 0,
         trialSessionsTotal: 5,
         trialStatus: 'In Progress',
@@ -3087,6 +3111,8 @@ export async function recordUserSessionHeartbeat(session: {
   }
 
   // 2. Persist to Firestore
+  if (!auth.currentUser) return;
+
   try {
     const sessionRef = doc(db, SESSIONS_COL, sessionId);
     await setDoc(sessionRef, sanitizeFirestoreObject(sessionRecord), { merge: true });
@@ -3100,7 +3126,7 @@ export async function recordUserSessionHeartbeat(session: {
       deviceInfo: `${browser} on ${operatingSystem}`
     }, { merge: true });
   } catch (err) {
-    console.warn('Could not persist session heartbeat:', err);
+    // Silent fallback to memory sessions
   }
 }
 
@@ -3108,6 +3134,8 @@ export async function recordUserSessionHeartbeat(session: {
  * Get all active sessions for Security Auditing
  */
 export async function getActiveUserSessions(forceRefresh = false): Promise<AcademyUserSession[]> {
+  if (!auth.currentUser) return MEMORY_SESSIONS;
+
   try {
     const q = query(collection(db, SESSIONS_COL), orderBy('lastActiveTimestamp', 'desc'), limit(50));
     const snap = await getDocs(q);
@@ -3117,7 +3145,7 @@ export async function getActiveUserSessions(forceRefresh = false): Promise<Acade
       return records;
     }
   } catch (err) {
-    console.warn('Could not query user_sessions:', err);
+    // Silent fallback
   }
 
   return MEMORY_SESSIONS;

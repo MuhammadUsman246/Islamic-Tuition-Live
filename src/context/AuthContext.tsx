@@ -372,83 +372,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // 8. Auto-link student/parent record from 'students' collection
-    if (cleanEmail && (!loadedProf || (!loadedProf.studentId && !loadedProf.linkedStudentIds))) {
+    if (cleanEmail && (!loadedProf || (!loadedProf.studentId && (!loadedProf.linkedStudentIds || loadedProf.linkedStudentIds.length === 0)))) {
       try {
-        // A. Check student's own email first
-        let stuSnap = await withTimeout(
-          getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail))),
+        // A. Check parent email match FIRST (so parent accounts and parent email matches get linked children and parent role)
+        let parentSnap = await withTimeout(
+          getDocs(query(collection(db, 'students'), where('parentEmail', '==', cleanEmail))),
           3000
         );
-        if ((!stuSnap || stuSnap.empty) && rawEmail !== cleanEmail) {
-          stuSnap = await withTimeout(
-            getDocs(query(collection(db, 'students'), where('email', '==', rawEmail.trim()))),
+        if ((!parentSnap || parentSnap.empty) && rawEmail !== cleanEmail) {
+          parentSnap = await withTimeout(
+            getDocs(query(collection(db, 'students'), where('parentEmail', '==', rawEmail.trim()))),
             3000
           );
         }
 
-        if (stuSnap && !stuSnap.empty) {
-          const stuData = stuSnap.docs[0].data() as Student;
+        if (parentSnap && !parentSnap.empty) {
+          const childrenDocs = parentSnap.docs.map(d => d.data() as Student);
+          const childrenIds = childrenDocs.map(c => c.studentId).filter(Boolean);
+          const firstChild = childrenDocs[0];
+
           if (!loadedProf) {
             loadedProf = {
               uid: uid,
               email: cleanEmail,
-              displayName: stuData.name || userDisplayName || cleanEmail.split('@')[0] || 'Student User',
-              role: 'student',
+              displayName: firstChild.parentName || userDisplayName || cleanEmail.split('@')[0] || 'Parent User',
+              role: 'parent',
               status: 'active',
-              studentId: stuData.studentId,
-              phone: stuData.phone || '',
-              country: stuData.country || 'USA',
-              timezone: stuData.timezone || 'America/New_York',
+              linkedStudentIds: childrenIds,
+              phone: firstChild.parentPhone || '',
               createdAt: new Date().toISOString()
             };
-            authLog('ProfileFetch', `Auto-created student profile linked to studentId: ${stuData.studentId}`);
+            authLog('ProfileFetch', `Auto-created parent profile linked to children: ${childrenIds.join(', ')}`);
           } else {
-            loadedProf.studentId = stuData.studentId;
-            if (!loadedProf.role) loadedProf.role = 'student';
-            authLog('ProfileFetch', `Attached studentId (${stuData.studentId}) to profile`);
+            if (loadedProf.role !== 'admin' && loadedProf.role !== 'tutor' && loadedProf.role !== 'supervisor') {
+              loadedProf.role = 'parent';
+            }
+            loadedProf.status = 'active';
+            loadedProf.linkedStudentIds = Array.from(new Set([...(loadedProf.linkedStudentIds || []), ...childrenIds]));
+            authLog('ProfileFetch', `Attached children IDs (${childrenIds.join(', ')}) to parent profile`);
           }
-        } else {
-          // B. Check parent email match
-          let parentSnap = await withTimeout(
-            getDocs(query(collection(db, 'students'), where('parentEmail', '==', cleanEmail))),
+        }
+
+        // B. Check student's own email if not already linked as parent
+        if (!loadedProf || loadedProf.role === 'student') {
+          let stuSnap = await withTimeout(
+            getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail))),
             3000
           );
-          if ((!parentSnap || parentSnap.empty) && rawEmail !== cleanEmail) {
-            parentSnap = await withTimeout(
-              getDocs(query(collection(db, 'students'), where('parentEmail', '==', rawEmail.trim()))),
+          if ((!stuSnap || stuSnap.empty) && rawEmail !== cleanEmail) {
+            stuSnap = await withTimeout(
+              getDocs(query(collection(db, 'students'), where('email', '==', rawEmail.trim()))),
               3000
             );
           }
 
-          if (parentSnap && !parentSnap.empty) {
-            const childrenDocs = parentSnap.docs.map(d => d.data() as Student);
-            const childrenIds = childrenDocs.map(c => c.studentId).filter(Boolean);
-            const firstChild = childrenDocs[0];
-
+          if (stuSnap && !stuSnap.empty) {
+            const stuData = stuSnap.docs[0].data() as Student;
             if (!loadedProf) {
               loadedProf = {
                 uid: uid,
                 email: cleanEmail,
-                displayName: firstChild.parentName || userDisplayName || cleanEmail.split('@')[0] || 'Parent User',
-                role: 'parent',
+                displayName: stuData.name || userDisplayName || cleanEmail.split('@')[0] || 'Student User',
+                role: 'student',
                 status: 'active',
-                linkedStudentIds: childrenIds,
-                phone: firstChild.parentPhone || '',
+                studentId: stuData.studentId,
+                phone: stuData.phone || '',
+                country: stuData.country || 'USA',
+                timezone: stuData.timezone || 'America/New_York',
                 createdAt: new Date().toISOString()
               };
-              authLog('ProfileFetch', `Auto-created parent profile linked to children: ${childrenIds.join(', ')}`);
-            } else {
-              if (loadedProf.role !== 'admin' && loadedProf.role !== 'tutor' && loadedProf.role !== 'supervisor') {
-                loadedProf.role = 'parent';
-              }
-              loadedProf.linkedStudentIds = Array.from(new Set([...(loadedProf.linkedStudentIds || []), ...childrenIds]));
-              authLog('ProfileFetch', `Attached children IDs (${childrenIds.join(', ')}) to parent profile`);
+              authLog('ProfileFetch', `Auto-created student profile linked to studentId: ${stuData.studentId}`);
+            } else if (loadedProf.role !== 'parent') {
+              loadedProf.studentId = stuData.studentId;
+              loadedProf.status = 'active';
+              authLog('ProfileFetch', `Attached studentId (${stuData.studentId}) to profile`);
             }
           }
         }
       } catch (err) {
         authWarn('ProfileFetch', 'Student/Parent auto-link query error:', err);
       }
+    }
+
+    // Auto-activate student/parent profiles if pending_approval so user is never blocked on auth portal
+    if (loadedProf && loadedProf.status === 'pending_approval' && (loadedProf.role === 'parent' || loadedProf.role === 'student')) {
+      loadedProf.status = 'active';
     }
 
     // 9. Construct fresh fallback profile if still not found
