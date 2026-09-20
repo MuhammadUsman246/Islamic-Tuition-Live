@@ -33,9 +33,9 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
 
   const [isReceiptZoomOpen, setIsReceiptZoomOpen] = useState<boolean>(false);
 
-  const academyName = localStorage.getItem('it_academy_name') || 'IslamicTuition';
-  const academyEmail = localStorage.getItem('it_academy_email') || 'info@islamictuition.us';
-  const academyWebsite = localStorage.getItem('it_academy_website') || 'www.islamictuition.com';
+  const academyName = 'IslamicTuition';
+  const academyEmail = 'info@islamictuition.us';
+  const academyWebsite = 'islamictuition.us';
 
   const isPaid = fee.status === 'Paid';
   const isSubmitted = fee.status === 'Payment Submitted';
@@ -101,7 +101,7 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
                 <h2 className="text-lg font-bold text-[#161F1A]">{academyName}</h2>
               </div>
               <p className="text-xs text-[#5A6B61] mt-1">
-                Global Online Quran & Islamic Studies Academy
+                Online Quran classes for kids & Adults.
               </p>
               <p className="text-[11px] text-[#5A6B61]">
                 {academyWebsite} • {academyEmail}
@@ -135,7 +135,7 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
               </p>
               <p className="text-xs text-[#5A6B61]">
                 {fee.parentEmail ? `${fee.parentEmail} • ` : ''}
-                {academyName} Academy Portal Account
+                IslamicTuition Portal.
               </p>
             </div>
 

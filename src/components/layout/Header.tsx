@@ -206,8 +206,17 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Dual Parent / Student Role Switcher (Only visible for dual-role users) */}
         {(() => {
+          const matchingStudentObj = userProfile?.email
+            ? students.find(s => s.email && s.email.trim().toLowerCase() === userProfile.email.trim().toLowerCase())
+            : null;
+          const isUserRegisteredAsStudent = Boolean(matchingStudentObj);
+          const matchingStudentId = matchingStudentObj?.studentId || userProfile?.studentId || null;
+
           const hasDualProfiles = Boolean(
-            !isRealAdmin && userProfile?.studentId && userProfile?.linkedStudentIds && userProfile.linkedStudentIds.length > 0
+            !isRealAdmin &&
+            isUserRegisteredAsStudent &&
+            userProfile?.linkedStudentIds &&
+            userProfile.linkedStudentIds.length > 0
           );
 
           if (!hasDualProfiles) return null;
@@ -228,7 +237,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setAdminViewingRole(actualRole === 'parent' ? 'student' : null, userProfile?.studentId || null)}
+                onClick={() => setAdminViewingRole(actualRole === 'parent' ? 'student' : null, matchingStudentId)}
                 className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   activeRole === 'student'
                     ? 'bg-[#2D8B5C] text-white shadow-xs'
