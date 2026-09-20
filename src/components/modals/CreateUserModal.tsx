@@ -261,7 +261,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="user@islamictuition.com"
+                    placeholder="user@islamictuition.us"
                     className="w-full border border-[#D5D0C6] rounded-lg p-2 bg-white font-mono"
                   />
                 </div>

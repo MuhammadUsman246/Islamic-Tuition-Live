@@ -527,7 +527,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                 type="email"
                 value={passwordResetEmail}
                 onChange={(e) => setPasswordResetEmail(e.target.value)}
-                placeholder="e.g. tutor@islamictuition.com or parent@gmail.com"
+                placeholder="e.g. tutor@islamictuition.us or parent@gmail.com"
                 className="w-full px-3 py-2 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A] focus:ring-1 focus:ring-[#2D8B5C]"
                 required
               />

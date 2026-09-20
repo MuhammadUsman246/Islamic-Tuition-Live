@@ -15,7 +15,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
-import { UserProfile, UserRole, Student } from '../types';
+import { UserProfile, UserRole, Student, Tutor } from '../types';
 import { INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
 import { ensureDatabaseSeeded } from '../services/seedData';
 import { recordUserSessionHeartbeat } from '../services/dataService';
@@ -35,7 +35,7 @@ export const DUMMY_PERSONAS: DummyPersona[] = [];
 export const PRESET_USERS: Record<UserRole, UserProfile> = {
   admin: {
     uid: 'admin_user',
-    email: 'admin@islamictuition.com',
+    email: 'admin@islamictuition.us',
     displayName: 'Academic Director',
     role: 'admin',
     status: 'active',
@@ -43,7 +43,7 @@ export const PRESET_USERS: Record<UserRole, UserProfile> = {
   },
   supervisor: {
     uid: 'supervisor_user',
-    email: 'supervisor@islamictuition.com',
+    email: 'supervisor@islamictuition.us',
     displayName: 'Academic Supervisor',
     role: 'supervisor',
     status: 'active',
@@ -51,7 +51,7 @@ export const PRESET_USERS: Record<UserRole, UserProfile> = {
   },
   tutor: {
     uid: 'tutor_user',
-    email: 'tutor@islamictuition.com',
+    email: 'tutor@islamictuition.us',
     displayName: 'Tutor',
     role: 'tutor',
     status: 'active',
@@ -59,7 +59,7 @@ export const PRESET_USERS: Record<UserRole, UserProfile> = {
   },
   student: {
     uid: 'student_user',
-    email: 'student@islamictuition.com',
+    email: 'student@islamictuition.us',
     displayName: 'Student',
     role: 'student',
     status: 'active',
@@ -67,7 +67,7 @@ export const PRESET_USERS: Record<UserRole, UserProfile> = {
   },
   parent: {
     uid: 'parent_user',
-    email: 'parent@islamictuition.com',
+    email: 'parent@islamictuition.us',
     displayName: 'Parent',
     role: 'parent',
     status: 'active',

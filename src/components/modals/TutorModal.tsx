@@ -208,7 +208,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="tutor@islamictuition.com"
+                placeholder="tutor@islamictuition.us"
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
               />
             </div>

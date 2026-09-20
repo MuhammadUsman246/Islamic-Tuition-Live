@@ -23,6 +23,7 @@ import {
   PRESET_STUDENT_AVATARS,
   OptimizedImageResult
 } from '../../utils/imageOptimizer';
+import { updateStudent } from '../../services/dataService';
 
 interface StudentProfileCustomizerModalProps {
   isOpen: boolean;
@@ -50,6 +51,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
   const [themePreference, setThemePreference] = useState<'emerald' | 'gold' | 'midnight' | 'sage'>(
     userProfile?.themePreference || 'emerald'
   );
+  const [email, setEmail] = useState<string>(userProfile?.email || '');
 
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [compressionStats, setCompressionStats] = useState<{
@@ -108,6 +110,16 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
     setErrorMessage(null);
 
     try {
+      const emailChanged = email.trim().toLowerCase() !== userProfile?.email?.trim().toLowerCase();
+      
+      if (emailChanged && student?.id) {
+        if (userProfile?.role === 'parent') {
+          await updateStudent(student.id, { parentEmail: email.trim() });
+        } else {
+          await updateStudent(student.id, { email: email.trim() });
+        }
+      }
+
       await updateUserProfile({
         avatarUrl,
         preferredName: preferredName.trim(),
@@ -116,7 +128,8 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
         quranGoal: quranGoal.trim(),
         hobbies: hobbies.trim(),
         dailyGoalMinutes: Number(dailyGoalMinutes) || 20,
-        themePreference
+        themePreference,
+        ...(emailChanged ? { email: email.trim() } : {})
       });
 
       setSaveSuccess(true);
@@ -406,6 +419,30 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                 placeholder="Share a short note about your Quran journey, aspirations, or learning style..."
                 maxLength={240}
                 className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none resize-none"
+              />
+            </div>
+          </div>
+
+          {/* Section 2.5: Contact & Login Email */}
+          <div className="p-4 bg-emerald-50/20 rounded-xl border border-emerald-100 space-y-3">
+            <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider flex items-center gap-1.5">
+              <User className="w-4 h-4 text-[#2D8B5C]" />
+              <span>Contact & Login Email Information</span>
+            </h4>
+            <p className="text-[11px] text-[#5A6B61] leading-relaxed">
+              Updating your email will automatically update both your profile records and login credentials. Keep this updated to ensure uninterrupted access.
+            </p>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#161F1A] mb-1">
+                Your Contact / Login Email Address
+              </label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. parent.name@example.com"
+                className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-xs text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
               />
             </div>
           </div>

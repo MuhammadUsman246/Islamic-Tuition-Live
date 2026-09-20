@@ -672,6 +672,126 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `${STUDENTS_COL}/${id}`);
     }
+
+    // 1. If student email changed, propagate to 'users' collection
+    if (current && updates.email && current.email !== updates.email) {
+      const oldEmailClean = current.email.trim().toLowerCase();
+      const newEmailClean = updates.email.trim().toLowerCase();
+      try {
+        const usersToUpdate = new Map<string, any>();
+        
+        // Match by old email
+        if (current.email) {
+          const emailSnap = await getDocs(
+            query(collection(db, USERS_COL), where('email', '==', current.email))
+          );
+          emailSnap.docs.forEach(uDoc => {
+            if (uDoc.data().role === 'student') {
+              usersToUpdate.set(uDoc.id, uDoc.data());
+            }
+          });
+        }
+        
+        // Match by studentId
+        if (current.studentId) {
+          const idSnap = await getDocs(
+            query(collection(db, USERS_COL), where('studentId', '==', current.studentId))
+          );
+          idSnap.docs.forEach(uDoc => {
+            if (uDoc.data().role === 'student') {
+              usersToUpdate.set(uDoc.id, uDoc.data());
+            }
+          });
+        }
+
+        for (const [docId, docData] of usersToUpdate.entries()) {
+          await updateDoc(doc(db, USERS_COL, docId), {
+            email: updates.email,
+            studentId: current.studentId
+          });
+        }
+        
+        // Also update email-indexed doc if it exists
+        if (oldEmailClean) {
+          const oldEmailDocId = oldEmailClean.replace(/[@.]/g, '_');
+          const newEmailDocId = newEmailClean.replace(/[@.]/g, '_');
+          const oldEmailDocRef = doc(db, USERS_COL, oldEmailDocId);
+          const oldEmailDocSnap = await getDoc(oldEmailDocRef);
+          if (oldEmailDocSnap.exists()) {
+            const uData = oldEmailDocSnap.data();
+            await setDoc(doc(db, USERS_COL, newEmailDocId), {
+              ...uData,
+              email: updates.email
+            }, { merge: true });
+            await deleteDoc(oldEmailDocRef);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not sync user profile student email updates:', err);
+      }
+    }
+
+    // 2. If parent email changed, propagate to 'users' collection
+    if (current && updates.parentEmail && current.parentEmail !== updates.parentEmail) {
+      const oldParentClean = current.parentEmail.trim().toLowerCase();
+      const newParentClean = updates.parentEmail.trim().toLowerCase();
+      try {
+        const usersToUpdate = new Map<string, any>();
+        
+        // Match by old parent email
+        if (current.parentEmail) {
+          const emailSnap = await getDocs(
+            query(collection(db, USERS_COL), where('email', '==', current.parentEmail))
+          );
+          emailSnap.docs.forEach(uDoc => {
+            if (uDoc.data().role === 'parent') {
+              usersToUpdate.set(uDoc.id, uDoc.data());
+            }
+          });
+        }
+        
+        // Match by studentId for parent role
+        if (current.studentId) {
+          const idSnap = await getDocs(
+            query(collection(db, USERS_COL), where('studentId', '==', current.studentId))
+          );
+          idSnap.docs.forEach(uDoc => {
+            if (uDoc.data().role === 'parent') {
+              usersToUpdate.set(uDoc.id, uDoc.data());
+            }
+          });
+        }
+
+        for (const [docId, docData] of usersToUpdate.entries()) {
+          await updateDoc(doc(db, USERS_COL, docId), {
+            email: updates.parentEmail
+          });
+        }
+        
+        // Also update email-indexed doc
+        if (oldParentClean) {
+          const oldParentDocId = oldParentClean.replace(/[@.]/g, '_');
+          const newParentDocId = newParentClean.replace(/[@.]/g, '_');
+          const oldParentDocRef = doc(db, USERS_COL, oldParentDocId);
+          const oldParentDocSnap = await getDoc(oldParentDocRef);
+          if (oldParentDocSnap.exists()) {
+            const uData = oldParentDocSnap.data();
+            await setDoc(doc(db, USERS_COL, newParentDocId), {
+              ...uData,
+              email: updates.parentEmail
+            }, { merge: true });
+            await deleteDoc(oldParentDocRef);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not sync user profile parent email updates:', err);
+      }
+    }
+
+    // Refresh system users cache in background
+    if (updates.email || updates.parentEmail) {
+      getSystemUsers(true).catch(() => {});
+    }
   }
 
   // If tutor assignment or name changed, update classes in cache and Firestore in parallel
@@ -1530,6 +1650,20 @@ export async function addAttendanceRecord(record: Omit<AttendanceRecord, 'id'>):
   return docId;
 }
 
+export async function deleteAttendanceRecord(id: string): Promise<void> {
+  if (CACHE.attendance) {
+    CACHE.attendance = CACHE.attendance.filter(r => r.id !== id);
+    saveCachedCollection('attendance', CACHE.attendance);
+  }
+  if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
+    try {
+      await deleteDoc(doc(db, ATTENDANCE_COL, id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `${ATTENDANCE_COL}/${id}`);
+    }
+  }
+}
+
 export async function getTutorAttendanceRecords(forceRefresh = false): Promise<TutorAttendanceRecord[]> {
   if (CACHE.tutorAttendance && !forceRefresh) {
     return CACHE.tutorAttendance;
@@ -1703,6 +1837,20 @@ export async function updateFee(id: string, updates: Partial<StudentFee>): Promi
       await updateDoc(doc(db, FEES_COL, id), sanitizeFirestoreObject(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `${FEES_COL}/${id}`);
+    }
+  }
+}
+
+export async function deleteFee(id: string): Promise<void> {
+  if (CACHE.fees) {
+    CACHE.fees = CACHE.fees.filter(f => f.id !== id);
+    saveCachedCollection('fees', CACHE.fees);
+  }
+  if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
+    try {
+      await deleteDoc(doc(db, FEES_COL, id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `${FEES_COL}/${id}`);
     }
   }
 }

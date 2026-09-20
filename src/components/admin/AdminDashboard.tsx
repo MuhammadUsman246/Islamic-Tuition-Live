@@ -99,6 +99,7 @@ import {
   deleteLesson,
   addFee,
   updateFee,
+  deleteFee,
   addSalary,
   updateSalary,
   addReferral,
@@ -107,6 +108,7 @@ import {
   addAnnouncement,
   deleteAnnouncement,
   addAttendanceRecord,
+  deleteAttendanceRecord,
   addTutorAttendanceRecord,
   updateTutorAttendanceRecord,
   deleteTutorAttendanceRecord,
@@ -4015,6 +4017,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               Edit
                             </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (confirm(`Are you absolutely sure you want to delete fee invoice ${f.invoiceNumber} for ${f.studentName} permanently?`)) {
+                                  await deleteFee(f.id);
+                                  if (onRefreshData) {
+                                    await onRefreshData();
+                                  }
+                                }
+                              }}
+                              className="px-2 py-1 text-xs text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer"
+                              title="Delete fee invoice permanently"
+                            >
+                              Delete
+                            </button>
                           </td>
                         </tr>
                       );
@@ -4398,6 +4415,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Marked By</th>
                       <th className="py-3 px-4">Timestamp</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#EAE6DE]">
@@ -4414,6 +4432,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
                         <td className="py-3 px-4 text-[#5A6B61]">{a.markedBy}</td>
                         <td className="py-3 px-4 text-[#5A6B61] font-mono">{a.markedAt}</td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (confirm(`Are you sure you want to delete the attendance log for ${a.studentName} on ${a.date}?`)) {
+                                await deleteAttendanceRecord(a.id);
+                                if (onRefreshData) {
+                                  await onRefreshData();
+                                }
+                              }
+                            }}
+                            className="px-2 py-1 text-xs text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer"
+                          >
+                            Delete
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

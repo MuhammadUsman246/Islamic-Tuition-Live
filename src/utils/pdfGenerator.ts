@@ -28,7 +28,7 @@ export function generateFeeInvoicePDF(fee: StudentFee): void {
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Online Quran Academy Management Portal', 20, 27);
+  doc.text('Online Quran classes for kids & Adults.', 20, 27);
 
   // Invoice / Receipt badge
   const isPaid = fee.status === 'Paid';
@@ -319,10 +319,10 @@ export function generateLessonReportPDF(lesson: Lesson): void {
     id: lesson.studentId,
     studentId: lesson.studentId,
     name: lesson.studentName,
-    email: 'student@islamictuition.com',
+    email: 'student@islamictuition.us',
     phone: 'N/A',
     parentName: 'Family Guardian',
-    parentEmail: 'parent@islamictuition.com',
+    parentEmail: 'parent@islamictuition.us',
     parentPhone: 'N/A',
     assignedTutorId: lesson.tutorId,
     status: 'Active',
@@ -536,7 +536,7 @@ export function generateWeeklyProgressReportPDF(data: WeeklyReportData): void {
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(120, 130, 125);
-  doc.text('Generated with IslamicTuition Academic Management System • www.islamictuition.com', 105, 285, { align: 'center' });
+  doc.text('Generated with IslamicTuition Academic Management System • islamictuition.us', 105, 285, { align: 'center' });
 
   doc.save(`Weekly_Progress_Report_${data.student.studentId}_${data.startDate}_to_${data.endDate}.pdf`);
 }

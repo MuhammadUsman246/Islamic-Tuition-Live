@@ -337,7 +337,7 @@ const MainPortal: React.FC = () => {
     if ((userProfile.role === 'parent' || !userProfile.role || !userProfile.linkedStudentIds || userProfile.linkedStudentIds.length === 0) && students.length > 0) {
       const childMatches = students.filter(s => s.parentEmail && s.parentEmail.trim().toLowerCase() === normEmail);
       if (childMatches.length > 0) {
-        const cIds = Array.from(new Set(childMatches.map(c => c.studentId).filter(Boolean)));
+        const cIds = Array.from(new Set(childMatches.map(c => c.studentId).filter(Boolean))) as string[];
         if (cIds.length > 0 && (!userProfile.linkedStudentIds || userProfile.linkedStudentIds.length !== cIds.length)) {
           systemLinkUserProfile({
             linkedStudentIds: cIds,
