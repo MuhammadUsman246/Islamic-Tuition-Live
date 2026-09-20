@@ -179,20 +179,20 @@ export function convertPKTToStudentTime(
     const hours = parseInt(hoursStr, 10);
     const minutes = parseInt(minutesStr, 10);
 
-    // Reference Monday: 2026-09-14 is a Monday
-    const dayIndexMap: Record<DayOfWeek, number> = {
-      Monday: 14,
-      Tuesday: 15,
-      Wednesday: 16,
-      Thursday: 17,
-      Friday: 18,
-      Saturday: 19,
-      Sunday: 20
-    };
+    // Find a date near 'now' that falls on the target dayOfWeekPKT
+    const now = new Date();
+    const DAYS_ABBR = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const targetDayNum = DAYS_ABBR.indexOf(dayOfWeekPKT);
+    const currentDayNum = now.getDay();
+    const diff = targetDayNum - currentDayNum;
+    const targetDate = new Date(now.getTime() + diff * 24 * 60 * 60 * 1000);
 
-    const dayOfMonth = dayIndexMap[dayOfWeekPKT] || 14;
-    // PKT is fixed UTC+05:00
-    const isoString = `2026-09-${dayOfMonth.toString().padStart(2, '0')}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00+05:00`;
+    const yr = targetDate.getFullYear();
+    const mo = (targetDate.getMonth() + 1).toString().padStart(2, '0');
+    const dy = targetDate.getDate().toString().padStart(2, '0');
+
+    // Build absolute ISO string with Asia/Karachi (+05:00) offset
+    const isoString = `${yr}-${mo}-${dy}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00+05:00`;
     const dateObj = new Date(isoString);
 
     // Format into the target student timezone using IANA ID for accurate DST calculation
@@ -215,9 +215,21 @@ export function convertPKTToStudentTime(
       hour12: false
     });
 
-    const localDay = dayFormatter.format(dateObj) as DayOfWeek;
+    let localDay = dayFormatter.format(dateObj) as DayOfWeek;
     const localTime = timeFormatter.format(dateObj);
     const localTime24 = time24Formatter.format(dateObj);
+
+    // OPERATIONAL NIGHT-SHIFT OVERRIDE:
+    // If the class is scheduled during the early morning hours in Pakistan (between 00:00 and 08:30 PKT),
+    // and standard timezone conversion shifted the day of the week backward (e.g. from Monday to Sunday),
+    // we override the localDay to match the scheduled dayOfWeekPKT (e.g. Monday). This ensures that
+    // the Monday-to-Friday schedule set on the PKT sheets displays as Monday-to-Friday in the student's 
+    // local view, instead of Sunday-to-Thursday.
+    if (hours <= 8) {
+      if (localDay !== dayOfWeekPKT) {
+        localDay = dayOfWeekPKT;
+      }
+    }
 
     return {
       localDay: DAYS_OF_WEEK.includes(localDay) ? localDay : dayOfWeekPKT,

@@ -368,35 +368,60 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {childClasses.map((cls) => {
-              const conv = convertPKTToStudentTime(cls.dayOfWeek, cls.startTimePKT, activeChild?.timezone || 'America/New_York');
-              return (
-                <div key={cls.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#2D8B5C]">
-                        {conv.localDay}
-                      </span>
-                      <h4 className="text-base font-bold text-[#161F1A] mt-0.5">
-                        {conv.localTime} <span className="text-xs font-normal text-[#5A6B61]">local</span>
-                      </h4>
-                    </div>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
-                      {cls.durationMinutes} min
-                    </span>
-                  </div>
+            {(() => {
+              const DAY_RANKS: Record<string, number> = {
+                'Monday': 1,
+                'Tuesday': 2,
+                'Wednesday': 3,
+                'Thursday': 4,
+                'Friday': 5,
+                'Saturday': 6,
+                'Sunday': 7
+              };
 
-                  <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] text-xs space-y-1">
-                    <p className="text-[#5A6B61]">
-                      Assigned Tutor: <strong className="text-[#2D8B5C]">{cls.tutorId}</strong>
-                    </p>
-                    <p className="text-[#5A6B61]">
-                      Weekly Class: <span className="font-medium text-[#161F1A]">{conv.localDay}s at {conv.localTime}</span>
-                    </p>
+              const sortedChildClasses = [...childClasses].map(cls => {
+                const conv = convertPKTToStudentTime(
+                  cls.dayOfWeek,
+                  cls.startTimePKT,
+                  activeChild?.timezone || 'America/New_York'
+                );
+                return { cls, conv };
+              }).sort((a, b) => {
+                const rankA = DAY_RANKS[a.conv.localDay] || 99;
+                const rankB = DAY_RANKS[b.conv.localDay] || 99;
+                if (rankA !== rankB) return rankA - rankB;
+                return a.conv.localTime24.localeCompare(b.conv.localTime24);
+              });
+
+              return sortedChildClasses.map(({ cls, conv }) => {
+                return (
+                  <div key={cls.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#2D8B5C]">
+                          {conv.localDay}
+                        </span>
+                        <h4 className="text-base font-bold text-[#161F1A] mt-0.5">
+                          {conv.localTime} <span className="text-xs font-normal text-[#5A6B61]">local</span>
+                        </h4>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
+                        {cls.durationMinutes} min
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] text-xs space-y-1">
+                      <p className="text-[#5A6B61]">
+                        Assigned Tutor: <strong className="text-[#2D8B5C]">{cls.tutorId}</strong>
+                      </p>
+                      <p className="text-[#5A6B61]">
+                        Weekly Class: <span className="font-medium text-[#161F1A]">{conv.localDay}s at {conv.localTime}</span>
+                      </p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              });
+            })()}
           </div>
         </div>
       )}
