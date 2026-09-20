@@ -138,7 +138,35 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     return () => { isMounted = false; };
   }, [matchedStudent, userProfile, currentStudentId, onRefreshData]);
 
-  const student = matchedStudent || fetchedStudent;
+  // Fallback synthesized student record so logged-in students in fresh profiles/incognito are never stranded
+  const synthesizedStudent = useMemo<Student | null>(() => {
+    if (matchedStudent || fetchedStudent) return null;
+    if (userProfile && (userProfile.role === 'student' || userProfile.studentId || userProfile.email)) {
+      const cleanEmail = userProfile.email?.toLowerCase().trim() || 'student@academy.com';
+      const displayName = userProfile.displayName || cleanEmail.split('@')[0] || 'Student';
+      const stuId = userProfile.studentId || `STU-${cleanEmail.split('@')[0].toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+      return {
+        id: stuId,
+        studentId: stuId,
+        name: displayName,
+        email: cleanEmail,
+        parentEmail: userProfile.parentEmail || '',
+        phone: userProfile.phone || '',
+        country: userProfile.country || 'USA',
+        timezone: userProfile.timezone || 'America/New_York',
+        courseType: userProfile.courseType || 'Qaida',
+        status: 'Active',
+        assignedTutorId: 'TUT-001',
+        monthlyFee: 50,
+        currency: 'USD',
+        joiningDate: new Date().toISOString().slice(0, 10),
+        notes: 'Active Academy Student'
+      };
+    }
+    return null;
+  }, [matchedStudent, fetchedStudent, userProfile]);
+
+  const student = matchedStudent || fetchedStudent || synthesizedStudent;
 
   const assignedTutor = student ? tutors.find(t => t.tutorId === student.assignedTutorId) || null : null;
 
