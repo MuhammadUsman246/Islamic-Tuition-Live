@@ -2532,7 +2532,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="px-4 py-1.5 bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold rounded-lg hover:bg-gray-50 flex items-center space-x-1.5 shadow-2xs cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4 text-[#2D8B5C]" />
-                    <span>Bulk Import Tutor 2 & 3</span>
+                    <span>Bulk Student Importer</span>
                   </button>
                   <button
                     id="register_student_button"
