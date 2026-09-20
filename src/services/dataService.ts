@@ -1091,7 +1091,7 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
     return stored;
   }
 
-  if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+  if (!isFirestoreQuotaExceeded()) {
     try {
       const snap = await getDocs(collection(db, CLASSES_COL));
       if (!snap.empty) {
@@ -1356,7 +1356,7 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
     return localItems;
   }
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, LESSONS_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
@@ -1492,7 +1492,7 @@ export async function getAttendanceRecords(forceRefresh = false): Promise<Attend
   }
   const localItems = loadCachedCollection<AttendanceRecord[]>('attendance') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, ATTENDANCE_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
@@ -1536,7 +1536,7 @@ export async function getTutorAttendanceRecords(forceRefresh = false): Promise<T
   }
   const localItems = loadCachedCollection<TutorAttendanceRecord[]>('tutorAttendance') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, TUTOR_ATTENDANCE_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TutorAttendanceRecord));
@@ -1648,7 +1648,7 @@ export async function getFees(forceRefresh = false): Promise<StudentFee[]> {
   }
   const localItems = loadCachedCollection<StudentFee[]>('fees') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, FEES_COL));
       if (!snap.empty) {
         const today = new Date().toISOString().slice(0, 10);
@@ -1716,7 +1716,7 @@ export async function getSalaries(forceRefresh = false): Promise<TutorSalary[]> 
   }
   const localItems = loadCachedCollection<TutorSalary[]>('salaries') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, SALARIES_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TutorSalary));
@@ -1776,7 +1776,7 @@ export async function getReferrals(forceRefresh = false): Promise<Referral[]> {
   }
   const localItems = loadCachedCollection<Referral[]>('referrals') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, REFERRALS_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Referral));
@@ -1915,7 +1915,7 @@ export async function getAnnouncements(forceRefresh = false): Promise<Announceme
   }
   const localItems = loadCachedCollection<Announcement[]>('announcements') || [];
   try {
-    if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, ANNOUNCEMENTS_COL));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Announcement));

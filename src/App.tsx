@@ -275,10 +275,10 @@ const MainPortal: React.FC = () => {
     };
     initData();
 
-    // Failsafe timer: guarantee dataLoading turns false after 1.5 seconds max
+    // Failsafe timer: guarantee dataLoading turns false after 5 seconds max
     const timer = setTimeout(() => {
       setDataLoading(false);
-    }, 1500);
+    }, 5000);
     return () => clearTimeout(timer);
   }, [loadAcademyData]);
 
