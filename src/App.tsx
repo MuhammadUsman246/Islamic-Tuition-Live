@@ -39,6 +39,7 @@ import {
   subscribeToLessons
 } from './services/dataService';
 import { clearAllAcademyData } from './services/seedData';
+import { INITIAL_TUTOR_ENTITIES } from './data/tutorsData';
 import {
   sendDesktopNotification,
   playNotificationChime,
@@ -231,7 +232,7 @@ const MainPortal: React.FC = () => {
 
   // Central Database State
   const [students, setStudents] = useState<Student[]>([]);
-  const [tutors, setTutors] = useState<Tutor[]>([]);
+  const [tutors, setTutors] = useState<Tutor[]>(INITIAL_TUTOR_ENTITIES);
   const [classes, setClasses] = useState<TimetableClass[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [fees, setFees] = useState<StudentFee[]>([]);
@@ -248,7 +249,7 @@ const MainPortal: React.FC = () => {
       const data = await fetchAllAcademyData(forceRefresh);
 
       setStudents(data.students);
-      setTutors(data.tutors);
+      setTutors(data.tutors && data.tutors.length >= 19 ? data.tutors : INITIAL_TUTOR_ENTITIES);
       setClasses(data.classes);
       setLessons(data.lessons);
       setFees(data.fees);
@@ -266,10 +267,6 @@ const MainPortal: React.FC = () => {
 
   useEffect(() => {
     const initData = async () => {
-      if (!localStorage.getItem('it_cleaned_v3')) {
-        localStorage.setItem('it_cleaned_v3', 'true');
-        await clearAllAcademyData();
-      }
       await loadAcademyData(true);
     };
     initData();

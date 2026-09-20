@@ -14,6 +14,7 @@ import {
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
 import { UserProfile, UserRole } from '../types';
+import { INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
 import { ensureDatabaseSeeded } from '../services/seedData';
 import { recordUserSessionHeartbeat } from '../services/dataService';
 
@@ -97,8 +98,9 @@ export interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Dedicated structured logging helper with timestamps and elapsed time tracking
+// Dedicated structured logging helper with timestamps and elapsed time tracking (silent in production)
 function authLog(phase: string, message: string, details?: any) {
+  if (import.meta.env.PROD) return;
   const time = new Date().toISOString().slice(11, 23);
   if (details !== undefined) {
     console.log(`%c[AuthContext ${time}] [${phase}] ${message}`, 'color: #2D8B5C; font-weight: bold;', details);
@@ -108,6 +110,7 @@ function authLog(phase: string, message: string, details?: any) {
 }
 
 function authWarn(phase: string, message: string, err?: any) {
+  if (import.meta.env.PROD) return;
   const time = new Date().toISOString().slice(11, 23);
   if (err !== undefined) {
     console.warn(`%c[AuthContext ${time}] [${phase}] ⚠️ ${message}`, 'color: #E65100; font-weight: bold;', err);
@@ -286,9 +289,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          // 4. Check predefined personas
+          // 4. Check registered institutional tutors (Tutor 1 - Tutor 19)
           if (!loadedProf && user.email) {
-            authLog('ProfileFetch', `[4/4] Checking predefined academy personas for: ${user.email}...`);
+            const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t => t.email.toLowerCase() === user.email?.toLowerCase());
+            if (matchedTutor) {
+              loadedProf = {
+                uid: user.uid,
+                email: matchedTutor.email,
+                displayName: matchedTutor.displayName,
+                role: 'tutor',
+                status: 'active',
+                tutorId: matchedTutor.tutorId,
+                phone: matchedTutor.phone,
+                country: 'Pakistan',
+                timezone: 'Asia/Karachi',
+                createdAt: new Date().toISOString()
+              };
+              authLog('ProfileFetch', `Matched registered tutor: ${matchedTutor.tutorId}`);
+            }
+          }
+
+          // 5. Check predefined personas
+          if (!loadedProf && user.email) {
+            authLog('ProfileFetch', `Checking predefined academy personas for: ${user.email}...`);
             const matchedPersona = DUMMY_PERSONAS.find(p => p.email.toLowerCase() === user.email?.toLowerCase());
             if (matchedPersona) {
               loadedProf = { ...matchedPersona.profile, uid: user.uid };
@@ -296,7 +319,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          // 5. Construct fallback active profile if new
+          // 6. Construct fallback active profile if new
           if (!loadedProf) {
             const defaultRole: UserRole = isOwnerAdmin
               ? 'admin'

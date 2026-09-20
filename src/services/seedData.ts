@@ -16,14 +16,16 @@ import {
   ChatMessage
 } from '../types';
 
+import { INITIAL_TUTOR_ENTITIES, INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
+
 export const DUMMY_USERS_TO_SEED: UserProfile[] = [];
 
 export async function ensureDatabaseSeeded(): Promise<void> {
-  // Real database mode: no dummy data is seeded
+  // Real database mode: tutor accounts are synchronized via ensureRegisteredTutorsSynchronized
   return;
 }
 
-export const SEED_TUTORS: Tutor[] = [];
+export const SEED_TUTORS: Tutor[] = INITIAL_TUTOR_ENTITIES;
 export const SEED_STUDENTS: Student[] = [];
 export const SEED_CLASSES: TimetableClass[] = [];
 export const SEED_LESSONS: Lesson[] = [];

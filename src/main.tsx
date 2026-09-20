@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import { ErrorBoundary } from './components/common/ErrorBoundary.tsx';
+import { runFirebaseDiagnostic } from './firebase/diagnostic.ts';
 import './index.css';
+
+// Run Firebase diagnostic on boot
+runFirebaseDiagnostic().catch(console.error);
 
 // Automatically register and update the PWA service worker smoothly
 registerSW({

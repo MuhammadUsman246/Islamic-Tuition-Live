@@ -20,6 +20,11 @@ import { getAuth, createUserWithEmailAndPassword, signOut, sendPasswordResetEmai
 import { db, auth } from '../firebase/config';
 import firebaseConfigData from '../../firebase-applet-config.json';
 import {
+  INITIAL_REGISTERED_TUTORS,
+  INITIAL_TUTOR_ENTITIES,
+  INITIAL_TUTOR_USER_PROFILES
+} from '../data/tutorsData';
+import {
   SEED_TUTORS,
   SEED_STUDENTS,
   SEED_CLASSES,
@@ -149,8 +154,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
         })) || []
       }
     };
-    console.error('Firestore Error: ', JSON.stringify(errInfo));
-    throw new Error(JSON.stringify(errInfo));
+    console.warn('Firestore Permission notice (falling back to local cache):', JSON.stringify(errInfo));
+    return;
   }
 
   // Handle transient connectivity or unavailable conditions with soft warning to allow cached data
@@ -676,43 +681,169 @@ export async function deleteStudent(id: string): Promise<string> {
 // ==========================================
 // TUTORS API
 // ==========================================
+let hasSynchronizedRegisteredTutors = false;
+
+/**
+ * Ensures all 19 official tutor accounts (Tutor 1 - Tutor 19) are registered and synchronized
+ * with their unique IDs, permanent Zoom links, PKR 23,000 salaries, active status, and Firebase Auth credentials.
+ */
+export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: boolean; count: number; tutors: Tutor[] }> {
+  const syncedTutors: Tutor[] = [];
+  const secAuth = getSecondaryAuthApp();
+
+  for (const config of INITIAL_REGISTERED_TUTORS) {
+    const docId = `tutor_${config.tutorNumber}`;
+    const userDocId = `tutor_user_${config.tutorNumber}`;
+    const emailKey = config.email.toLowerCase().trim();
+
+    // 1. Prepare Tutor entity
+    const tutorDoc: Tutor = {
+      id: docId,
+      tutorId: config.tutorId,
+      realName: config.realName,
+      email: config.email,
+      phone: config.phone,
+      zoomLink: config.zoomLink,
+      status: 'Active',
+      availabilityStatus: 'Available',
+      monthlySalaryPKR: config.salaryPKR,
+      hourlyRatePKR: Math.round(config.salaryPKR / 40),
+      assignedStudentIds: [],
+      createdAt: '2026-09-20T00:00:00.000Z'
+    };
+
+    syncedTutors.push(tutorDoc);
+
+    // 2. Prepare UserProfile entity (passwords are handled securely via Firebase Auth, not stored in Firestore)
+    const userProfileDoc: UserProfile = {
+      uid: userDocId,
+      email: config.email,
+      displayName: config.displayName,
+      role: 'tutor',
+      status: 'active',
+      tutorId: config.tutorId,
+      phone: config.phone,
+      country: 'Pakistan',
+      timezone: 'Asia/Karachi',
+      createdAt: '2026-09-20T00:00:00.000Z'
+    };
+
+    // 3. Register in Firebase Auth (secure password hashing)
+    try {
+      if (secAuth) {
+        await createUserWithEmailAndPassword(secAuth, config.email, config.password);
+      }
+    } catch (authErr: any) {
+      if (authErr.code !== 'auth/email-already-in-use') {
+        console.debug(`[TutorsSync] Auth notice for ${config.email}:`, authErr.message);
+      }
+    }
+
+    // 4. Save/Merge into Firestore tutors collection and users collection
+    try {
+      const tutorRef = doc(db, TUTORS_COL, docId);
+      const existingSnap = await getDoc(tutorRef);
+      if (!existingSnap.exists()) {
+        await setDoc(tutorRef, sanitizeFirestoreObject(tutorDoc), { merge: true });
+      } else {
+        const existingData = existingSnap.data() as Partial<Tutor>;
+        await setDoc(tutorRef, sanitizeFirestoreObject({
+          tutorId: config.tutorId,
+          realName: existingData.realName !== undefined ? existingData.realName : config.realName,
+          email: config.email,
+          phone: existingData.phone !== undefined ? existingData.phone : config.phone,
+          zoomLink: existingData.zoomLink || config.zoomLink,
+          status: existingData.status || 'Active',
+          monthlySalaryPKR: existingData.monthlySalaryPKR !== undefined && existingData.monthlySalaryPKR > 0 ? existingData.monthlySalaryPKR : config.salaryPKR,
+          hourlyRatePKR: existingData.hourlyRatePKR || Math.round(config.salaryPKR / 40),
+          assignedStudentIds: existingData.assignedStudentIds || [],
+          createdAt: existingData.createdAt || tutorDoc.createdAt
+        }), { merge: true });
+      }
+
+      // Persist UserProfile
+      await setDoc(doc(db, USERS_COL, userDocId), sanitizeFirestoreObject(userProfileDoc), { merge: true });
+      const emailDocId = emailKey.replace(/[@.]/g, '_');
+      if (emailDocId !== userDocId) {
+        await setDoc(doc(db, USERS_COL, emailDocId), sanitizeFirestoreObject(userProfileDoc), { merge: true });
+      }
+    } catch (dbErr) {
+      console.warn(`[TutorsSync] Could not write ${config.tutorId} to Firestore:`, dbErr);
+    }
+  }
+
+  // Update in-memory CACHE
+  CACHE.tutors = syncedTutors;
+  saveCachedCollection('tutors', syncedTutors);
+  hasSynchronizedRegisteredTutors = true;
+
+  return { success: true, count: syncedTutors.length, tutors: syncedTutors };
+}
+
 export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
-  if (CACHE.tutors && !forceRefresh) {
+  if (CACHE.tutors && CACHE.tutors.length >= 19 && !forceRefresh) {
     return CACHE.tutors;
   }
   const stored = loadCachedCollection<Tutor[]>('tutors');
-  if (stored && stored.length > 0 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
+  if (stored && stored.length >= 19 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
     CACHE.tutors = stored;
     return stored;
   }
 
-  if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+  let firestoreTutors: Tutor[] = [];
+  if (!isFirestoreQuotaExceeded()) {
     try {
       const snap = await getDocs(collection(db, TUTORS_COL));
       if (!snap.empty) {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
-        CACHE.tutors = items;
-        saveCachedCollection('tutors', items);
-        return items;
+        firestoreTutors = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, TUTORS_COL);
     }
   }
 
-  if (stored && stored.length > 0) {
-    CACHE.tutors = stored;
-    return stored;
+  // Merge map: Baseline of all 19 official academy tutors
+  const map = new Map<string, Tutor>();
+  INITIAL_TUTOR_ENTITIES.forEach(t => map.set(t.tutorId, { ...t }));
+
+  // Overlay any locally saved updates
+  if (stored && Array.isArray(stored)) {
+    stored.forEach(t => {
+      const existing = map.get(t.tutorId);
+      if (existing) {
+        map.set(t.tutorId, { ...existing, ...t });
+      } else {
+        map.set(t.tutorId, t);
+      }
+    });
   }
 
-  const fallback = isCleanDataMode() ? [] : SEED_TUTORS;
-  CACHE.tutors = fallback;
-  saveCachedCollection('tutors', fallback);
-  return fallback;
+  // Overlay any Firestore stored updates
+  if (firestoreTutors.length > 0) {
+    firestoreTutors.forEach(t => {
+      const existing = map.get(t.tutorId);
+      if (existing) {
+        map.set(t.tutorId, { ...existing, ...t });
+      } else {
+        map.set(t.tutorId, t);
+      }
+    });
+  }
+
+  const items = Array.from(map.values());
+  items.sort((a, b) => {
+    const numA = parseInt(a.tutorId.replace(/\D/g, '')) || 0;
+    const numB = parseInt(b.tutorId.replace(/\D/g, '')) || 0;
+    return numA - numB;
+  });
+
+  CACHE.tutors = items;
+  saveCachedCollection('tutors', items);
+  return items;
 }
 
 export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => void {
-  const getFallback = () => CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || (isCleanDataMode() ? [] : SEED_TUTORS);
+  const getFallback = () => CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES;
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
@@ -720,10 +851,23 @@ export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => vo
   return safeOnSnapshot(
     collection(db, TUTORS_COL),
     (snap) => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
-      CACHE.tutors = items;
-      saveCachedCollection('tutors', items);
-      callback(items);
+      if (!snap.empty && snap.docs.length >= 19) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
+        items.sort((a, b) => {
+          const numA = parseInt(a.tutorId.replace(/\D/g, '')) || 0;
+          const numB = parseInt(b.tutorId.replace(/\D/g, '')) || 0;
+          return numA - numB;
+        });
+        CACHE.tutors = items;
+        saveCachedCollection('tutors', items);
+        callback(items);
+      } else {
+        const fallback = getFallback();
+        callback(fallback);
+        if (!hasSynchronizedRegisteredTutors) {
+          ensureRegisteredTutorsSynchronized().catch(() => {});
+        }
+      }
     },
     (_err) => {
       callback(getFallback());
@@ -2181,13 +2325,15 @@ export async function getAcademySettings(forceRefresh = false): Promise<AcademyS
     operationalTimezone: 'Asia/Karachi',
     contactEmail: 'admin@islamictuition.com',
     contactPhone: '+92 300 1234567',
-    defaultZoomLink: 'https://zoom.us/j/islamictuition_main'
+    defaultZoomLink: 'https://zoom.us/j/islamictuition_main',
+    trialSessionsCount: 5,
+    siblingDiscountPercent: 10
   };
   try {
     const docRef = doc(db, SETTINGS_COL, 'general');
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      const settings = snap.data() as AcademySettings;
+      const settings = { ...defaultSettings, ...(snap.data() as AcademySettings) };
       CACHE.settings = settings;
       return settings;
     }
@@ -2201,6 +2347,26 @@ export async function getAcademySettings(forceRefresh = false): Promise<AcademyS
   }
   CACHE.settings = defaultSettings;
   return defaultSettings;
+}
+
+export function subscribeToAcademySettings(callback: (settings: AcademySettings) => void): () => void {
+  const docRef = doc(db, SETTINGS_COL, 'general');
+  return safeOnSnapshot(docRef, (snap: any) => {
+    if (snap.exists()) {
+      const settings = {
+        academyName: 'IslamicTuition',
+        operationalTimezone: 'Asia/Karachi',
+        contactEmail: 'admin@islamictuition.com',
+        contactPhone: '+92 300 1234567',
+        defaultZoomLink: 'https://zoom.us/j/islamictuition_main',
+        trialSessionsCount: 5,
+        siblingDiscountPercent: 10,
+        ...(snap.data() as AcademySettings)
+      };
+      CACHE.settings = settings;
+      callback(settings);
+    }
+  }, undefined, SETTINGS_COL);
 }
 
 export async function updateAcademySettings(settings: Partial<AcademySettings>): Promise<void> {
@@ -2242,6 +2408,7 @@ export interface RegisterUserParams {
   parentEmail?: string;
   parentPhone?: string;
   hourlyRatePKR?: number;
+  monthlySalaryPKR?: number;
   zoomLink?: string;
   qualifications?: string;
   department?: string;
@@ -2265,7 +2432,15 @@ function getSecondaryAuthApp() {
     if (existing) {
       secondaryAuthAppInstance = existing;
     } else {
-      secondaryAuthAppInstance = initializeApp(firebaseConfigData, 'SecondaryAdminAuthApp');
+      const config = {
+        apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfigData.apiKey,
+        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigData.authDomain,
+        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfigData.projectId,
+        storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigData.storageBucket,
+        messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigData.messagingSenderId,
+        appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfigData.appId,
+      };
+      secondaryAuthAppInstance = initializeApp(config, 'SecondaryAdminAuthApp');
     }
   }
   return getAuth(secondaryAuthAppInstance);
@@ -2548,7 +2723,7 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
         zoomLink: params.zoomLink || params.profileData?.zoomLink || 'https://zoom.us/j/islamictuition-room',
         status: 'Active',
         hourlyRatePKR: params.hourlyRatePKR || (params.profileData?.hourlyRate ? params.profileData.hourlyRate * 280 : 3000),
-        monthlySalaryPKR: 0,
+        monthlySalaryPKR: params.monthlySalaryPKR !== undefined ? params.monthlySalaryPKR : (params.profileData?.monthlySalaryPKR || 23000),
         assignedStudentIds: [],
         createdAt: new Date().toISOString()
       };
@@ -2591,20 +2766,65 @@ export const registerUserAccount = registerFirebaseUserWithProfile;
  * Fetch all registered institutional users from Firestore
  */
 export async function getSystemUsers(forceRefresh = false): Promise<UserProfile[]> {
-  if (CACHE.systemUsers && !forceRefresh) {
+  if (CACHE.systemUsers && CACHE.systemUsers.length >= 19 && !forceRefresh) {
     return CACHE.systemUsers;
   }
-  try {
-    const snap = await getDocs(collection(db, USERS_COL));
-    if (!snap.empty) {
-      const users = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
-      CACHE.systemUsers = users;
-      return users;
+
+  const storedUsers = loadCachedCollection<UserProfile[]>('systemUsers') || [];
+  let firestoreUsers: UserProfile[] = [];
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const snap = await getDocs(collection(db, USERS_COL));
+      if (!snap.empty) {
+        firestoreUsers = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
+      }
+    } catch (err) {
+      console.warn("Could not fetch system users from Firestore:", err);
     }
-  } catch (err) {
-    console.warn("Could not fetch system users:", err);
   }
-  return [];
+
+  const usersMap = new Map<string, UserProfile>();
+
+  // 1. Baseline: all 19 official tutor user profiles
+  INITIAL_TUTOR_USER_PROFILES.forEach(u => {
+    usersMap.set(u.email.toLowerCase(), { ...u });
+  });
+
+  // 2. Overlay locally stored accounts
+  storedUsers.forEach(u => {
+    if (u.email) {
+      const key = u.email.toLowerCase();
+      usersMap.set(key, { ...(usersMap.get(key) || {}), ...u });
+    } else if (u.uid) {
+      usersMap.set(u.uid, { ...(usersMap.get(u.uid) || {}), ...u });
+    }
+  });
+
+  // 3. Overlay Firestore accounts
+  firestoreUsers.forEach(u => {
+    if (u.email) {
+      const key = u.email.toLowerCase();
+      usersMap.set(key, { ...(usersMap.get(key) || {}), ...u });
+    } else if (u.uid) {
+      usersMap.set(u.uid, { ...(usersMap.get(u.uid) || {}), ...u });
+    }
+  });
+
+  const allUsers = Array.from(usersMap.values());
+  allUsers.sort((a, b) => {
+    const roleOrder: Record<string, number> = { admin: 1, supervisor: 2, tutor: 3, student: 4, parent: 5 };
+    const diff = (roleOrder[a.role] || 99) - (roleOrder[b.role] || 99);
+    if (diff !== 0) return diff;
+    const numA = parseInt((a.tutorId || '').replace(/\D/g, '')) || 0;
+    const numB = parseInt((b.tutorId || '').replace(/\D/g, '')) || 0;
+    if (numA && numB) return numA - numB;
+    return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+  });
+
+  CACHE.systemUsers = allUsers;
+  saveCachedCollection('systemUsers', allUsers);
+  return allUsers;
 }
 
 /**
@@ -3025,7 +3245,7 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
 
   const fallbackData = {
     students: CACHE.students || (isCleanDataMode() ? [] : SEED_STUDENTS),
-    tutors: CACHE.tutors || (isCleanDataMode() ? [] : SEED_TUTORS),
+    tutors: (CACHE.tutors && CACHE.tutors.length >= 19) ? CACHE.tutors : INITIAL_TUTOR_ENTITIES,
     classes: CACHE.classes || (isCleanDataMode() ? [] : SEED_CLASSES),
     lessons: CACHE.lessons || (isCleanDataMode() ? [] : SEED_LESSONS),
     fees: CACHE.fees || (isCleanDataMode() ? [] : SEED_FEES),
@@ -3057,7 +3277,7 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
     console.log(`[DataService] fetchAllAcademyData completed in ${Date.now() - fetchStart}ms`);
     return {
       students,
-      tutors,
+      tutors: tutors && tutors.length >= 19 ? tutors : INITIAL_TUTOR_ENTITIES,
       classes,
       lessons,
       fees,

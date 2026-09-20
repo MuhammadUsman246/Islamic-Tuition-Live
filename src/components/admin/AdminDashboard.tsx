@@ -79,6 +79,7 @@ import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { WeeklyProgressReportModal } from '../modals/WeeklyProgressReportModal';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
+import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
 import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV, exportFeesToCSV, exportFullAcademyBackupJSON } from '../../utils/csvExporter';
 import { getCurrencySymbol, formatFeeAmount, ALLOWED_CURRENCIES } from '../../utils/currency';
@@ -112,7 +113,10 @@ import {
   resetUserPassword,
   getSystemUsers,
   deleteSystemUser,
-  restoreTrashRecord
+  restoreTrashRecord,
+  getAcademySettings,
+  updateAcademySettings,
+  subscribeToAcademySettings
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -262,7 +266,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [feeCurrencyFilter, setFeeCurrencyFilter] = useState<string>('all');
 
   // System User Accounts state
-  const [systemUsers, setSystemUsers] = useState<UserProfile[]>([]);
+  const [systemUsers, setSystemUsers] = useState<UserProfile[]>(INITIAL_TUTOR_USER_PROFILES);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
   // Strict Deletion & Undo State
@@ -297,14 +301,76 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState(false);
 
-  const handleSaveOperationalSettings = (e: React.FormEvent) => {
+  // Sync settings with Cloud Firestore in real time
+  useEffect(() => {
+    // Initial fetch from Firestore
+    getAcademySettings().then((liveSettings) => {
+      if (liveSettings) {
+        if (liveSettings.academyName) setAcademyName(liveSettings.academyName);
+        if (liveSettings.contactPhone) setAcademyPhone(liveSettings.contactPhone);
+        if (liveSettings.operationalTimezone) setAcademyTimezone(liveSettings.operationalTimezone);
+        if (liveSettings.contactEmail) setHeadOfficeEmail(liveSettings.contactEmail);
+        if (liveSettings.trialSessionsCount) setTrialSessionsCount(liveSettings.trialSessionsCount);
+        if (liveSettings.siblingDiscountPercent !== undefined) setSiblingDiscountPercent(liveSettings.siblingDiscountPercent);
+
+        localStorage.setItem('it_academy_name', liveSettings.academyName || 'Islamic Tuition');
+        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+44 7000 000000');
+        localStorage.setItem('it_academy_tz', liveSettings.operationalTimezone || 'Asia/Karachi');
+        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'admin@islamictuition.com');
+        if (liveSettings.trialSessionsCount) localStorage.setItem('it_trial_sessions_count', String(liveSettings.trialSessionsCount));
+        if (liveSettings.siblingDiscountPercent !== undefined) localStorage.setItem('it_sibling_discount_percent', String(liveSettings.siblingDiscountPercent));
+      }
+    }).catch(() => {});
+
+    // Live subscription
+    const unsub = subscribeToAcademySettings((liveSettings) => {
+      if (liveSettings) {
+        if (liveSettings.academyName) setAcademyName(liveSettings.academyName);
+        if (liveSettings.contactPhone) setAcademyPhone(liveSettings.contactPhone);
+        if (liveSettings.operationalTimezone) setAcademyTimezone(liveSettings.operationalTimezone);
+        if (liveSettings.contactEmail) setHeadOfficeEmail(liveSettings.contactEmail);
+        if (liveSettings.trialSessionsCount) setTrialSessionsCount(liveSettings.trialSessionsCount);
+        if (liveSettings.siblingDiscountPercent !== undefined) setSiblingDiscountPercent(liveSettings.siblingDiscountPercent);
+
+        localStorage.setItem('it_academy_name', liveSettings.academyName || 'Islamic Tuition');
+        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+44 7000 000000');
+        localStorage.setItem('it_academy_tz', liveSettings.operationalTimezone || 'Asia/Karachi');
+        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'admin@islamictuition.com');
+        if (liveSettings.trialSessionsCount) localStorage.setItem('it_trial_sessions_count', String(liveSettings.trialSessionsCount));
+        if (liveSettings.siblingDiscountPercent !== undefined) localStorage.setItem('it_sibling_discount_percent', String(liveSettings.siblingDiscountPercent));
+      }
+    });
+
+    return () => unsub();
+  }, []);
+
+  const handleSaveOperationalSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('it_academy_name', academyName.trim());
-    localStorage.setItem('it_academy_phone', academyPhone.trim());
-    localStorage.setItem('it_academy_tz', academyTimezone.trim());
-    localStorage.setItem('it_academy_email', headOfficeEmail.trim());
+    const cleanName = academyName.trim();
+    const cleanPhone = academyPhone.trim();
+    const cleanTz = academyTimezone.trim();
+    const cleanEmail = headOfficeEmail.trim();
+
+    localStorage.setItem('it_academy_name', cleanName);
+    localStorage.setItem('it_academy_phone', cleanPhone);
+    localStorage.setItem('it_academy_tz', cleanTz);
+    localStorage.setItem('it_academy_email', cleanEmail);
     localStorage.setItem('it_trial_sessions_count', String(trialSessionsCount));
     localStorage.setItem('it_sibling_discount_percent', String(siblingDiscountPercent));
+
+    try {
+      await updateAcademySettings({
+        academyName: cleanName,
+        contactPhone: cleanPhone,
+        operationalTimezone: cleanTz,
+        contactEmail: cleanEmail,
+        trialSessionsCount,
+        siblingDiscountPercent
+      });
+    } catch (err) {
+      console.warn('Could not persist settings to Cloud Firestore immediately:', err);
+    }
+
     setSettingsSaveSuccess(true);
     setTimeout(() => setSettingsSaveSuccess(false), 3500);
   };
@@ -455,9 +521,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsLoadingUsers(true);
     try {
       const users = await getSystemUsers();
-      setSystemUsers(users);
+      setSystemUsers(users && users.length >= 19 ? users : INITIAL_TUTOR_USER_PROFILES);
     } catch (err) {
       console.warn("Could not load system users:", err);
+      setSystemUsers(INITIAL_TUTOR_USER_PROFILES);
     } finally {
       setIsLoadingUsers(false);
     }
@@ -2636,7 +2703,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div>
                       <span className="text-xs font-bold text-[#2D8B5C] tracking-wide uppercase">{tutor.tutorId}</span>
                       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                        <h4 className="text-sm font-bold text-[#161F1A]">{tutor.realName}</h4>
+                        <h4 className="text-sm font-bold text-[#161F1A]">{tutor.realName || tutor.tutorId}</h4>
                         <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider uppercase inline-flex items-center gap-1 shrink-0 ${
                           tutor.availabilityStatus === 'Available'
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
@@ -2646,7 +2713,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {tutor.availabilityStatus || 'Busy'}
                         </span>
                       </div>
-                      <p className="text-xs text-[#5A6B61]">{tutor.email} • {tutor.phone}</p>
+                      <p className="text-xs text-[#5A6B61]">{tutor.email}{tutor.phone ? ` • ${tutor.phone}` : ''}</p>
                     </div>
                     <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                       tutor.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
@@ -4832,7 +4899,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div key={t.id} className="p-2.5 bg-white border border-[#E3DFD7] rounded-md flex items-center justify-between">
                           <div>
                             <div className="flex items-center space-x-1.5 flex-wrap">
-                              <p className="font-semibold text-[#161F1A]">{t.realName} ({t.tutorId})</p>
+                              <p className="font-semibold text-[#161F1A]">{t.realName ? `${t.realName} (${t.tutorId})` : t.tutorId}</p>
                               <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase inline-flex items-center gap-1 ${
                                 t.availabilityStatus === 'Available'
                                   ? 'bg-emerald-100 text-emerald-800'
@@ -4847,7 +4914,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <div className="flex items-center space-x-1.5">
                             <button
                               onClick={() => {
-                                setResetPasswordModalUser({ name: t.realName, email: t.email, role: 'tutor' });
+                                setResetPasswordModalUser({ name: t.realName || t.tutorId, email: t.email, role: 'tutor' });
                                 setNewPasswordInput('tutor123');
                                 setResetFeedbackMsg('');
                               }}

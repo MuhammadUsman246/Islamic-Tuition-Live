@@ -432,6 +432,8 @@ export interface AcademySettings {
   contactPhone: string;
   logoUrl?: string;
   defaultZoomLink?: string;
+  trialSessionsCount?: number;
+  siblingDiscountPercent?: number;
 }
 
 export type TrashItemType = 'class' | 'student' | 'tutor' | 'user' | 'referral' | 'announcement' | 'tutor_attendance';
