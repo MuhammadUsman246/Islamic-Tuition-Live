@@ -76,7 +76,8 @@ const MainPortal: React.FC = () => {
     forceEnterApp,
     isLogoutAuthModalOpen,
     closeLogoutAuthModal,
-    loading: authLoading
+    loading: authLoading,
+    systemLinkUserProfile
   } = useAuth();
 
   const role: UserRole = activeRole || 'admin';
@@ -312,6 +313,51 @@ const MainPortal: React.FC = () => {
     });
     return () => unsub();
   }, [currentUser]);
+
+  // Dynamic Linking Effect: Ensure logged in user's profile is linked to real student/parent/tutor record in Firestore
+  useEffect(() => {
+    if (!userProfile || !userProfile.email || adminViewingRole) return;
+    const normEmail = userProfile.email.trim().toLowerCase();
+
+    // 1. Check Student linking
+    if ((userProfile.role === 'student' || !userProfile.role || !userProfile.studentId) && students.length > 0) {
+      const match = students.find(s => s.email && s.email.trim().toLowerCase() === normEmail);
+      if (match && match.studentId && userProfile.studentId !== match.studentId) {
+        systemLinkUserProfile({
+          studentId: match.studentId,
+          courseType: match.courseType,
+          country: match.country,
+          timezone: match.timezone,
+          role: userProfile.role === 'admin' ? 'admin' : 'student'
+        });
+      }
+    }
+
+    // 2. Check Parent linking
+    if ((userProfile.role === 'parent' || !userProfile.role || !userProfile.linkedStudentIds || userProfile.linkedStudentIds.length === 0) && students.length > 0) {
+      const childMatches = students.filter(s => s.parentEmail && s.parentEmail.trim().toLowerCase() === normEmail);
+      if (childMatches.length > 0) {
+        const cIds = Array.from(new Set(childMatches.map(c => c.studentId).filter(Boolean)));
+        if (cIds.length > 0 && (!userProfile.linkedStudentIds || userProfile.linkedStudentIds.length !== cIds.length)) {
+          systemLinkUserProfile({
+            linkedStudentIds: cIds,
+            role: (userProfile.role === 'admin' || userProfile.role === 'tutor' || userProfile.role === 'supervisor') ? userProfile.role : 'parent'
+          });
+        }
+      }
+    }
+
+    // 3. Check Tutor linking
+    if ((userProfile.role === 'tutor' || !userProfile.role || !userProfile.tutorId) && tutors.length > 0) {
+      const match = tutors.find(t => t.email && t.email.trim().toLowerCase() === normEmail);
+      if (match && match.tutorId && userProfile.tutorId !== match.tutorId) {
+        systemLinkUserProfile({
+          tutorId: match.tutorId,
+          role: 'tutor'
+        });
+      }
+    }
+  }, [userProfile, students, tutors, adminViewingRole, systemLinkUserProfile]);
 
   // Loading Screen
   if (authLoading) {

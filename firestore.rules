@@ -1,9 +1,89 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Students Collection
+    match /students/{studentDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Tutors Collection
+    match /tutors/{tutorDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Classes Collection
+    match /classes/{classDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Lessons Collection
+    match /lessons/{lessonDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Attendance Collection
+    match /attendance/{recordDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Tutor Attendance Collection
+    match /tutor_attendance/{recordDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Fees Collection
+    match /fees/{feeDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Salaries Collection
+    match /salaries/{salaryDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Referrals Collection
+    match /referrals/{refDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Announcements Collection
+    match /announcements/{annDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Messages / Chat Collection
+    match /messages/{msgDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Settings Collection
+    match /settings/{settingDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Trash / Deleted Records Collection
+    match /deleted_records/{trashDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Live Calls Collection
+    match /calls/{callDocId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Catch-all fallback requiring authentication
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
     }
   }
 }
-

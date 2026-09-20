@@ -94,6 +94,7 @@ export interface AuthContextType {
   switchPersona: (personaId: string) => Promise<void>;
   checkApprovalStatus: () => Promise<void>;
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
+  systemLinkUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
   forceEnterApp: (fallbackProfile?: Partial<UserProfile> | string) => void;
   isLogoutAuthModalOpen: boolean;
   openLogoutAuthModal: () => void;
@@ -308,30 +309,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // 6. Check registered institutional tutors (Tutor 1 - Tutor 20)
-    if (!loadedProf && cleanEmail) {
+    if (cleanEmail && (!loadedProf || loadedProf.role === 'tutor' || cleanEmail.includes('tutor') || !loadedProf.tutorId)) {
       const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t =>
         t.email.trim().toLowerCase() === cleanEmail ||
         (t.tutorNumber === 20 && cleanEmail === 'tutor20islamictuition@gmail.com')
       );
       if (matchedTutor) {
-        loadedProf = {
-          uid: uid,
-          email: matchedTutor.email,
-          displayName: matchedTutor.displayName,
-          role: 'tutor',
-          status: 'active',
-          tutorId: matchedTutor.tutorId,
-          phone: matchedTutor.phone,
-          country: 'Pakistan',
-          timezone: 'Asia/Karachi',
-          createdAt: new Date().toISOString()
-        };
+        if (!loadedProf) {
+          loadedProf = {
+            uid: uid,
+            email: matchedTutor.email,
+            displayName: matchedTutor.displayName,
+            role: 'tutor',
+            status: 'active',
+            tutorId: matchedTutor.tutorId,
+            phone: matchedTutor.phone,
+            country: 'Pakistan',
+            timezone: 'Asia/Karachi',
+            createdAt: new Date().toISOString()
+          };
+        } else {
+          loadedProf.tutorId = matchedTutor.tutorId;
+          loadedProf.role = 'tutor';
+          loadedProf.status = 'active';
+        }
         authLog('ProfileFetch', `Matched registered tutor: ${matchedTutor.tutorId}`);
       }
     }
 
     // 6.5. Query Firestore tutors collection for custom or created tutors
-    if (!loadedProf && cleanEmail) {
+    if (cleanEmail && (!loadedProf || loadedProf.role === 'tutor' || cleanEmail.includes('tutor') || !loadedProf.tutorId)) {
       try {
         let tutSnap = await withTimeout(
           getDocs(query(collection(db, 'tutors'), where('email', '==', cleanEmail))),
@@ -343,18 +350,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             3000
           );
         }
+
+        let tutData: Tutor | null = null;
         if (tutSnap && !tutSnap.empty) {
-          const tutData = tutSnap.docs[0].data() as Tutor;
-          loadedProf = {
-            uid: uid,
-            email: cleanEmail,
-            displayName: tutData.realName || userDisplayName || cleanEmail.split('@')[0] || 'Tutor User',
-            role: 'tutor',
-            status: tutData.status === 'Inactive' ? 'inactive' : 'active',
-            tutorId: tutData.tutorId,
-            phone: tutData.phone || '',
-            createdAt: new Date().toISOString()
-          };
+          tutData = tutSnap.docs[0].data() as Tutor;
+        } else {
+          const allTutSnap = await withTimeout(getDocs(collection(db, 'tutors')), 3000);
+          if (allTutSnap && !allTutSnap.empty) {
+            const found = allTutSnap.docs.map(d => d.data() as Tutor).find(t => t.email && t.email.trim().toLowerCase() === cleanEmail);
+            if (found) tutData = found;
+          }
+        }
+
+        if (tutData) {
+          if (!loadedProf) {
+            loadedProf = {
+              uid: uid,
+              email: cleanEmail,
+              displayName: tutData.realName || userDisplayName || cleanEmail.split('@')[0] || 'Tutor User',
+              role: 'tutor',
+              status: tutData.status === 'Inactive' ? 'inactive' : 'active',
+              tutorId: tutData.tutorId,
+              phone: tutData.phone || '',
+              createdAt: new Date().toISOString()
+            };
+          } else {
+            loadedProf.tutorId = tutData.tutorId;
+            loadedProf.role = 'tutor';
+            loadedProf.status = tutData.status === 'Inactive' ? 'inactive' : 'active';
+          }
           authLog('ProfileFetch', `Matched tutor document in tutors collection: ${tutData.tutorId}`);
         }
       } catch (err) {
@@ -374,7 +398,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 8. Auto-link student/parent record from 'students' collection
     if (cleanEmail && (!loadedProf || (!loadedProf.studentId && (!loadedProf.linkedStudentIds || loadedProf.linkedStudentIds.length === 0)))) {
       try {
-        // A. Check parent email match FIRST (so parent accounts and parent email matches get linked children and parent role)
+        // A. Check parent email match FIRST
+        let childrenDocs: Student[] = [];
         let parentSnap = await withTimeout(
           getDocs(query(collection(db, 'students'), where('parentEmail', '==', cleanEmail))),
           3000
@@ -387,8 +412,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         if (parentSnap && !parentSnap.empty) {
-          const childrenDocs = parentSnap.docs.map(d => d.data() as Student);
-          const childrenIds = childrenDocs.map(c => c.studentId).filter(Boolean);
+          childrenDocs = parentSnap.docs.map(d => d.data() as Student);
+        } else {
+          const allStuSnap = await withTimeout(getDocs(collection(db, 'students')), 3000);
+          if (allStuSnap && !allStuSnap.empty) {
+            childrenDocs = allStuSnap.docs
+              .map(d => d.data() as Student)
+              .filter(s => s.parentEmail && s.parentEmail.trim().toLowerCase() === cleanEmail);
+          }
+        }
+
+        if (childrenDocs.length > 0) {
+          const childrenIds = Array.from(new Set(childrenDocs.map(c => c.studentId).filter(Boolean)));
           const firstChild = childrenDocs[0];
 
           if (!loadedProf) {
@@ -413,8 +448,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // B. Check student's own email if not already linked as parent
-        if (!loadedProf || loadedProf.role === 'student') {
+        // B. Check student's own email if not already linked as parent (or if role is student / missing studentId)
+        if (!loadedProf || loadedProf.role === 'student' || (!loadedProf.studentId && loadedProf.role !== 'parent' && loadedProf.role !== 'admin' && loadedProf.role !== 'tutor' && loadedProf.role !== 'supervisor')) {
+          let stuData: Student | null = null;
           let stuSnap = await withTimeout(
             getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail))),
             3000
@@ -427,7 +463,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
 
           if (stuSnap && !stuSnap.empty) {
-            const stuData = stuSnap.docs[0].data() as Student;
+            stuData = stuSnap.docs[0].data() as Student;
+          } else {
+            const allStuSnap = await withTimeout(getDocs(collection(db, 'students')), 3000);
+            if (allStuSnap && !allStuSnap.empty) {
+              const match = allStuSnap.docs
+                .map(d => d.data() as Student)
+                .find(s => s.email && s.email.trim().toLowerCase() === cleanEmail);
+              if (match) stuData = match;
+            }
+          }
+
+          if (stuData) {
             if (!loadedProf) {
               loadedProf = {
                 uid: uid,
@@ -436,15 +483,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 role: 'student',
                 status: 'active',
                 studentId: stuData.studentId,
+                courseType: stuData.courseType,
                 phone: stuData.phone || '',
                 country: stuData.country || 'USA',
                 timezone: stuData.timezone || 'America/New_York',
                 createdAt: new Date().toISOString()
               };
               authLog('ProfileFetch', `Auto-created student profile linked to studentId: ${stuData.studentId}`);
-            } else if (loadedProf.role !== 'parent') {
+            } else if (loadedProf.role !== 'parent' && loadedProf.role !== 'admin' && loadedProf.role !== 'tutor' && loadedProf.role !== 'supervisor') {
               loadedProf.studentId = stuData.studentId;
+              loadedProf.role = 'student';
               loadedProf.status = 'active';
+              if (stuData.courseType) loadedProf.courseType = stuData.courseType;
+              if (stuData.country) loadedProf.country = stuData.country;
+              if (stuData.timezone) loadedProf.timezone = stuData.timezone;
               authLog('ProfileFetch', `Attached studentId (${stuData.studentId}) to profile`);
             }
           }
@@ -838,6 +890,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
+  /**
+   * Internal/System level user profile link update.
+   * Dynamically attaches studentId, tutorId, or linkedStudentIds to userProfile
+   * when matched against live Firestore collections, and syncs to Firestore & localStorage.
+   */
+  const systemLinkUserProfile = async (updates: Partial<UserProfile>) => {
+    if (!userProfile) return;
+    const updatedProfile: UserProfile = {
+      ...userProfile,
+      ...updates
+    };
+    authLog('systemLinkUserProfile', 'System linking profile updates:', updates);
+    setUserProfile(updatedProfile);
+    try {
+      localStorage.setItem('it_cached_user_profile', JSON.stringify(updatedProfile));
+    } catch {}
+
+    const targetDocId = currentUser?.uid || userProfile.uid || userProfile.email.replace(/[@.]/g, '_');
+    const emailDocId = userProfile.email.replace(/[@.]/g, '_');
+    setDoc(doc(db, 'users', targetDocId), updates, { merge: true }).catch(() => {});
+    if (emailDocId !== targetDocId) {
+      setDoc(doc(db, 'users', emailDocId), updates, { merge: true }).catch(() => {});
+    }
+  };
+
   const openLogoutAuthModal = () => setIsLogoutAuthModalOpen(true);
   const closeLogoutAuthModal = () => setIsLogoutAuthModalOpen(false);
 
@@ -941,6 +1018,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         switchPersona,
         checkApprovalStatus,
         updateUserProfile,
+        systemLinkUserProfile,
         forceEnterApp,
         isLogoutAuthModalOpen,
         openLogoutAuthModal,
