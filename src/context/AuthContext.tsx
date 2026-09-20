@@ -15,7 +15,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile, UserRole, Student } from '../types';
 import { INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
 import { ensureDatabaseSeeded } from '../services/seedData';
 import { recordUserSessionHeartbeat } from '../services/dataService';
@@ -229,19 +229,212 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authLog('Bypass', 'Dashboard unlocked immediately with profile:', targetProfile.email);
   };
 
+  /**
+   * Robust multi-strategy profile resolution with generous network timeouts,
+   * case-insensitive email normalization, and automatic student/tutor ID linking.
+   */
+  const resolveUserProfileMultiStrategy = async (uid: string, rawEmail: string, userDisplayName?: string): Promise<UserProfile> => {
+    const cleanEmail = rawEmail ? rawEmail.trim().toLowerCase() : '';
+    const isOwnerAdmin = isAcademicOwner(cleanEmail);
+
+    let loadedProf: UserProfile | null = null;
+
+    // 1. Check doc by uid (generous 4000ms timeout)
+    try {
+      const userDocRef = doc(db, 'users', uid);
+      const snap = await withTimeout(getDoc(userDocRef), 4000);
+      if (snap && snap.exists()) {
+        loadedProf = snap.data() as UserProfile;
+        authLog('ProfileFetch', `Found profile by UID (${loadedProf.role}, studentId: ${loadedProf.studentId || 'none'})`);
+      }
+    } catch (err) {
+      authWarn('ProfileFetch', 'UID doc read error:', err);
+    }
+
+    // 2. Check doc by clean email ID (generous 4000ms timeout)
+    if (!loadedProf && cleanEmail) {
+      try {
+        const emailDocId = cleanEmail.replace(/[@.]/g, '_');
+        const snap = await withTimeout(getDoc(doc(db, 'users', emailDocId)), 4000);
+        if (snap && snap.exists()) {
+          loadedProf = snap.data() as UserProfile;
+          authLog('ProfileFetch', `Found profile by Email ID (${loadedProf.role}, studentId: ${loadedProf.studentId || 'none'})`);
+        }
+      } catch (err) {
+        authWarn('ProfileFetch', 'Email ID doc read error:', err);
+      }
+    }
+
+    // 3. Query Firestore users collection by clean email
+    if (!loadedProf && cleanEmail) {
+      try {
+        const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const snap = await withTimeout(getDocs(q), 4000);
+        if (snap && !snap.empty) {
+          loadedProf = snap.docs[0].data() as UserProfile;
+          authLog('ProfileFetch', `Found profile by email query (${loadedProf.role})`);
+        }
+      } catch (err) {
+        authWarn('ProfileFetch', 'Users collection query error:', err);
+      }
+    }
+
+    // 4. Query Firestore users collection by raw email (case sensitive fallback)
+    if (!loadedProf && rawEmail && rawEmail !== cleanEmail) {
+      try {
+        const q = query(collection(db, 'users'), where('email', '==', rawEmail.trim()));
+        const snap = await withTimeout(getDocs(q), 4000);
+        if (snap && !snap.empty) {
+          loadedProf = snap.docs[0].data() as UserProfile;
+          authLog('ProfileFetch', `Found profile by raw email query (${loadedProf.role})`);
+        }
+      } catch (err) {
+        authWarn('ProfileFetch', 'Raw email query error:', err);
+      }
+    }
+
+    // 5. Check localStorage cache for profile
+    if (!loadedProf && cleanEmail) {
+      const cached = localStorage.getItem('it_cached_user_profile');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as UserProfile;
+          if (parsed.email && parsed.email.trim().toLowerCase() === cleanEmail) {
+            loadedProf = parsed;
+            authLog('ProfileFetch', 'Loaded profile from localStorage cache');
+          }
+        } catch {}
+      }
+    }
+
+    // 6. Check registered institutional tutors (Tutor 1 - Tutor 20)
+    if (!loadedProf && cleanEmail) {
+      const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t =>
+        t.email.trim().toLowerCase() === cleanEmail ||
+        (t.tutorNumber === 20 && cleanEmail === 'tutor20islamictuition@gmail.com')
+      );
+      if (matchedTutor) {
+        loadedProf = {
+          uid: uid,
+          email: matchedTutor.email,
+          displayName: matchedTutor.displayName,
+          role: 'tutor',
+          status: 'active',
+          tutorId: matchedTutor.tutorId,
+          phone: matchedTutor.phone,
+          country: 'Pakistan',
+          timezone: 'Asia/Karachi',
+          createdAt: new Date().toISOString()
+        };
+        authLog('ProfileFetch', `Matched registered tutor: ${matchedTutor.tutorId}`);
+      }
+    }
+
+    // 7. Check predefined personas
+    if (!loadedProf && cleanEmail) {
+      const matchedPersona = DUMMY_PERSONAS.find(p => p.email.trim().toLowerCase() === cleanEmail);
+      if (matchedPersona) {
+        loadedProf = { ...matchedPersona.profile, uid };
+        authLog('ProfileFetch', `Matched preset persona: ${matchedPersona.name}`);
+      }
+    }
+
+    // 8. Auto-link student record from 'students' collection if missing studentId or if profile not found yet!
+    if (cleanEmail && (!loadedProf || !loadedProf.studentId)) {
+      try {
+        let stuSnap = await withTimeout(
+          getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail))),
+          3000
+        );
+        if ((!stuSnap || stuSnap.empty) && rawEmail !== cleanEmail) {
+          stuSnap = await withTimeout(
+            getDocs(query(collection(db, 'students'), where('email', '==', rawEmail.trim()))),
+            3000
+          );
+        }
+        if (!stuSnap || stuSnap.empty) {
+          stuSnap = await withTimeout(
+            getDocs(query(collection(db, 'students'), where('parentEmail', '==', cleanEmail))),
+            3000
+          );
+        }
+
+        if (stuSnap && !stuSnap.empty) {
+          const stuData = stuSnap.docs[0].data() as Student;
+          if (!loadedProf) {
+            loadedProf = {
+              uid: uid,
+              email: cleanEmail,
+              displayName: stuData.name || userDisplayName || cleanEmail.split('@')[0] || 'Student User',
+              role: 'student',
+              status: 'active',
+              studentId: stuData.studentId,
+              phone: stuData.phone || '',
+              country: stuData.country || 'USA',
+              timezone: stuData.timezone || 'America/New_York',
+              createdAt: new Date().toISOString()
+            };
+            authLog('ProfileFetch', `Auto-created student profile linked to studentId: ${stuData.studentId}`);
+          } else {
+            loadedProf.studentId = stuData.studentId;
+            if (!loadedProf.role) loadedProf.role = 'student';
+            authLog('ProfileFetch', `Attached studentId (${stuData.studentId}) to profile`);
+          }
+        }
+      } catch (err) {
+        authWarn('ProfileFetch', 'Student auto-link query error:', err);
+      }
+    }
+
+    // 9. Construct fresh fallback profile if still not found
+    if (!loadedProf) {
+      const defaultRole: UserRole = isOwnerAdmin
+        ? 'admin'
+        : cleanEmail.includes('tutor')
+          ? 'tutor'
+          : cleanEmail.includes('supervisor')
+            ? 'supervisor'
+            : cleanEmail.includes('parent')
+              ? 'parent'
+              : 'student';
+
+      loadedProf = {
+        uid: uid,
+        email: cleanEmail || rawEmail || '',
+        displayName: userDisplayName || cleanEmail.split('@')[0] || (isOwnerAdmin ? 'Academic Director (Owner)' : 'User'),
+        role: defaultRole,
+        status: 'active',
+        createdAt: new Date().toISOString()
+      };
+      authLog('ProfileFetch', `Constructed fresh fallback profile for: ${loadedProf.email} (${defaultRole})`);
+    }
+
+    if (isOwnerAdmin) {
+      loadedProf.role = 'admin';
+      loadedProf.status = 'active';
+    }
+
+    // Always ensure email is normalized
+    if (loadedProf.email) {
+      loadedProf.email = loadedProf.email.trim().toLowerCase();
+    }
+
+    return loadedProf;
+  };
+
   // Auth state listener for initial session loading
   useEffect(() => {
     let isMounted = true;
     const startTime = Date.now();
     authLog('Init', 'Initializing Firebase Auth state listener...');
 
-    // Failsafe timer to guarantee loading state turns false within 1.5 seconds max
+    // Failsafe timer to guarantee loading state turns false within 5 seconds max (resilient for slow connections)
     const failsafeTimer = setTimeout(() => {
       if (isMounted) {
-        authWarn('Failsafe', `1.5s timer expired — enforcing loading = false (Elapsed: ${Date.now() - startTime}ms)`);
+        authWarn('Failsafe', `5s timer expired — enforcing loading = false (Elapsed: ${Date.now() - startTime}ms)`);
         setLoading(false);
       }
-    }, 1500);
+    }, 5000);
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!isMounted) return;
@@ -252,111 +445,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (user) {
         try {
-          const isOwnerAdmin = isAcademicOwner(user.email);
-          let loadedProf: UserProfile | null = null;
+          const loadedProf = await resolveUserProfileMultiStrategy(user.uid, user.email || '', user.displayName || undefined);
 
-          // 1. Check doc by uid with strict 800ms timeout
-          authLog('ProfileFetch', `[1/4] Fetching Firestore doc for UID: ${user.uid}...`);
-          try {
-            const userDocRef = doc(db, 'users', user.uid);
-            const snap = await withTimeout(getDoc(userDocRef), 800);
-            if (snap && snap.exists()) {
-              loadedProf = snap.data() as UserProfile;
-              authLog('ProfileFetch', `Found profile by UID (${loadedProf.role}, status: ${loadedProf.status})`);
-            }
-          } catch (dbErr) {
-            authWarn('ProfileFetch', 'UID doc lookup error/timeout:', dbErr);
-          }
-
-          // 2. Check doc by email-safe id with strict 800ms timeout
-          if (!loadedProf && user.email) {
-            authLog('ProfileFetch', `[2/4] Fetching Firestore doc for Email ID: ${user.email}...`);
-            try {
-              const emailDocId = user.email.replace(/[@.]/g, '_');
-              const snap = await withTimeout(getDoc(doc(db, 'users', emailDocId)), 800);
-              if (snap && snap.exists()) {
-                loadedProf = snap.data() as UserProfile;
-                authLog('ProfileFetch', `Found profile by Email ID (${loadedProf.role}, status: ${loadedProf.status})`);
-              }
-            } catch (dbErr) {
-              authWarn('ProfileFetch', 'Email doc lookup error/timeout:', dbErr);
-            }
-          }
-
-          // 3. Fallback to cached local profile if matching email
-          if (!loadedProf) {
-            authLog('ProfileFetch', `[3/4] Checking localStorage cache for profile...`);
-            const cached = localStorage.getItem('it_cached_user_profile');
-            if (cached) {
-              try {
-                const parsed = JSON.parse(cached) as UserProfile;
-                if (!user.email || parsed.email?.toLowerCase() === user.email.toLowerCase()) {
-                  loadedProf = parsed;
-                  authLog('ProfileFetch', `Loaded profile from localStorage cache:`, loadedProf.email);
-                }
-              } catch {}
-            }
-          }
-
-          // 4. Check registered institutional tutors (Tutor 1 - Tutor 20)
-          if (!loadedProf && user.email) {
-            const userEmailClean = user.email.toLowerCase().trim();
-            const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t => 
-              t.email.toLowerCase() === userEmailClean ||
-              (t.tutorNumber === 20 && userEmailClean === 'tutor20islamictuition@gmail.com')
-            );
-            if (matchedTutor) {
-              loadedProf = {
-                uid: user.uid,
-                email: matchedTutor.email,
-                displayName: matchedTutor.displayName,
-                role: 'tutor',
-                status: 'active',
-                tutorId: matchedTutor.tutorId,
-                phone: matchedTutor.phone,
-                country: 'Pakistan',
-                timezone: 'Asia/Karachi',
-                createdAt: new Date().toISOString()
-              };
-              authLog('ProfileFetch', `Matched registered tutor: ${matchedTutor.tutorId}`);
-            }
-          }
-
-          // 5. Check predefined personas
-          if (!loadedProf && user.email) {
-            authLog('ProfileFetch', `Checking predefined academy personas for: ${user.email}...`);
-            const matchedPersona = DUMMY_PERSONAS.find(p => p.email.toLowerCase() === user.email?.toLowerCase());
-            if (matchedPersona) {
-              loadedProf = { ...matchedPersona.profile, uid: user.uid };
-              authLog('ProfileFetch', `Matched preset persona: ${matchedPersona.name}`);
-            }
-          }
-
-          // 6. Construct fallback active profile if new
-          if (!loadedProf) {
-            const defaultRole: UserRole = isOwnerAdmin
-              ? 'admin'
-              : user.email?.includes('tutor') 
-                ? 'tutor' 
-                : user.email?.includes('supervisor')
-                  ? 'supervisor'
-                  : 'student';
-
-            loadedProf = {
-              uid: user.uid,
-              email: user.email || '',
-              displayName: user.displayName || user.email?.split('@')[0] || (isOwnerAdmin ? 'Academic Director (Owner)' : 'User'),
-              role: defaultRole,
-              status: 'active',
-              createdAt: new Date().toISOString()
-            };
-            authLog('ProfileFetch', `Constructed fresh fallback profile for: ${loadedProf.email} (Role: ${defaultRole})`);
-          }
-
-          if (isOwnerAdmin) {
-            loadedProf.role = 'admin';
-            loadedProf.status = 'active';
-          }
+          if (!isMounted) return;
 
           // Cache and apply immediately to React state
           localStorage.setItem('it_cached_user_profile', JSON.stringify(loadedProf));
@@ -366,27 +457,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             email: loadedProf.email,
             role: loadedProf.role,
             status: loadedProf.status,
-            displayName: loadedProf.displayName
+            displayName: loadedProf.displayName,
+            studentId: loadedProf.studentId
           });
 
-          // Save to Firestore in background without blocking
-          setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(writeErr => {
-            authWarn('BackgroundSync', 'Could not persist profile update to Firestore:', writeErr);
-          });
+          // Save/merge to Firestore in background without blocking UI
+          const emailDocId = loadedProf.email.replace(/[@.]/g, '_');
+          setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(() => {});
+          if (emailDocId !== user.uid) {
+            setDoc(doc(db, 'users', emailDocId), loadedProf, { merge: true }).catch(() => {});
+          }
         } catch (err) {
-          authWarn('ProfileFetch', 'Error fetching user profile in onAuthStateChanged:', err);
-          // Safety net fallback
-          const isOwner = isAcademicOwner(user.email);
-          const fallbackProf: UserProfile = {
-            uid: user.uid,
-            email: user.email || '',
-            displayName: user.displayName || (isOwner ? 'Academic Director (Owner)' : 'User'),
-            role: isOwner ? 'admin' : 'student',
-            status: 'active',
-            createdAt: new Date().toISOString()
-          };
-          localStorage.setItem('it_cached_user_profile', JSON.stringify(fallbackProf));
-          setUserProfile(fallbackProf);
+          authWarn('ProfileFetch', 'Error resolving user profile in onAuthStateChanged:', err);
           setLoading(false);
         }
       } else {
@@ -507,74 +589,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (cred?.user) {
       const user = cred.user;
-      authLog('loginWithEmail', `Resolving user profile for UID: ${user.uid}`);
-      let prof: UserProfile | null = null;
-
-      // 1. Fetch user profile from Firestore by UID with 800ms timeout
-      try {
-        const userDocRef = doc(db, 'users', user.uid);
-        const snap = await withTimeout(getDoc(userDocRef), 800);
-        if (snap && snap.exists()) {
-          prof = snap.data() as UserProfile;
-          authLog('loginWithEmail', 'Profile loaded from Firestore by UID');
-        }
-      } catch (dbErr) {
-        authWarn('loginWithEmail', 'Firestore read error on UID:', dbErr);
-      }
-
-      // 2. Fetch by email-safe doc id with 800ms timeout
-      if (!prof) {
-        try {
-          const emailDocId = cleanEmail.replace(/[@.]/g, '_');
-          const snap = await withTimeout(getDoc(doc(db, 'users', emailDocId)), 800);
-          if (snap && snap.exists()) {
-            prof = snap.data() as UserProfile;
-            authLog('loginWithEmail', 'Profile loaded from Firestore by email ID');
-          }
-        } catch (e) {
-          authWarn('loginWithEmail', 'Firestore read error on email ID:', e);
-        }
-      }
-
-      // 3. Default profile if not found
-      if (!prof) {
-        const defaultRole: UserRole = isOwner
-          ? 'admin'
-          : cleanEmail.includes('tutor')
-            ? 'tutor'
-            : cleanEmail.includes('supervisor')
-              ? 'supervisor'
-              : cleanEmail.includes('parent')
-                ? 'parent'
-                : 'student';
-
-        prof = {
-          uid: user.uid,
-          email: cleanEmail,
-          displayName: user.displayName || cleanEmail.split('@')[0] || (isOwner ? 'Academic Director' : 'User'),
-          role: defaultRole,
-          status: 'active',
-          createdAt: new Date().toISOString()
-        };
-        authLog('loginWithEmail', `Constructed fresh profile with role: ${defaultRole}`);
-      }
-
-      // Ensure Owner is always active admin
-      if (isOwner) {
-        prof.role = 'admin';
-        prof.status = 'active';
-      }
+      authLog('loginWithEmail', `Resolving user profile for UID: ${user.uid} (${cleanEmail})`);
+      
+      const prof = await resolveUserProfileMultiStrategy(user.uid, cleanEmail, user.displayName || undefined);
 
       // Save to localStorage and update state immediately (synchronous transition)
       localStorage.setItem('it_cached_user_profile', JSON.stringify(prof));
       setUserProfile(prof);
       setLoading(false);
-      authLog('loginWithEmail', `✅ Login complete in ${Date.now() - loginStart}ms: ${prof.email} (${prof.role})`);
+      authLog('loginWithEmail', `✅ Login complete in ${Date.now() - loginStart}ms: ${prof.email} (${prof.role}, studentId: ${prof.studentId || 'none'})`);
 
       // Save to Firestore in background without blocking UI
-      setDoc(doc(db, 'users', user.uid), prof, { merge: true }).catch(writeErr => {
-        authWarn('loginWithEmail', 'Background Firestore profile save notice:', writeErr);
-      });
+      const emailDocId = prof.email.replace(/[@.]/g, '_');
+      setDoc(doc(db, 'users', user.uid), prof, { merge: true }).catch(() => {});
+      if (emailDocId !== user.uid) {
+        setDoc(doc(db, 'users', emailDocId), prof, { merge: true }).catch(() => {});
+      }
     }
   };
 
@@ -587,38 +617,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       authLog('loginWithGoogle', `Google popup succeeded in ${Date.now() - googleStart}ms for: ${user?.email}`);
 
       if (user && user.email) {
-        const normalizedEmail = user.email.toLowerCase();
-        const isOwnerAdmin = isAcademicOwner(normalizedEmail);
-        let profile: UserProfile | null = null;
-
-        // Fetch existing profile with 800ms timeout
-        try {
-          const userDocRef = doc(db, 'users', user.uid);
-          const snap = await withTimeout(getDoc(userDocRef), 800);
-          if (snap && snap.exists()) {
-            profile = snap.data() as UserProfile;
-            authLog('loginWithGoogle', 'Existing Firestore profile retrieved');
-          }
-        } catch (dbErr) {
-          authWarn('loginWithGoogle', 'Firestore read error on Google login:', dbErr);
-        }
-
-        if (!profile) {
-          profile = {
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName || user.email.split('@')[0] || 'User',
-            role: isOwnerAdmin ? 'admin' : 'student',
-            status: 'active',
-            createdAt: new Date().toISOString()
-          };
-          authLog('loginWithGoogle', `Created Google user profile with role: ${profile.role}`);
-        }
-
-        if (isOwnerAdmin) {
-          profile.role = 'admin';
-          profile.status = 'active';
-        }
+        const profile = await resolveUserProfileMultiStrategy(user.uid, user.email, user.displayName || undefined);
 
         // Apply immediately and transition loading
         localStorage.setItem('it_cached_user_profile', JSON.stringify(profile));
@@ -627,9 +626,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authLog('loginWithGoogle', `✅ Google sign-in complete in ${Date.now() - googleStart}ms: ${profile.email}`);
 
         // Sync to Firestore in background
-        setDoc(doc(db, 'users', user.uid), profile, { merge: true }).catch(writeErr => {
-          authWarn('loginWithGoogle', 'Background write notice:', writeErr);
-        });
+        const emailDocId = profile.email.replace(/[@.]/g, '_');
+        setDoc(doc(db, 'users', user.uid), profile, { merge: true }).catch(() => {});
+        if (emailDocId !== user.uid) {
+          setDoc(doc(db, 'users', emailDocId), profile, { merge: true }).catch(() => {});
+        }
       }
     } catch (err: any) {
       authWarn('loginWithGoogle', 'Google sign-in error:', err);

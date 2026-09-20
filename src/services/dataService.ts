@@ -514,7 +514,7 @@ export async function getStudents(forceRefresh = false): Promise<Student[]> {
     return stored;
   }
 
-  if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+  if (!isFirestoreQuotaExceeded()) {
     try {
       const snap = await getDocs(collection(db, STUDENTS_COL));
       if (!snap.empty) {
@@ -567,42 +567,72 @@ export function subscribeToStudents(callback: (students: Student[]) => void): ()
 }
 
 export async function findStudentByEmailOrId(queryStr: string): Promise<Student | null> {
-  const clean = queryStr.trim().toLowerCase();
+  const raw = queryStr ? queryStr.trim() : '';
+  const clean = raw.toLowerCase();
   if (!clean) return null;
 
   // 1. Check local cache
-  if (CACHE.students) {
+  if (CACHE.students && CACHE.students.length > 0) {
     const cachedMatch = CACHE.students.find(s =>
-      (s.studentId && s.studentId.toLowerCase() === clean) ||
-      (s.id && s.id.toLowerCase() === clean) ||
-      (s.email && s.email.toLowerCase().trim() === clean) ||
-      (s.parentEmail && s.parentEmail.toLowerCase().trim() === clean)
+      (s.studentId && s.studentId.trim().toLowerCase() === clean) ||
+      (s.id && s.id.trim().toLowerCase() === clean) ||
+      (s.email && s.email.trim().toLowerCase() === clean) ||
+      (s.parentEmail && s.parentEmail.trim().toLowerCase() === clean)
     );
     if (cachedMatch) return cachedMatch;
   }
 
   // 2. Query Firestore directly
-  if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+  if (!isFirestoreQuotaExceeded()) {
     try {
-      const qId = query(collection(db, STUDENTS_COL), where('studentId', '==', queryStr.trim()));
+      // Exact email query
+      const qEmailExact = query(collection(db, STUDENTS_COL), where('email', '==', raw));
+      const snapEmailExact = await getDocs(qEmailExact);
+      if (!snapEmailExact.empty) {
+        const docSnap = snapEmailExact.docs[0];
+        return { id: docSnap.id, ...docSnap.data() } as Student;
+      }
+
+      // Lowercased email query
+      if (clean !== raw) {
+        const qEmailClean = query(collection(db, STUDENTS_COL), where('email', '==', clean));
+        const snapEmailClean = await getDocs(qEmailClean);
+        if (!snapEmailClean.empty) {
+          const docSnap = snapEmailClean.docs[0];
+          return { id: docSnap.id, ...docSnap.data() } as Student;
+        }
+      }
+
+      // StudentId query
+      const qId = query(collection(db, STUDENTS_COL), where('studentId', '==', raw));
       const snapId = await getDocs(qId);
       if (!snapId.empty) {
         const docSnap = snapId.docs[0];
         return { id: docSnap.id, ...docSnap.data() } as Student;
       }
 
-      const qEmail = query(collection(db, STUDENTS_COL), where('email', '==', clean));
-      const snapEmail = await getDocs(qEmail);
-      if (!snapEmail.empty) {
-        const docSnap = snapEmail.docs[0];
-        return { id: docSnap.id, ...docSnap.data() } as Student;
-      }
-
-      const qParentEmail = query(collection(db, STUDENTS_COL), where('parentEmail', '==', clean));
-      const snapParent = await getDocs(qParentEmail);
+      // Parent email query
+      const qParent = query(collection(db, STUDENTS_COL), where('parentEmail', '==', clean));
+      const snapParent = await getDocs(qParent);
       if (!snapParent.empty) {
         const docSnap = snapParent.docs[0];
         return { id: docSnap.id, ...docSnap.data() } as Student;
+      }
+
+      // Fallback: Fetch all students from Firestore and perform in-memory case-insensitive match
+      const allSnap = await getDocs(collection(db, STUDENTS_COL));
+      if (!allSnap.empty) {
+        const allStudents = allSnap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        CACHE.students = allStudents;
+        saveCachedCollection('students', allStudents);
+
+        const match = allStudents.find(s =>
+          (s.studentId && s.studentId.trim().toLowerCase() === clean) ||
+          (s.id && s.id.trim().toLowerCase() === clean) ||
+          (s.email && s.email.trim().toLowerCase() === clean) ||
+          (s.parentEmail && s.parentEmail.trim().toLowerCase() === clean)
+        );
+        if (match) return match;
       }
     } catch (err) {
       console.warn('Error querying student directly from Firestore:', err);
@@ -2712,6 +2742,7 @@ export async function registerSelfStudentOrParent(params: {
  * respective entities table. Passwords are handled ONLY in Firebase Auth and never stored in Firestore.
  */
 export async function registerFirebaseUserWithProfile(params: RegisterUserParams): Promise<RegisterUserResult> {
+  const cleanEmail = params.email.trim().toLowerCase();
   const password = params.password || 'Islam123!';
   let createdUid = '';
   let authSuccess = false;
@@ -2719,24 +2750,24 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
   // 1. Create real Firebase Auth user via secondary app instance so admin remains signed in
   try {
     const secAuth = getSecondaryAuthApp();
-    const cred = await createUserWithEmailAndPassword(secAuth, params.email, password);
+    const cred = await createUserWithEmailAndPassword(secAuth, cleanEmail, password);
     createdUid = cred.user.uid;
     authSuccess = true;
     await signOut(secAuth);
   } catch (authErr: any) {
     if (authErr.code === 'auth/email-already-in-use') {
-      createdUid = params.email.replace(/[@.]/g, '_');
+      createdUid = cleanEmail.replace(/[@.]/g, '_');
       authSuccess = true; // User exists in Auth
     } else {
       console.warn('Firebase Auth user creation notice:', authErr.message);
-      createdUid = params.email.replace(/[@.]/g, '_');
+      createdUid = cleanEmail.replace(/[@.]/g, '_');
     }
   }
 
   // 2. Persist role-specific profile in Firestore users collection (NO PASSWORDS)
   const userProfileDoc: UserProfile = {
     uid: createdUid,
-    email: params.email,
+    email: cleanEmail,
     displayName: params.displayName,
     role: params.role,
     status: params.status || 'active', // Admin-created accounts default to active
@@ -3361,7 +3392,7 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
     settings: CACHE.settings || DEFAULT_ACADEMY_SETTINGS
   };
 
-  const results = await queryWithTimeout(fetchPromise, 1200, null);
+  const results = await queryWithTimeout(fetchPromise, 5000, null);
 
   if (results) {
     const [
