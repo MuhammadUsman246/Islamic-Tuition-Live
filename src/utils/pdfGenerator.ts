@@ -153,7 +153,7 @@ export function generateFeeInvoicePDF(fee: StudentFee): void {
   // Footer
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
-  doc.text('IslamicTuition Academy Portal • Support: admin@islamictuition.com • Official Record', 105, 280, { align: 'center' });
+  doc.text('IslamicTuition Academy Portal • Support: info@islamictuition.us • Phone: +1 (718) 618-4848 • Official Record', 105, 280, { align: 'center' });
 
   doc.save(`IslamicTuition_Invoice_${fee.invoiceNumber || fee.studentId}_${fee.billingPeriod.replace(/\s+/g, '_')}.pdf`);
 }

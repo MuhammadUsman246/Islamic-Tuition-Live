@@ -34,7 +34,7 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
   const [isReceiptZoomOpen, setIsReceiptZoomOpen] = useState<boolean>(false);
 
   const academyName = localStorage.getItem('it_academy_name') || 'IslamicTuition';
-  const academyEmail = localStorage.getItem('it_academy_email') || 'support@islamictuition.com';
+  const academyEmail = localStorage.getItem('it_academy_email') || 'info@islamictuition.us';
   const academyWebsite = localStorage.getItem('it_academy_website') || 'www.islamictuition.com';
 
   const isPaid = fee.status === 'Paid';

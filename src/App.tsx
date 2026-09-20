@@ -36,7 +36,8 @@ import {
   subscribeToIncomingMessages,
   subscribeToIncomingCalls,
   subscribeToTutors,
-  subscribeToLessons
+  subscribeToLessons,
+  subscribeToStudents
 } from './services/dataService';
 import { clearAllAcademyData } from './services/seedData';
 import { INITIAL_TUTOR_ENTITIES } from './data/tutorsData';
@@ -300,6 +301,17 @@ const MainPortal: React.FC = () => {
     });
     return () => unsub();
   }, [currentUser, role]);
+
+  // Real-time subscribe to students list so new student profiles created by Admin replicate immediately everywhere
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = subscribeToStudents((updatedStudents) => {
+      if (updatedStudents && updatedStudents.length > 0) {
+        setStudents(updatedStudents);
+      }
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   // Loading Screen
   if (authLoading) {

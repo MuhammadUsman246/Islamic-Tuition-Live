@@ -288,9 +288,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Operational Settings State
   const [academyName, setAcademyName] = useState(() => localStorage.getItem('it_academy_name') || 'Islamic Tuition');
-  const [academyPhone, setAcademyPhone] = useState(() => localStorage.getItem('it_academy_phone') || '+44 7000 000000');
+  const [academyPhone, setAcademyPhone] = useState(() => localStorage.getItem('it_academy_phone') || '+1 (718) 618-4848');
   const [academyTimezone, setAcademyTimezone] = useState(() => localStorage.getItem('it_academy_tz') || 'Asia/Karachi');
-  const [headOfficeEmail, setHeadOfficeEmail] = useState(() => localStorage.getItem('it_academy_email') || 'admin@islamictuition.com');
+  const [headOfficeEmail, setHeadOfficeEmail] = useState(() => localStorage.getItem('it_academy_email') || 'info@islamictuition.us');
   const [trialSessionsCount, setTrialSessionsCount] = useState<number>(() => {
     const saved = localStorage.getItem('it_trial_sessions_count');
     return saved ? parseInt(saved, 10) : 5;
@@ -314,9 +314,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (liveSettings.siblingDiscountPercent !== undefined) setSiblingDiscountPercent(liveSettings.siblingDiscountPercent);
 
         localStorage.setItem('it_academy_name', liveSettings.academyName || 'Islamic Tuition');
-        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+44 7000 000000');
+        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+1 (718) 618-4848');
         localStorage.setItem('it_academy_tz', liveSettings.operationalTimezone || 'Asia/Karachi');
-        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'admin@islamictuition.com');
+        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'info@islamictuition.us');
         if (liveSettings.trialSessionsCount) localStorage.setItem('it_trial_sessions_count', String(liveSettings.trialSessionsCount));
         if (liveSettings.siblingDiscountPercent !== undefined) localStorage.setItem('it_sibling_discount_percent', String(liveSettings.siblingDiscountPercent));
       }
@@ -333,9 +333,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (liveSettings.siblingDiscountPercent !== undefined) setSiblingDiscountPercent(liveSettings.siblingDiscountPercent);
 
         localStorage.setItem('it_academy_name', liveSettings.academyName || 'Islamic Tuition');
-        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+44 7000 000000');
+        localStorage.setItem('it_academy_phone', liveSettings.contactPhone || '+1 (718) 618-4848');
         localStorage.setItem('it_academy_tz', liveSettings.operationalTimezone || 'Asia/Karachi');
-        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'admin@islamictuition.com');
+        localStorage.setItem('it_academy_email', liveSettings.contactEmail || 'info@islamictuition.us');
         if (liveSettings.trialSessionsCount) localStorage.setItem('it_trial_sessions_count', String(liveSettings.trialSessionsCount));
         if (liveSettings.siblingDiscountPercent !== undefined) localStorage.setItem('it_sibling_discount_percent', String(liveSettings.siblingDiscountPercent));
       }
@@ -4630,7 +4630,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       value={academyPhone}
                       onChange={(e) => setAcademyPhone(e.target.value)}
                       className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
-                      placeholder="+44 7000 000000"
+                      placeholder="+1 (718) 618-4848"
                     />
                   </div>
                 </div>
@@ -4661,7 +4661,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       value={headOfficeEmail}
                       onChange={(e) => setHeadOfficeEmail(e.target.value)}
                       className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
-                      placeholder="admin@youracademy.com"
+                      placeholder="info@islamictuition.us"
                       required
                     />
                   </div>

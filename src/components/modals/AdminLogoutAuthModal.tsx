@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Lock, Eye, EyeOff, Loader2, LogOut, X } from 'lucide-react';
+import { Lock, Eye, EyeOff, Loader2, LogOut, X, KeyRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface AdminLogoutAuthModalProps {
@@ -11,7 +11,7 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
   isOpen,
   onClose
 }) => {
-  const { confirmAdminLogout, userProfile } = useAuth();
+  const { confirmTutorLogout, confirmAdminLogout, userProfile } = useAuth();
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +22,7 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password.trim()) {
-      setError('Please enter the administrator password.');
+      setError('Please enter your login password.');
       return;
     }
 
@@ -30,15 +30,17 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
     setError(null);
 
     try {
-      const isAuthorized = await confirmAdminLogout(password);
+      // Try tutor password verification first, fallback to admin verification
+      const verifyFunc = confirmTutorLogout || confirmAdminLogout;
+      const isAuthorized = await verifyFunc(password);
       if (!isAuthorized) {
-        setError('Incorrect administrator password. Sign out prohibited.');
+        setError('Incorrect password. Please enter your login password to confirm sign-out.');
       } else {
         // Logout succeeded; modal will unmount as auth state clears
         onClose();
       }
     } catch (err: any) {
-      setError(err?.message || 'Authorization failed. Please re-enter the director password.');
+      setError(err?.message || 'Password verification failed. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -57,27 +59,27 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
     >
       <div
         id="admin_logout_auth_modal"
-        className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-rose-200 overflow-hidden text-[#161F1A]"
+        className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-[#D5D0C6] overflow-hidden text-[#161F1A]"
       >
-        {/* Header with Warning Accent */}
-        <div className="bg-gradient-to-r from-rose-900 to-[#14231b] p-5 text-white flex items-start justify-between">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-[#1c2e24] to-[#14231b] p-5 text-white flex items-start justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center shrink-0">
-              <ShieldAlert className="w-5 h-5 text-rose-300" />
+              <KeyRound className="w-5 h-5 text-[#25D366]" />
             </div>
             <div>
               <h3 className="font-bold text-sm sm:text-base leading-tight">
-                Admin Authorization Required
+                Confirm Password to Sign Out
               </h3>
-              <p className="text-[11px] text-rose-200 mt-0.5">
-                Faculty Terminal Protection • {userProfile?.tutorId || 'Tutor'}
+              <p className="text-[11px] text-[#a5b8ad] mt-0.5">
+                Faculty Portal • {userProfile?.displayName || userProfile?.tutorId || 'Tutor'}
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={handleCancel}
-            className="p-1 rounded-lg hover:bg-white/10 text-rose-200 hover:text-white transition-colors cursor-pointer"
+            className="p-1 rounded-lg hover:bg-white/10 text-gray-300 hover:text-white transition-colors cursor-pointer"
             title="Close dialog"
             aria-label="Close dialog"
           >
@@ -90,10 +92,10 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 leading-relaxed space-y-1">
             <p className="font-semibold flex items-center gap-1.5 text-amber-950">
               <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-              <span>Sign-Out is Restricted</span>
+              <span>Accidental Logout Protection</span>
             </p>
             <p>
-              Tutors cannot log out from this teaching station to prevent accidental session drops. To sign out, an <strong>Academic Director or Administrator</strong> must enter their password.
+              To avoid accidentally closing your teaching session, please enter <strong>your login password</strong> to confirm signing out.
             </p>
           </div>
 
@@ -106,21 +108,21 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
 
           <div className="space-y-1.5">
             <label
-              htmlFor="admin_auth_password_input"
+              htmlFor="tutor_auth_password_input"
               className="block text-xs font-bold text-[#161F1A] uppercase tracking-wider"
             >
-              Administrator / Director Password
+              Your Login Password
             </label>
             <div className="relative">
               <input
-                id="admin_auth_password_input"
+                id="tutor_auth_password_input"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter admin password to authorize sign out"
+                placeholder="Enter your login password"
                 autoFocus
                 disabled={isSubmitting}
-                className="w-full px-3 py-2 pr-10 text-xs sm:text-sm border border-[#D5D0C6] rounded-xl bg-[#FAF9F7] text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
+                className="w-full px-3 py-2 pr-10 text-xs sm:text-sm border border-[#D5D0C6] rounded-xl bg-[#FAF9F7] text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C] focus:bg-white transition-all"
               />
               <button
                 type="button"
@@ -133,7 +135,7 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
               </button>
             </div>
             <p className="text-[10px] text-gray-500">
-              Only authorized Academy Directors can sign out this terminal.
+              Enter the password you use to sign in to your tutor account.
             </p>
           </div>
 
@@ -150,7 +152,7 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition-colors cursor-pointer shadow-xs flex items-center space-x-2 disabled:opacity-50"
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-[#2D8B5C] hover:bg-[#236c47] text-white transition-colors cursor-pointer shadow-xs flex items-center space-x-2 disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
@@ -160,7 +162,7 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
               ) : (
                 <>
                   <LogOut className="w-4 h-4" />
-                  <span>Authorize Sign Out</span>
+                  <span>Confirm Sign Out</span>
                 </>
               )}
             </button>
@@ -170,3 +172,4 @@ export const AdminLogoutAuthModal: React.FC<AdminLogoutAuthModalProps> = ({
     </div>
   );
 };
+

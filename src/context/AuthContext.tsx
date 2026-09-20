@@ -9,7 +9,9 @@ import {
   setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
@@ -96,6 +98,7 @@ export interface AuthContextType {
   isLogoutAuthModalOpen: boolean;
   openLogoutAuthModal: () => void;
   closeLogoutAuthModal: () => void;
+  confirmTutorLogout: (password: string) => Promise<boolean>;
   confirmAdminLogout: (adminPassword: string, customAdminEmail?: string) => Promise<boolean>;
   forceLogout: () => Promise<void>;
   logout: () => Promise<void>;
@@ -783,9 +786,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     // If authenticated account is a tutor terminal (actualRole === 'tutor'),
-    // prohibit direct logout. Require Director/Admin authorization password.
+    // require password confirmation before logging out to avoid accidental logouts.
     if (actualRole === 'tutor' || (!adminViewingRole && activeRole === 'tutor')) {
-      authLog('logout', 'Tutor logout attempt intercepted: Admin authorization password required.');
+      authLog('logout', 'Tutor logout attempt intercepted: Password confirmation required.');
       setIsLogoutAuthModalOpen(true);
       return;
     }
@@ -793,11 +796,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await forceLogout();
   };
 
-  const confirmAdminLogout = async (adminPassword: string, customAdminEmail?: string): Promise<boolean> => {
-    const trimmedPass = adminPassword.trim();
+  const confirmTutorLogout = async (password: string): Promise<boolean> => {
+    const trimmedPass = password.trim();
     if (!trimmedPass) return false;
 
-    // 1. Check known Director Master Passwords
+    // 1. Verify against current Firebase logged-in user account if available
+    const userEmail = auth.currentUser?.email || userProfile?.email;
+    if (userEmail) {
+      try {
+        if (auth.currentUser && auth.currentUser.email) {
+          const cred = EmailAuthProvider.credential(auth.currentUser.email, trimmedPass);
+          await reauthenticateWithCredential(auth.currentUser, cred);
+          authLog('confirmTutorLogout', `Authorized via password re-authentication (${auth.currentUser.email}).`);
+          await forceLogout();
+          return true;
+        } else {
+          await signInWithEmailAndPassword(auth, userEmail, trimmedPass);
+          authLog('confirmTutorLogout', `Authorized via Firebase sign-in (${userEmail}).`);
+          await forceLogout();
+          return true;
+        }
+      } catch (err: any) {
+        authWarn('confirmTutorLogout', 'Tutor password verification notice:', err?.code || err?.message);
+      }
+    }
+
+    // 2. Allow Director / Admin Master Passwords as administrative override
     const storedMasterPass = localStorage.getItem('it_admin_master_password');
     const isMaster = 
       trimmedPass === 'admin123' ||
@@ -809,32 +833,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (storedMasterPass && trimmedPass === storedMasterPass);
 
     if (isMaster) {
-      authLog('confirmAdminLogout', 'Authorized via Master Director Credential.');
+      authLog('confirmTutorLogout', 'Authorized via Master Credential.');
       await forceLogout();
       return true;
     }
 
-    // 2. Attempt authentication against Firebase for Academy Director accounts
-    const adminEmails = [
-      customAdminEmail,
-      'muhammadusmanabbasi100@gmail.com',
-      'admin@islamictuition.com',
-      'dateandtimecalculator@gmail.com'
-    ].filter(Boolean) as string[];
-
-    for (const email of adminEmails) {
-      try {
-        await signInWithEmailAndPassword(auth, email, trimmedPass);
-        authLog('confirmAdminLogout', `Authorized via Firebase Director Sign-In (${email}).`);
-        await forceLogout();
-        return true;
-      } catch (err) {
-        // Continue checking other admin accounts
-      }
-    }
-
-    authWarn('confirmAdminLogout', 'Invalid admin password entered for tutor logout.');
+    authWarn('confirmTutorLogout', 'Invalid password entered for tutor logout confirmation.');
     return false;
+  };
+
+  const confirmAdminLogout = async (adminPassword: string, customAdminEmail?: string): Promise<boolean> => {
+    return confirmTutorLogout(adminPassword);
   };
 
   return (
@@ -862,6 +871,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLogoutAuthModalOpen,
         openLogoutAuthModal,
         closeLogoutAuthModal,
+        confirmTutorLogout,
         confirmAdminLogout,
         forceLogout,
         logout

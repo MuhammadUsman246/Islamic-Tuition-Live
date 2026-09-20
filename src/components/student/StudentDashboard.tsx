@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Video,
   Calendar,
@@ -39,6 +39,7 @@ import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
 import { StudentProfileCustomizerModal } from '../modals/StudentProfileCustomizerModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
+import { findStudentByEmailOrId } from '../../services/dataService';
 
 interface StudentDashboardProps {
   currentTab: string;
@@ -96,16 +97,48 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   };
 
   // STRICT PRIVACY: Authenticated student isolation
-  const student = useMemo(() => {
+  const matchedStudent = useMemo(() => {
     if (adminViewingRole && adminViewingTargetId) {
-      const match = students.find(s => s.studentId === adminViewingTargetId);
+      const match = students.find(s => s.studentId === adminViewingTargetId || s.id === adminViewingTargetId);
       if (match) return match;
     }
-    return students.find(s =>
-      (currentStudentId && s.studentId === currentStudentId) ||
-      (userProfile?.email && s.email && s.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
-    ) || null;
+    const cleanUserEmail = userProfile?.email?.toLowerCase().trim();
+    const cleanStudentId = userProfile?.studentId?.trim();
+    const cleanCurrentId = currentStudentId?.trim();
+
+    return students.find(s => {
+      const sEmail = s.email?.toLowerCase().trim();
+      const sParentEmail = s.parentEmail?.toLowerCase().trim();
+
+      if (cleanCurrentId && (s.studentId === cleanCurrentId || s.id === cleanCurrentId)) return true;
+      if (cleanStudentId && (s.studentId === cleanStudentId || s.id === cleanStudentId)) return true;
+      if (cleanUserEmail && (sEmail === cleanUserEmail || sParentEmail === cleanUserEmail)) return true;
+      return false;
+    }) || null;
   }, [students, currentStudentId, userProfile, adminViewingRole, adminViewingTargetId]);
+
+  const [fetchedStudent, setFetchedStudent] = useState<Student | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const resolveDirectStudent = async () => {
+      if (matchedStudent) return; // Already resolved via props
+      const targetQuery = userProfile?.email || userProfile?.studentId || currentStudentId;
+      if (!targetQuery) return;
+
+      const direct = await findStudentByEmailOrId(targetQuery);
+      if (direct && isMounted) {
+        setFetchedStudent(direct);
+        if (onRefreshData) {
+          onRefreshData();
+        }
+      }
+    };
+    resolveDirectStudent();
+    return () => { isMounted = false; };
+  }, [matchedStudent, userProfile, currentStudentId, onRefreshData]);
+
+  const student = matchedStudent || fetchedStudent;
 
   const assignedTutor = student ? tutors.find(t => t.tutorId === student.assignedTutorId) || null : null;
 

@@ -539,6 +539,79 @@ export async function getStudents(forceRefresh = false): Promise<Student[]> {
   return fallback;
 }
 
+export function subscribeToStudents(callback: (students: Student[]) => void): () => void {
+  const getFallback = () => CACHE.students || loadCachedCollection<Student[]>('students') || [];
+  if (isFirestoreQuotaExceeded()) {
+    callback(getFallback());
+    return () => {};
+  }
+  return safeOnSnapshot(
+    collection(db, STUDENTS_COL),
+    (snap) => {
+      if (snap) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        items.sort((a, b) => (a.studentId || '').localeCompare(b.studentId || '', undefined, { numeric: true }));
+        CACHE.students = items;
+        saveCachedCollection('students', items);
+        callback(items);
+      } else {
+        callback(getFallback());
+      }
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, STUDENTS_COL);
+      callback(getFallback());
+    },
+    STUDENTS_COL
+  );
+}
+
+export async function findStudentByEmailOrId(queryStr: string): Promise<Student | null> {
+  const clean = queryStr.trim().toLowerCase();
+  if (!clean) return null;
+
+  // 1. Check local cache
+  if (CACHE.students) {
+    const cachedMatch = CACHE.students.find(s =>
+      (s.studentId && s.studentId.toLowerCase() === clean) ||
+      (s.id && s.id.toLowerCase() === clean) ||
+      (s.email && s.email.toLowerCase().trim() === clean) ||
+      (s.parentEmail && s.parentEmail.toLowerCase().trim() === clean)
+    );
+    if (cachedMatch) return cachedMatch;
+  }
+
+  // 2. Query Firestore directly
+  if (!isFirestoreQuotaExceeded() && auth.currentUser) {
+    try {
+      const qId = query(collection(db, STUDENTS_COL), where('studentId', '==', queryStr.trim()));
+      const snapId = await getDocs(qId);
+      if (!snapId.empty) {
+        const docSnap = snapId.docs[0];
+        return { id: docSnap.id, ...docSnap.data() } as Student;
+      }
+
+      const qEmail = query(collection(db, STUDENTS_COL), where('email', '==', clean));
+      const snapEmail = await getDocs(qEmail);
+      if (!snapEmail.empty) {
+        const docSnap = snapEmail.docs[0];
+        return { id: docSnap.id, ...docSnap.data() } as Student;
+      }
+
+      const qParentEmail = query(collection(db, STUDENTS_COL), where('parentEmail', '==', clean));
+      const snapParent = await getDocs(qParentEmail);
+      if (!snapParent.empty) {
+        const docSnap = snapParent.docs[0];
+        return { id: docSnap.id, ...docSnap.data() } as Student;
+      }
+    } catch (err) {
+      console.warn('Error querying student directly from Firestore:', err);
+    }
+  }
+
+  return null;
+}
+
 export async function addStudent(studentData: Omit<Student, 'id'>): Promise<string> {
   const docRef = doc(collection(db, STUDENTS_COL));
   const docId = docRef.id;
@@ -2323,8 +2396,8 @@ export async function getAcademySettings(forceRefresh = false): Promise<AcademyS
   const defaultSettings: AcademySettings = {
     academyName: 'IslamicTuition',
     operationalTimezone: 'Asia/Karachi',
-    contactEmail: 'admin@islamictuition.com',
-    contactPhone: '+92 300 1234567',
+    contactEmail: 'info@islamictuition.us',
+    contactPhone: '+1 (718) 618-4848',
     defaultZoomLink: 'https://zoom.us/j/islamictuition_main',
     trialSessionsCount: 5,
     siblingDiscountPercent: 10
@@ -2356,8 +2429,8 @@ export function subscribeToAcademySettings(callback: (settings: AcademySettings)
       const settings = {
         academyName: 'IslamicTuition',
         operationalTimezone: 'Asia/Karachi',
-        contactEmail: 'admin@islamictuition.com',
-        contactPhone: '+92 300 1234567',
+        contactEmail: 'info@islamictuition.us',
+        contactPhone: '+1 (718) 618-4848',
         defaultZoomLink: 'https://zoom.us/j/islamictuition_main',
         trialSessionsCount: 5,
         siblingDiscountPercent: 10,
@@ -2689,28 +2762,59 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
   // 3. Role-specific collection initialization
   if (params.role === 'student') {
     try {
-      const studentId = params.studentId || params.profileData?.studentId || `STU-${Math.floor(100 + Math.random() * 900)}`;
-      const newStudent: Omit<Student, 'id'> = {
-        studentId,
-        name: params.displayName,
-        phone: params.phone || '',
-        parentName: params.parentName || params.profileData?.parentName || 'Parent Guardian',
-        parentPhone: params.parentPhone || '',
-        parentEmail: params.parentEmail || params.profileData?.parentEmail || params.email,
-        email: params.email,
-        country: params.country || params.profileData?.country || 'USA',
-        timezone: params.timezone || params.profileData?.timezone || 'America/New_York',
-        assignedTutorId: params.tutorId || params.profileData?.assignedTutorId || 'Tutor 1',
-        courseType: (params.courseType || params.profileData?.courseType || 'Quran Reading / Nazra') as CourseType,
-        status: 'Active',
-        trialSessionsCompleted: 0,
-        trialSessionsTotal: 5,
-        trialStatus: 'Converted',
-        createdAt: new Date().toISOString()
-      };
-      await addDoc(collection(db, STUDENTS_COL), sanitizeFirestoreObject(newStudent));
+      const targetEmail = params.email.trim().toLowerCase();
+      const targetStudentId = params.studentId || params.profileData?.studentId;
+
+      // Check if student record already exists in students collection with this email
+      const existingEmailSnap = await getDocs(
+        query(collection(db, STUDENTS_COL), where('email', '==', targetEmail))
+      );
+
+      if (!existingEmailSnap.empty) {
+        for (const sDoc of existingEmailSnap.docs) {
+          await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
+            email: params.email.trim(),
+            ...(targetStudentId ? { studentId: targetStudentId } : {})
+          });
+        }
+      } else {
+        // Check by studentId
+        const existingIdSnap = targetStudentId ? await getDocs(
+          query(collection(db, STUDENTS_COL), where('studentId', '==', targetStudentId))
+        ) : { empty: true, docs: [] };
+
+        if (!existingIdSnap.empty) {
+          for (const sDoc of existingIdSnap.docs) {
+            await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
+              email: params.email.trim()
+            });
+          }
+        } else {
+          // Create new student document if no match found
+          const studentId = targetStudentId || `STU-${Math.floor(100 + Math.random() * 900)}`;
+          const newStudent: Omit<Student, 'id'> = {
+            studentId,
+            name: params.displayName,
+            phone: params.phone || '',
+            parentName: params.parentName || params.profileData?.parentName || 'Parent Guardian',
+            parentPhone: params.parentPhone || '',
+            parentEmail: params.parentEmail || params.profileData?.parentEmail || params.email,
+            email: params.email,
+            country: params.country || params.profileData?.country || 'USA',
+            timezone: params.timezone || params.profileData?.timezone || 'America/New_York',
+            assignedTutorId: params.tutorId || params.profileData?.assignedTutorId || 'Tutor 1',
+            courseType: (params.courseType || params.profileData?.courseType || 'Quran Reading / Nazra') as CourseType,
+            status: 'Active',
+            trialSessionsCompleted: 0,
+            trialSessionsTotal: 5,
+            trialStatus: 'Converted',
+            createdAt: new Date().toISOString()
+          };
+          await addDoc(collection(db, STUDENTS_COL), sanitizeFirestoreObject(newStudent));
+        }
+      }
     } catch (err) {
-      console.warn('Could not auto-add student record in students collection:', err);
+      console.warn('Could not sync/add student record in students collection:', err);
     }
   } else if (params.role === 'tutor') {
     try {
@@ -3189,8 +3293,8 @@ export async function emptyTrash(): Promise<void> {
 const DEFAULT_ACADEMY_SETTINGS: AcademySettings = {
   academyName: 'IslamicTuition',
   operationalTimezone: 'Asia/Karachi',
-  contactEmail: 'admin@islamictuition.com',
-  contactPhone: '+92 300 1234567',
+  contactEmail: 'info@islamictuition.us',
+  contactPhone: '+1 (718) 618-4848',
   defaultZoomLink: 'https://zoom.us/j/islamictuition_main'
 };
 
