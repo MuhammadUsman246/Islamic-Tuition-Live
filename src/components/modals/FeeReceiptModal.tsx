@@ -95,8 +95,13 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-start justify-between border-b border-[#E3DFD7] pb-5 gap-4">
             <div>
               <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 rounded-lg bg-[#1E5C3D] text-white flex items-center justify-center font-bold text-sm">
-                  IT
+                <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center">
+                  <img
+                    src="/favicon.png"
+                    alt="IslamicTuition Favicon"
+                    className="w-full h-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
                 <h2 className="text-lg font-bold text-[#161F1A]">{academyName}</h2>
               </div>
