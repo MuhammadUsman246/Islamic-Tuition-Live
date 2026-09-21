@@ -1386,6 +1386,32 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
   return fallback;
 }
 
+export function subscribeToClasses(callback: (classes: TimetableClass[]) => void): () => void {
+  const getFallback = () => CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES);
+  if (isFirestoreQuotaExceeded()) {
+    callback(getFallback());
+    return () => {};
+  }
+  return safeOnSnapshot(
+    collection(db, CLASSES_COL),
+    (snap) => {
+      if (snap) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
+        CACHE.classes = items;
+        saveCachedCollection('classes', items);
+        callback(items);
+      } else {
+        callback(getFallback());
+      }
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, CLASSES_COL);
+      callback(getFallback());
+    },
+    CLASSES_COL
+  );
+}
+
 export async function addClass(classData: Omit<TimetableClass, 'id'>): Promise<string> {
   const existing = CACHE.classes || (await getClasses());
   const validation = validateClassBooking(classData, existing);

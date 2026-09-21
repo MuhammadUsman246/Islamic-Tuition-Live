@@ -37,11 +37,14 @@ import {
   subscribeToIncomingCalls,
   subscribeToTutors,
   subscribeToLessons,
-  subscribeToStudents
+  subscribeToStudents,
+  subscribeToClasses,
+  loadCachedCollection
 } from './services/dataService';
 import { ensureDatabaseSeeded } from './services/seedData';
 import { clearAllAcademyData } from './services/seedData';
 import { INITIAL_TUTOR_ENTITIES } from './data/tutorsData';
+import { ALL_INITIAL_STUDENTS, ALL_INITIAL_CLASSES } from './data/studentsData';
 import {
   sendDesktopNotification,
   playNotificationChime,
@@ -236,34 +239,55 @@ const MainPortal: React.FC = () => {
 
   const bottomNavItems = getBottomNavItems();
 
-  // Central Database State
-  const [students, setStudents] = useState<Student[]>([]);
-  const [tutors, setTutors] = useState<Tutor[]>(INITIAL_TUTOR_ENTITIES);
-  const [classes, setClasses] = useState<TimetableClass[]>([]);
-  const [lessons, setLessons] = useState<Lesson[]>([]);
-  const [fees, setFees] = useState<StudentFee[]>([]);
-  const [salaries, setSalaries] = useState<TutorSalary[]>([]);
-  const [referrals, setReferrals] = useState<Referral[]>([]);
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [tutorAttendance, setTutorAttendance] = useState<TutorAttendanceRecord[]>([]);
-  const [dataLoading, setDataLoading] = useState<boolean>(true);
+  // Central Database State - Preloaded from memory/local cache/seed for 0ms instantaneous display
+  const [students, setStudents] = useState<Student[]>(() => {
+    return loadCachedCollection<Student[]>('students') || ALL_INITIAL_STUDENTS;
+  });
+  const [tutors, setTutors] = useState<Tutor[]>(() => {
+    const cached = loadCachedCollection<Tutor[]>('tutors');
+    return cached && cached.length >= 20 ? cached : INITIAL_TUTOR_ENTITIES;
+  });
+  const [classes, setClasses] = useState<TimetableClass[]>(() => {
+    return loadCachedCollection<TimetableClass[]>('classes') || ALL_INITIAL_CLASSES;
+  });
+  const [lessons, setLessons] = useState<Lesson[]>(() => {
+    return loadCachedCollection<Lesson[]>('lessons') || [];
+  });
+  const [fees, setFees] = useState<StudentFee[]>(() => {
+    return loadCachedCollection<StudentFee[]>('fees') || [];
+  });
+  const [salaries, setSalaries] = useState<TutorSalary[]>(() => {
+    return loadCachedCollection<TutorSalary[]>('salaries') || [];
+  });
+  const [referrals, setReferrals] = useState<Referral[]>(() => {
+    return loadCachedCollection<Referral[]>('referrals') || [];
+  });
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
+    return loadCachedCollection<Announcement[]>('announcements') || [];
+  });
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
+    return loadCachedCollection<AttendanceRecord[]>('attendance') || [];
+  });
+  const [tutorAttendance, setTutorAttendance] = useState<TutorAttendanceRecord[]>(() => {
+    return loadCachedCollection<TutorAttendanceRecord[]>('tutorAttendance') || [];
+  });
+  const [dataLoading, setDataLoading] = useState<boolean>(false);
 
   // Load all real database entities with high-speed parallel caching
   const loadAcademyData = useCallback(async (forceRefresh = false) => {
     try {
       const data = await fetchAllAcademyData(forceRefresh);
 
-      setStudents(data.students);
-      setTutors(data.tutors && data.tutors.length >= 20 ? data.tutors : INITIAL_TUTOR_ENTITIES);
-      setClasses(data.classes);
-      setLessons(data.lessons);
-      setFees(data.fees);
-      setSalaries(data.salaries);
-      setReferrals(data.referrals);
-      setAnnouncements(data.announcements.filter(a => isAnnouncementTargetedForRole(a, role)));
-      setAttendance(data.attendance);
-      setTutorAttendance(data.tutorAttendance);
+      if (data.students && data.students.length > 0) setStudents(data.students);
+      if (data.tutors && data.tutors.length >= 20) setTutors(data.tutors);
+      if (data.classes && data.classes.length > 0) setClasses(data.classes);
+      if (data.lessons) setLessons(data.lessons);
+      if (data.fees) setFees(data.fees);
+      if (data.salaries) setSalaries(data.salaries);
+      if (data.referrals) setReferrals(data.referrals);
+      if (data.announcements) setAnnouncements(data.announcements.filter(a => isAnnouncementTargetedForRole(a, role)));
+      if (data.attendance) setAttendance(data.attendance);
+      if (data.tutorAttendance) setTutorAttendance(data.tutorAttendance);
     } catch (err) {
       console.error("Error loading academy database:", err);
     } finally {
@@ -272,17 +296,10 @@ const MainPortal: React.FC = () => {
   }, [role]);
 
   useEffect(() => {
-    const initData = async () => {
-      await ensureDatabaseSeeded();
-      await loadAcademyData(true);
-    };
-    initData();
-
-    // Failsafe timer: guarantee dataLoading turns false after 5 seconds max
-    const timer = setTimeout(() => {
-      setDataLoading(false);
-    }, 5000);
-    return () => clearTimeout(timer);
+    // 1. Instantly load / refresh data in background
+    loadAcademyData(false);
+    // 2. Non-blocking verification of seeding (0ms if already seeded)
+    ensureDatabaseSeeded().catch(() => {});
   }, [loadAcademyData]);
 
   // Real-time subscribe to tutors list to capture Live Availability Status immediately
@@ -290,10 +307,23 @@ const MainPortal: React.FC = () => {
     if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const unsub = subscribeToTutors((updatedTutors) => {
-      setTutors(updatedTutors);
+      if (updatedTutors && updatedTutors.length > 0) {
+        setTutors(updatedTutors);
+      }
     });
     return () => unsub();
   }, [currentUser, role]);
+
+  // Real-time subscribe to timetable classes so master timetable and tutor weekly classes update immediately
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = subscribeToClasses((updatedClasses) => {
+      if (updatedClasses && updatedClasses.length > 0) {
+        setClasses(updatedClasses);
+      }
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   // Real-time subscribe to lessons so tutor entries immediately replicate to spreadsheets in Admin & Supervisor dashboards
   useEffect(() => {

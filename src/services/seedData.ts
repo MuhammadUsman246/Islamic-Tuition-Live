@@ -1,6 +1,6 @@
-import { collection, getDocs, doc, writeBatch, setDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, setDoc, query, limit } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { clearInMemoryCache } from './dataService';
+import { clearInMemoryCache, isFirestoreQuotaExceeded, sanitizeFirestoreObject } from './dataService';
 import {
   Tutor,
   Student,
@@ -34,22 +34,57 @@ export const SEED_MESSAGES: ChatMessage[] = [];
 export const SEED_ANNOUNCEMENTS: Announcement[] = [];
 
 export async function ensureDatabaseSeeded(): Promise<void> {
-  // Synchronize initial students and their classes into Firestore
+  // 1. If previously seeded on this client/session, return immediately without any network calls
+  if (typeof window !== 'undefined' && localStorage.getItem('it_db_seeded_v3')) {
+    return;
+  }
+  if (isFirestoreQuotaExceeded()) {
+    return;
+  }
+
   try {
-    for (const student of ALL_INITIAL_STUDENTS) {
-      const studentRef = doc(db, 'students', student.id);
-      const studentSnap = await getDoc(studentRef);
-      if (!studentSnap.exists()) {
-        await setDoc(studentRef, student, { merge: true });
+    // 2. Perform a single ultra-lightweight probe (limit 1 = 1 read only)
+    const [stuSnap, clsSnap] = await Promise.all([
+      getDocs(query(collection(db, 'students'), limit(1))),
+      getDocs(query(collection(db, 'classes'), limit(1)))
+    ]);
+
+    const needsStudentSeed = stuSnap.empty;
+    const needsClassSeed = clsSnap.empty;
+
+    // Both collections already populated in Firestore -> mark client seeded and exit immediately
+    if (!needsStudentSeed && !needsClassSeed) {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('it_db_seeded_v3', 'true');
+      }
+      return;
+    }
+
+    // 3. Fast Batched Insert for missing collections (at most 2-3 network operations total)
+    if (needsStudentSeed) {
+      for (let i = 0; i < ALL_INITIAL_STUDENTS.length; i += 400) {
+        const batch = writeBatch(db);
+        const chunk = ALL_INITIAL_STUDENTS.slice(i, i + 400);
+        chunk.forEach(s => {
+          batch.set(doc(db, 'students', s.id), sanitizeFirestoreObject(s), { merge: true });
+        });
+        await batch.commit();
       }
     }
 
-    for (const cls of ALL_INITIAL_CLASSES) {
-      const classRef = doc(db, 'classes', cls.id);
-      const classSnap = await getDoc(classRef);
-      if (!classSnap.exists()) {
-        await setDoc(classRef, cls, { merge: true });
+    if (needsClassSeed) {
+      for (let i = 0; i < ALL_INITIAL_CLASSES.length; i += 400) {
+        const batch = writeBatch(db);
+        const chunk = ALL_INITIAL_CLASSES.slice(i, i + 400);
+        chunk.forEach(c => {
+          batch.set(doc(db, 'classes', c.id), sanitizeFirestoreObject(c), { merge: true });
+        });
+        await batch.commit();
       }
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('it_db_seeded_v3', 'true');
     }
   } catch (err) {
     console.debug('[SeedData] Initial sync notice:', err);
