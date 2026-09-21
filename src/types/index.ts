@@ -129,6 +129,11 @@ export interface Student {
   referralStatus?: ReferralStatus;
   notes?: string;
   privateAdminNotes?: string;
+  isOnLeave?: boolean;
+  leaveStartDate?: string; // YYYY-MM-DD
+  leaveEndDate?: string;   // YYYY-MM-DD
+  leaveReason?: string;    // Vacation, Exams, Illness, Family, etc.
+  leaveType?: 'Specific Days' | 'Full Month' | 'Custom Range' | 'Indefinite';
   createdAt: string;
 }
 
@@ -146,6 +151,10 @@ export interface TutorStudentView {
   trialSessionsCompleted: number;
   trialSessionsTotal: number;
   trialStatus: TrialStatus;
+  isOnLeave?: boolean;
+  leaveStartDate?: string;
+  leaveEndDate?: string;
+  leaveReason?: string;
 }
 
 export type DayOfWeek = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';

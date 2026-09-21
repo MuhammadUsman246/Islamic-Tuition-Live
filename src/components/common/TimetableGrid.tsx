@@ -54,38 +54,254 @@ const COMPACT_SLOT_LABELS: Record<string, string> = {
 };
 
 // Subtle color accents per tutor for rapid visual scanning
-const TUTOR_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {
-  'Tutor 1': {
-    bg: 'bg-emerald-50 hover:bg-emerald-100',
+export interface TutorColorTheme {
+  id: string;
+  name: string;
+  bg: string;            // Card soft tinted background & hover state
+  border: string;        // Card subtle boundary border
+  accentBar: string;     // Left 3.5px solid signature accent strip
+  text: string;          // Student name text in deep, high-contrast WCAG AAA tone
+  tutorBadgeBg: string;  // Chip background, text, and border
+  dot: string;           // Solid dot for legends and indicator chips
+}
+
+export const TUTOR_PALETTES: TutorColorTheme[] = [
+  // 1: Sage Emerald
+  {
+    id: 'emerald',
+    name: 'Emerald Sage',
+    bg: 'bg-emerald-50/95 hover:bg-emerald-100/90',
     border: 'border-emerald-300',
+    accentBar: 'border-l-emerald-600',
     text: 'text-emerald-950',
-    badge: 'bg-emerald-700 text-white'
+    tutorBadgeBg: 'bg-emerald-100/90 text-emerald-900 border-emerald-300',
+    dot: 'bg-emerald-600'
   },
-  'Tutor 2': {
-    bg: 'bg-teal-50 hover:bg-teal-100',
-    border: 'border-teal-300',
-    text: 'text-teal-950',
-    badge: 'bg-teal-700 text-white'
-  },
-  'Tutor 3': {
-    bg: 'bg-sky-50 hover:bg-sky-100',
+  // 2: Sky Azure
+  {
+    id: 'sky',
+    name: 'Sky Azure',
+    bg: 'bg-sky-50/95 hover:bg-sky-100/90',
     border: 'border-sky-300',
+    accentBar: 'border-l-sky-600',
     text: 'text-sky-950',
-    badge: 'bg-sky-700 text-white'
+    tutorBadgeBg: 'bg-sky-100/90 text-sky-900 border-sky-300',
+    dot: 'bg-sky-600'
   },
-  'Tutor 4': {
-    bg: 'bg-purple-50 hover:bg-purple-100',
+  // 3: Royal Indigo
+  {
+    id: 'indigo',
+    name: 'Royal Indigo',
+    bg: 'bg-indigo-50/95 hover:bg-indigo-100/90',
+    border: 'border-indigo-300',
+    accentBar: 'border-l-indigo-600',
+    text: 'text-indigo-950',
+    tutorBadgeBg: 'bg-indigo-100/90 text-indigo-900 border-indigo-300',
+    dot: 'bg-indigo-600'
+  },
+  // 4: Clean Teal
+  {
+    id: 'teal',
+    name: 'Sea Teal',
+    bg: 'bg-teal-50/95 hover:bg-teal-100/90',
+    border: 'border-teal-300',
+    accentBar: 'border-l-teal-600',
+    text: 'text-teal-950',
+    tutorBadgeBg: 'bg-teal-100/90 text-teal-900 border-teal-300',
+    dot: 'bg-teal-600'
+  },
+  // 5: Elegant Purple
+  {
+    id: 'purple',
+    name: 'Purple Plum',
+    bg: 'bg-purple-50/95 hover:bg-purple-100/90',
     border: 'border-purple-300',
+    accentBar: 'border-l-purple-600',
     text: 'text-purple-950',
-    badge: 'bg-purple-700 text-white'
+    tutorBadgeBg: 'bg-purple-100/90 text-purple-900 border-purple-300',
+    dot: 'bg-purple-600'
+  },
+  // 6: Warm Amber
+  {
+    id: 'amber',
+    name: 'Warm Amber',
+    bg: 'bg-amber-50/95 hover:bg-amber-100/90',
+    border: 'border-amber-300',
+    accentBar: 'border-l-amber-600',
+    text: 'text-amber-950',
+    tutorBadgeBg: 'bg-amber-100/90 text-amber-900 border-amber-300',
+    dot: 'bg-amber-600'
+  },
+  // 7: Marine Blue
+  {
+    id: 'blue',
+    name: 'Marine Blue',
+    bg: 'bg-blue-50/95 hover:bg-blue-100/90',
+    border: 'border-blue-300',
+    accentBar: 'border-l-blue-600',
+    text: 'text-blue-950',
+    tutorBadgeBg: 'bg-blue-100/90 text-blue-900 border-blue-300',
+    dot: 'bg-blue-600'
+  },
+  // 8: Ocean Cyan
+  {
+    id: 'cyan',
+    name: 'Ocean Cyan',
+    bg: 'bg-cyan-50/95 hover:bg-cyan-100/90',
+    border: 'border-cyan-300',
+    accentBar: 'border-l-cyan-600',
+    text: 'text-cyan-950',
+    tutorBadgeBg: 'bg-cyan-100/90 text-cyan-900 border-cyan-300',
+    dot: 'bg-cyan-600'
+  },
+  // 9: Rose Berry
+  {
+    id: 'rose',
+    name: 'Rose Berry',
+    bg: 'bg-rose-50/90 hover:bg-rose-100/90',
+    border: 'border-rose-300',
+    accentBar: 'border-l-rose-500',
+    text: 'text-rose-950',
+    tutorBadgeBg: 'bg-rose-100/90 text-rose-900 border-rose-300',
+    dot: 'bg-rose-500'
+  },
+  // 10: Executive Slate
+  {
+    id: 'slate',
+    name: 'Executive Slate',
+    bg: 'bg-slate-100/95 hover:bg-slate-200/90',
+    border: 'border-slate-300',
+    accentBar: 'border-l-slate-600',
+    text: 'text-slate-950',
+    tutorBadgeBg: 'bg-slate-200/90 text-slate-900 border-slate-300',
+    dot: 'bg-slate-600'
+  },
+  // 11: Olive Lime
+  {
+    id: 'lime',
+    name: 'Olive Lime',
+    bg: 'bg-lime-50/95 hover:bg-lime-100/90',
+    border: 'border-lime-300',
+    accentBar: 'border-l-lime-600',
+    text: 'text-lime-950',
+    tutorBadgeBg: 'bg-lime-100/90 text-lime-900 border-lime-300',
+    dot: 'bg-lime-600'
+  },
+  // 12: Warm Terracotta
+  {
+    id: 'orange',
+    name: 'Terracotta',
+    bg: 'bg-orange-50/90 hover:bg-orange-100/90',
+    border: 'border-orange-300',
+    accentBar: 'border-l-orange-500',
+    text: 'text-orange-950',
+    tutorBadgeBg: 'bg-orange-100/90 text-orange-900 border-orange-300',
+    dot: 'bg-orange-500'
+  },
+  // 13: Lavender Violet
+  {
+    id: 'violet',
+    name: 'Lavender Violet',
+    bg: 'bg-violet-50/95 hover:bg-violet-100/90',
+    border: 'border-violet-300',
+    accentBar: 'border-l-violet-600',
+    text: 'text-violet-950',
+    tutorBadgeBg: 'bg-violet-100/90 text-violet-900 border-violet-300',
+    dot: 'bg-violet-600'
+  },
+  // 14: Berry Fuchsia
+  {
+    id: 'fuchsia',
+    name: 'Berry Fuchsia',
+    bg: 'bg-fuchsia-50/90 hover:bg-fuchsia-100/90',
+    border: 'border-fuchsia-300',
+    accentBar: 'border-l-fuchsia-600',
+    text: 'text-fuchsia-950',
+    tutorBadgeBg: 'bg-fuchsia-100/90 text-fuchsia-900 border-fuchsia-300',
+    dot: 'bg-fuchsia-600'
+  },
+  // 15: Deep Jade
+  {
+    id: 'jade',
+    name: 'Deep Jade',
+    bg: 'bg-emerald-100/75 hover:bg-emerald-200/70',
+    border: 'border-emerald-400',
+    accentBar: 'border-l-emerald-700',
+    text: 'text-emerald-950',
+    tutorBadgeBg: 'bg-emerald-200/80 text-emerald-950 border-emerald-400',
+    dot: 'bg-emerald-700'
+  },
+  // 16: Sandstone
+  {
+    id: 'stone',
+    name: 'Sandstone',
+    bg: 'bg-stone-100/95 hover:bg-stone-200/85',
+    border: 'border-stone-300',
+    accentBar: 'border-l-stone-600',
+    text: 'text-stone-950',
+    tutorBadgeBg: 'bg-stone-200/90 text-stone-900 border-stone-300',
+    dot: 'bg-stone-600'
   }
-};
+];
+
+export function getSlotColorTheme(
+  cls: { tutorId?: string; studentName?: string; studentId?: string },
+  isSingleTutorView: boolean = false
+): TutorColorTheme {
+  const key = isSingleTutorView 
+    ? (cls.studentName || cls.studentId || cls.tutorId || 'Student')
+    : (cls.tutorId || 'Tutor 1');
+  
+  if (!isSingleTutorView && cls.tutorId) {
+    const match = cls.tutorId.match(/\d+/);
+    if (match) {
+      const num = parseInt(match[0], 10);
+      const idx = (num - 1) % TUTOR_PALETTES.length;
+      return TUTOR_PALETTES[idx >= 0 ? idx : 0];
+    }
+  }
+
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash << 5) - hash + key.charCodeAt(i);
+    hash |= 0;
+  }
+  const idx = Math.abs(hash) % TUTOR_PALETTES.length;
+  return TUTOR_PALETTES[idx];
+}
 
 const DEFAULT_TUTOR_COLOR = {
   bg: 'bg-[#F0F7F3] hover:bg-[#E5F2EB]',
   border: 'border-[#91CBB0]',
   text: 'text-[#161F1A]',
   badge: 'bg-[#2D8B5C] text-white'
+};
+
+const TUTOR_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {
+  'Tutor 1': {
+    bg: TUTOR_PALETTES[0].bg,
+    border: TUTOR_PALETTES[0].border,
+    text: TUTOR_PALETTES[0].text,
+    badge: 'bg-emerald-700 text-white'
+  },
+  'Tutor 2': {
+    bg: TUTOR_PALETTES[1].bg,
+    border: TUTOR_PALETTES[1].border,
+    text: TUTOR_PALETTES[1].text,
+    badge: 'bg-sky-700 text-white'
+  },
+  'Tutor 3': {
+    bg: TUTOR_PALETTES[2].bg,
+    border: TUTOR_PALETTES[2].border,
+    text: TUTOR_PALETTES[2].text,
+    badge: 'bg-indigo-700 text-white'
+  },
+  'Tutor 4': {
+    bg: TUTOR_PALETTES[3].bg,
+    border: TUTOR_PALETTES[3].border,
+    text: TUTOR_PALETTES[3].text,
+    badge: 'bg-teal-700 text-white'
+  }
 };
 
 export const TimetableGrid: React.FC<TimetableGridProps> = ({
@@ -333,6 +549,58 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
         </div>
       </div>
 
+      {/* Interactive Faculty Color Bar */}
+      {selectedTutorFilter === 'all' && uniqueTutors.length > 0 && (
+        <div className="px-3.5 py-1.5 bg-[#FAF9F7] border-b border-[#E3DFD7] flex items-center gap-2 overflow-x-auto text-[11px]">
+          <span className="font-bold text-[#5A6B61] text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-[#2D8B5C]"></span>
+            Faculty Colors:
+          </span>
+          <div className="flex items-center gap-1.5 min-w-max">
+            {uniqueTutors.map(tId => {
+              const theme = getSlotColorTheme({ tutorId: tId });
+              const tutorObj = tutors.find(t => t.tutorId === tId);
+              const displayName = tutorObj?.realName ? `${tId} (${tutorObj.realName.split(' ')[0]})` : tId;
+              return (
+                <button
+                  key={tId}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTutorFilter(tId);
+                    if (onTutorFilterChange) onTutorFilterChange(tId);
+                  }}
+                  className={`px-2 py-0.5 rounded-md border flex items-center gap-1.5 transition-all cursor-pointer hover:shadow-2xs active:scale-95 ${theme.bg} ${theme.border}`}
+                  title={`Click to filter schedule to ${tId} only`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${theme.dot} shrink-0`} />
+                  <span className={`font-bold text-[10.5px] ${theme.text}`}>{displayName}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Filter indicator if filtered to single tutor */}
+      {selectedTutorFilter !== 'all' && (
+        <div className="px-3.5 py-1.5 bg-emerald-50/80 border-b border-emerald-200 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-emerald-950 font-medium">
+            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+            <span>Filtered to: <strong className="font-bold text-[#1E5C3D]">{selectedTutorFilter}</strong></span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedTutorFilter('all');
+              if (onTutorFilterChange) onTutorFilterChange('all');
+            }}
+            className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
+          >
+            Show All Faculty
+          </button>
+        </div>
+      )}
+
       {/* Mobile Day Selector Bar */}
       <div className={`px-2.5 py-2 bg-[#F2EFE9] border-b border-[#E3DFD7] flex items-center space-x-1.5 overflow-x-auto ${
         mobileViewMode === 'day' ? 'flex' : 'hidden md:hidden'
@@ -452,28 +720,37 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                       );
                       const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial' || Boolean(cls.notes?.toLowerCase().includes('trial'));
                       const isCancelled = cls.status === 'Cancelled';
-                      const isLeaveToday = cls.status === 'Student on Leave';
+                      const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
                       const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
-                      const colorStyle = TUTOR_COLORS[cls.tutorId] || DEFAULT_TUTOR_COLOR;
+
+                      const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                      const theme = getSlotColorTheme(cls, isSingleTutor);
+
+                      const cardBgClass = isCancelled
+                        ? 'bg-rose-50/85 border-rose-200 border-l-[3.5px] border-l-rose-500 text-rose-950 opacity-80'
+                        : isLeaveToday
+                        ? 'bg-indigo-50/90 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
+                        : isLeaveWeekly
+                        ? 'bg-amber-50/90 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
+                        : isTrial
+                        ? 'bg-[#FFF9EE] border-[#E8A93E] border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
+                        : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
 
                       return (
                         <div
                           key={cls.id}
                           onClick={() => setSelectedDetailClass(cls)}
-                          className={`p-2.5 rounded-xl border text-xs shadow-2xs cursor-pointer transition-all active:scale-[0.99] ${
-                            isCancelled
-                              ? 'bg-rose-50/80 border-rose-200 text-rose-950 opacity-80'
-                              : isLeaveToday
-                              ? 'bg-indigo-50/90 border-indigo-200 text-indigo-950 opacity-90'
-                              : isLeaveWeekly
-                              ? 'bg-amber-50/90 border-amber-200 text-[#8C5D08] opacity-90'
-                              : `${colorStyle.bg} ${colorStyle.border} ${colorStyle.text}`
-                          }`}
+                          className={`p-2.5 rounded-xl border text-xs shadow-2xs cursor-pointer transition-all active:scale-[0.99] ${cardBgClass}`}
                         >
                           <div className="flex items-center justify-between gap-1.5">
-                            <span className={`font-bold text-[#161F1A] text-sm truncate ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-500' : ''}`}>
-                              {cls.studentName}
-                            </span>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`font-bold text-sm truncate ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-500' : theme.text}`}>
+                                {cls.studentName}
+                              </span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
+                                {cls.tutorId}
+                              </span>
+                            </div>
                             <div className="flex items-center gap-1 shrink-0">
                               {isCancelled && (
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900">
@@ -491,15 +768,16 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                 </span>
                               )}
                               {isTrial && !isCancelled && !isLeaveToday && !isLeaveWeekly && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8A93E] text-white">
-                                  Trial Lesson
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8A93E] text-white inline-flex items-center gap-1">
+                                  <Star className="w-2.5 h-2.5 fill-white text-white shrink-0" />
+                                  <span>Trial Lesson</span>
                                 </span>
                               )}
                             </div>
                           </div>
                           <div className="flex items-center justify-between mt-1 text-[11px] text-[#5A6B61]">
                             <span>ID: <strong className="text-[#161F1A] font-mono">{cls.studentId}</strong></span>
-                            <span className="font-medium text-[#1E5C3D]">{cls.tutorId}</span>
+                            <span className={`font-semibold ${theme.text}`}>{cls.tutorId}</span>
                           </div>
                           {cls.notes && (
                             <p className="text-[10px] text-gray-600 mt-1 italic line-clamp-1">
@@ -687,8 +965,21 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                               );
                               const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial' || Boolean(cls.notes?.toLowerCase().includes('trial'));
                               const isCancelled = cls.status === 'Cancelled';
-                              const isLeaveToday = cls.status === 'Student on Leave';
+                              const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
                               const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
+
+                              const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                              const theme = getSlotColorTheme(cls, isSingleTutor);
+
+                              const cardClasses = isCancelled
+                                ? 'bg-rose-50/90 border-rose-200 border-l-[3.5px] border-l-rose-500 text-rose-950 opacity-85'
+                                : isLeaveToday
+                                ? 'bg-indigo-50/90 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
+                                : isLeaveWeekly
+                                ? 'bg-amber-50/90 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
+                                : isTrial
+                                ? 'bg-[#FFF9EE] border-[#E8A93E] border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
+                                : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
 
                               return (
                                 <div
@@ -698,34 +989,41 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                     e.stopPropagation();
                                     setSelectedDetailClass(cls);
                                   }}
-                                  className={`px-3 py-1.5 rounded-lg border text-xs shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition-all cursor-pointer hover:shadow-sm hover:scale-[1.01] flex items-center justify-between gap-1.5 ${
-                                    isCancelled
-                                      ? 'bg-rose-50 border-rose-200 text-rose-950 opacity-85'
-                                      : isLeaveToday
-                                      ? 'bg-indigo-50 border-indigo-200 text-indigo-950 opacity-90'
-                                      : isLeaveWeekly
-                                      ? 'bg-amber-50 border-amber-200 text-[#8C5D08] opacity-90'
-                                      : isTrial
-                                      ? 'bg-[#FFF9EE] border-[#E8A93E] text-[#8C5D08]'
-                                      : 'bg-white border-[#EDEAE3] hover:border-[#D5D0C6] text-[#161F1A]'
-                                  }`}
+                                  className={`px-2.5 py-1.5 rounded-lg border text-xs shadow-2xs transition-all cursor-pointer hover:shadow-xs hover:scale-[1.01] flex items-center justify-between gap-1.5 ${cardClasses}`}
                                   title="Click to view full class session details, edit, or cancel"
                                 >
                                   <div className="flex-1 min-w-0">
-                                    <span className={`font-semibold text-[11px] truncate tracking-tight leading-tight ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-400' : 'text-[#161F1A]'}`} title={cls.studentName}>
-                                      {cls.studentName}
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span
+                                        className={`font-bold text-[11.5px] truncate tracking-tight leading-tight ${
+                                          isCancelled || isLeaveToday || isLeaveWeekly
+                                            ? 'line-through text-slate-400'
+                                            : theme.text
+                                        }`}
+                                        title={cls.studentName}
+                                      >
+                                        {cls.studentName}
+                                      </span>
+
                                       {((role === 'admin' || role === 'supervisor') && selectedTutorFilter === 'all') && (
-                                        <span className="text-[9.5px] text-[#2D8B5C] font-extrabold ml-1 inline-block" title={`Tutor: ${cls.tutorId}`}>
-                                          ({cls.tutorId})
+                                        <span
+                                          className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded border shadow-3xs ${theme.tutorBadgeBg}`}
+                                          title={`Tutor: ${cls.tutorId}`}
+                                        >
+                                          {cls.tutorId}
                                         </span>
                                       )}
+
                                       {isTrial && !isCancelled && !isLeaveToday && !isLeaveWeekly && (
-                                        <span className="text-[9px] font-black text-[#B27000] bg-[#FFF3DC] px-1 py-0.2 rounded border border-[#E8A93E]/30 ml-1.5 inline-flex items-center gap-0.5" title="Trial Class">
+                                        <span
+                                          className="text-[8.5px] font-black text-[#B27000] bg-[#FFF3DC] px-1.5 py-0.2 rounded border border-[#E8A93E]/40 inline-flex items-center gap-0.5 shadow-3xs"
+                                          title="Trial Class"
+                                        >
                                           <Star className="w-2.5 h-2.5 fill-[#E8A93E] text-[#E8A93E] shrink-0" />
                                           <span>TRIAL</span>
                                         </span>
                                       )}
-                                    </span>
+                                    </div>
                                   </div>
                                   
                                   <div className="flex items-center gap-1 shrink-0 select-none">
@@ -805,14 +1103,14 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
       {/* Footer Legend */}
       <div className="px-3.5 py-2 bg-[#FAF9F7] border-t border-[#E3DFD7] flex flex-wrap items-center justify-between text-[11px] text-[#5A6B61] gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="font-semibold text-[#161F1A]">Faculty Tutors:</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-bold text-[#161F1A]">Faculty Tutors:</span>
           {uniqueTutors.map(tId => {
-            const col = TUTOR_COLORS[tId] || DEFAULT_TUTOR_COLOR;
+            const theme = getSlotColorTheme({ tutorId: tId });
             return (
-              <span key={tId} className="flex items-center space-x-1">
-                <span className={`w-2 h-2 rounded-full ${col.badge}`}></span>
-                <span className="font-medium text-[#161F1A]">{tId}</span>
+              <span key={tId} className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md border text-[10.5px] ${theme.bg} ${theme.border}`}>
+                <span className={`w-2 h-2 rounded-full ${theme.dot}`}></span>
+                <span className={`font-bold ${theme.text}`}>{tId}</span>
               </span>
             );
           })}
@@ -1007,9 +1305,21 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                   );
                   const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial' || Boolean(cls.notes?.toLowerCase().includes('trial'));
                   const isCancelled = cls.status === 'Cancelled';
-                  const isLeaveToday = cls.status === 'Student on Leave';
+                  const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
                   const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
-                  const tColors = TUTOR_COLORS[cls.tutorId] || DEFAULT_TUTOR_COLOR;
+
+                  const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                  const theme = getSlotColorTheme(cls, isSingleTutor);
+
+                  const cardClassNames = isCancelled
+                    ? 'bg-rose-50/85 border-rose-200 border-l-[3.5px] border-l-rose-500 text-rose-950 opacity-90'
+                    : isLeaveToday
+                    ? 'bg-indigo-50/85 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
+                    : isLeaveWeekly
+                    ? 'bg-amber-50/85 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
+                    : isTrial
+                    ? 'bg-[#FFF9EE] border-[#E8A93E]/50 border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
+                    : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
 
                   return (
                     <div
@@ -1018,28 +1328,18 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                         setSelectedDetailClass(cls);
                         setSelectedSlotDetails(null); // Close this roll-up list so the main details card shows clearly
                       }}
-                      className={`p-3 rounded-xl border text-xs shadow-3xs hover:shadow-xs hover:scale-[1.01] transition-all cursor-pointer flex flex-col justify-between gap-2 text-left ${
-                        isCancelled
-                          ? 'bg-rose-50/70 border-rose-200 text-rose-950 opacity-90'
-                          : isLeaveToday
-                          ? 'bg-indigo-50/70 border-indigo-200 text-indigo-950 opacity-90'
-                          : isLeaveWeekly
-                          ? 'bg-amber-50/70 border-amber-200 text-[#8C5D08] opacity-90'
-                          : isTrial
-                          ? 'bg-[#FFF9EE] border-[#E8A93E]/40 text-[#8C5D08]'
-                          : 'bg-[#FCFCFA] border-[#EDEAE3] hover:border-emerald-200 hover:bg-emerald-50/5 text-[#161F1A]'
-                      }`}
+                      className={`p-3 rounded-xl border text-xs shadow-3xs hover:shadow-xs hover:scale-[1.01] transition-all cursor-pointer flex flex-col justify-between gap-2 text-left ${cardClassNames}`}
                     >
                       <div className="flex items-start justify-between gap-1.5">
                         <div className="min-w-0">
-                          <h4 className={`font-extrabold text-[12px] truncate leading-tight ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-400' : 'text-[#161F1A]'}`}>
+                          <h4 className={`font-extrabold text-[12px] truncate leading-tight ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-400' : theme.text}`}>
                             {cls.studentName}
                           </h4>
                           <p className="text-[10px] text-gray-500 font-mono mt-0.5">ID: {cls.studentId || 'N/A'}</p>
                         </div>
 
-                        {/* Tutor initials/tag */}
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold tracking-wide shrink-0 ${tColors.badge}`}>
+                        {/* Tutor badge */}
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold tracking-wide shrink-0 border ${theme.tutorBadgeBg}`}>
                           {cls.tutorId}
                         </span>
                       </div>

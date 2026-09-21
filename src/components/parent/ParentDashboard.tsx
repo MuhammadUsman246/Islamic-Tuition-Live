@@ -21,7 +21,8 @@ import {
   Bell,
   GraduationCap,
   Receipt,
-  Send
+  Send,
+  Palmtree
 } from 'lucide-react';
 import {
   Student,
@@ -329,6 +330,11 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                     {activeChild.status}
                   </span>
                 )}
+                {activeChild.isOnLeave && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1" title={`On leave until ${activeChild.leaveEndDate || 'specified date'}`}>
+                    <Palmtree className="w-3 h-3 text-amber-700" /> On Leave
+                  </span>
+                )}
               </div>
               <p className="text-xs text-[#5A6B61] mt-0.5">
                 Course: <strong>{activeChild.courseType}</strong> • Tutor: <strong>{activeTutor?.tutorId} ({activeTutor?.realName})</strong>
@@ -347,6 +353,25 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             <span>Launch {activeChild.name}'s Zoom Class</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
+        </div>
+      </div>
+    )}
+
+    {/* Leave Notice Banner for Parent */}
+    {activeChild?.isOnLeave && (
+      <div className="bg-amber-50/90 border border-amber-300 p-3.5 rounded-xl flex items-center space-x-3 text-xs shadow-xs mb-3">
+        <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-800 shrink-0">
+          <Palmtree className="w-4 h-4" />
+        </div>
+        <div>
+          <h4 className="font-bold text-amber-900 uppercase tracking-wider text-[11px]">
+            {activeChild.name} is on Leave of Absence ({activeChild.leaveType || 'Scheduled Leave'})
+          </h4>
+          <p className="text-amber-800 text-[11px] mt-0.5">
+            Leave duration: <strong>{activeChild.leaveStartDate || 'Today'}</strong> {activeChild.leaveEndDate ? `to ${activeChild.leaveEndDate}` : ''}.
+            {activeChild.leaveReason && <span className="ml-1 italic font-medium">({activeChild.leaveReason})</span>}
+            <span className="block mt-0.5 text-amber-950 font-medium">Regular scheduled classes will resume automatically once the leave period concludes.</span>
+          </p>
         </div>
       </div>
     )}

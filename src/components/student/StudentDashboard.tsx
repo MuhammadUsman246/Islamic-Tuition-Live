@@ -20,7 +20,8 @@ import {
   Edit3,
   Flame,
   Award,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Palmtree
 } from 'lucide-react';
 import {
   Student,
@@ -331,6 +332,37 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               </a>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Student Leave Status Notice if on Leave */}
+      {student?.isOnLeave && (
+        <div className="bg-amber-50/90 border border-amber-300 p-4 rounded-xl flex items-center justify-between shadow-xs">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center text-amber-800 shrink-0">
+              <Palmtree className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                <span>Leave of Absence Active</span>
+                {student.leaveType && (
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-200 text-amber-900">
+                    {student.leaveType}
+                  </span>
+                )}
+              </h4>
+              <p className="text-xs text-amber-800 mt-0.5">
+                You are currently marked on leave from <strong>{student.leaveStartDate || 'Today'}</strong> {student.leaveEndDate ? `to ${student.leaveEndDate}` : ''}.
+                {student.leaveReason && <span className="ml-1 italic font-medium">({student.leaveReason})</span>}
+                <span className="block mt-0.5 text-amber-950 font-semibold">
+                  Scheduled lessons will automatically resume once your leave period concludes.
+                </span>
+              </p>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500 text-white shrink-0">
+            On Leave
+          </span>
         </div>
       )}
 

@@ -480,6 +480,10 @@ export function sanitizeStudentForTutor(student: Student): TutorStudentView {
     trialSessionsCompleted: student.trialSessionsCompleted,
     trialSessionsTotal: student.trialSessionsTotal,
     trialStatus: student.trialStatus,
+    isOnLeave: student.isOnLeave,
+    leaveStartDate: student.leaveStartDate,
+    leaveEndDate: student.leaveEndDate,
+    leaveReason: student.leaveReason
   };
 }
 
@@ -829,6 +833,152 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
       }
     }
   }
+}
+
+export async function shiftStudentTutor(params: {
+  studentId: string;
+  oldTutorId: string;
+  newTutorId: string;
+  notes?: string;
+}): Promise<{ success: boolean; classesCount: number; message: string }> {
+  const { studentId, oldTutorId, newTutorId, notes } = params;
+
+  // 1. Update Student record
+  const allStudents = await getStudents();
+  const student = allStudents.find(s => s.studentId === studentId || s.id === studentId);
+  if (!student) {
+    throw new Error(`Student with ID ${studentId} not found.`);
+  }
+
+  const shiftAudit = `[Tutor Shift: ${new Date().toLocaleDateString('en-US')}] Transferred from ${oldTutorId} to ${newTutorId}.${notes ? ` Note: ${notes}` : ''}`;
+  const updatedNotes = student.privateAdminNotes
+    ? `${student.privateAdminNotes}\n${shiftAudit}`
+    : shiftAudit;
+
+  await updateStudent(student.id, {
+    assignedTutorId: newTutorId,
+    privateAdminNotes: updatedNotes
+  });
+
+  // 2. Update all timetable classes for this student to the new tutor
+  const allClasses = await getClasses();
+  const studentClasses = allClasses.filter(c => c.studentId === studentId);
+  const classesCount = studentClasses.length;
+
+  for (const cls of studentClasses) {
+    await updateClass(cls.id, { tutorId: newTutorId });
+  }
+
+  // 3. Update Tutor rosters in 'tutors' collection
+  try {
+    const allTutors = await getTutors();
+    // Remove from old tutor
+    const oldTutor = allTutors.find(t => t.tutorId === oldTutorId);
+    if (oldTutor) {
+      const updatedOldStudentIds = (oldTutor.assignedStudentIds || []).filter(id => id !== studentId);
+      await updateTutor(oldTutor.id, { assignedStudentIds: updatedOldStudentIds });
+    }
+
+    // Add to new tutor
+    const newTutor = allTutors.find(t => t.tutorId === newTutorId);
+    if (newTutor) {
+      const updatedNewStudentIds = Array.from(new Set([...(newTutor.assignedStudentIds || []), studentId]));
+      await updateTutor(newTutor.id, { assignedStudentIds: updatedNewStudentIds });
+    }
+  } catch (tutorErr) {
+    console.warn('Could not sync tutor assignedStudentIds rosters:', tutorErr);
+  }
+
+  // 4. Update student user account in 'users' collection if present
+  try {
+    if (!isFirestoreQuotaExceeded()) {
+      const usersSnap = await getDocs(
+        query(collection(db, USERS_COL), where('studentId', '==', studentId))
+      );
+      for (const uDoc of usersSnap.docs) {
+        await updateDoc(doc(db, USERS_COL, uDoc.id), { tutorId: newTutorId });
+      }
+    }
+  } catch (uErr) {
+    console.warn('Could not sync user profile tutorId:', uErr);
+  }
+
+  return {
+    success: true,
+    classesCount,
+    message: `Successfully shifted ${student.name} from ${oldTutorId} to ${newTutorId}. ${classesCount} scheduled weekly classes updated.`
+  };
+}
+
+export async function setStudentLeave(params: {
+  studentId: string;
+  isOnLeave: boolean;
+  leaveStartDate?: string;
+  leaveEndDate?: string;
+  leaveReason?: string;
+  leaveType?: 'Specific Days' | 'Full Month' | 'Custom Range' | 'Indefinite';
+  updateClasses?: boolean;
+}): Promise<{ success: boolean; message: string }> {
+  const { studentId, isOnLeave, leaveStartDate, leaveEndDate, leaveReason, leaveType, updateClasses = true } = params;
+
+  const allStudents = await getStudents();
+  const student = allStudents.find(s => s.studentId === studentId || s.id === studentId);
+  if (!student) {
+    throw new Error(`Student ${studentId} not found.`);
+  }
+
+  // Update student document
+  await updateStudent(student.id, {
+    isOnLeave,
+    leaveStartDate: isOnLeave ? (leaveStartDate || new Date().toISOString().slice(0, 10)) : '',
+    leaveEndDate: isOnLeave ? (leaveEndDate || '') : '',
+    leaveReason: isOnLeave ? (leaveReason || 'On Leave') : '',
+    leaveType: isOnLeave ? (leaveType || 'Specific Days') : undefined
+  });
+
+  // Update classes status
+  if (updateClasses) {
+    try {
+      const allClasses = await getClasses();
+      const studentClasses = allClasses.filter(c => c.studentId === studentId);
+      for (const cls of studentClasses) {
+        if (isOnLeave) {
+          const notes = leaveReason ? `[On Leave: ${leaveReason} (${leaveStartDate || ''} to ${leaveEndDate || ''})]` : '[On Leave]';
+          await updateClass(cls.id, {
+            status: 'Student on Leave',
+            notes: cls.notes ? `${cls.notes} ${notes}` : notes
+          });
+        } else {
+          // Restore back to Scheduled if it was on leave
+          if (cls.status === 'Student on Leave' || cls.status === 'Student on Leave (Weekly)') {
+            await updateClass(cls.id, { status: 'Scheduled' });
+          }
+        }
+      }
+    } catch (classErr) {
+      console.warn('Could not sync class leave status:', classErr);
+    }
+  }
+
+  return {
+    success: true,
+    message: isOnLeave
+      ? `Student ${student.name} marked on leave until ${leaveEndDate || 'further notice'}.`
+      : `Student ${student.name} leave cleared. Classes resumed.`
+  };
+}
+
+export async function deleteClassesBatch(classIds: string[]): Promise<string[]> {
+  const deletedIds: string[] = [];
+  for (const id of classIds) {
+    try {
+      await deleteClass(id);
+      deletedIds.push(id);
+    } catch (err) {
+      console.error(`Failed to delete class ${id}:`, err);
+    }
+  }
+  return deletedIds;
 }
 
 export async function deleteStudent(id: string): Promise<string> {

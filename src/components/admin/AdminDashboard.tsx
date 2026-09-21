@@ -40,7 +40,8 @@ import {
   ChevronRight,
   Receipt,
   FileImage,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Palmtree
 } from 'lucide-react';
 import {
   Student,
@@ -78,6 +79,9 @@ import { UndoToast, UndoToastItem } from '../common/UndoToast';
 import { TrashRecoveryManager } from './TrashRecoveryManager';
 import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { WeeklyProgressReportModal } from '../modals/WeeklyProgressReportModal';
+import { MultiDayClassDeleteModal } from '../modals/MultiDayClassDeleteModal';
+import { StudentLeaveModal } from '../modals/StudentLeaveModal';
+import { ShiftTutorModal } from '../modals/ShiftTutorModal';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
@@ -119,7 +123,10 @@ import {
   restoreTrashRecord,
   getAcademySettings,
   updateAcademySettings,
-  subscribeToAcademySettings
+  subscribeToAcademySettings,
+  shiftStudentTutor,
+  setStudentLeave,
+  deleteClassesBatch
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -285,6 +292,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isFamilyGroupModalOpen, setIsFamilyGroupModalOpen] = useState<boolean>(false);
   const [isTrialSmsModalOpen, setIsTrialSmsModalOpen] = useState<boolean>(false);
   const [selectedTrialStudent, setSelectedTrialStudent] = useState<Student | null>(null);
+
+  // Multi-day class deletion modal state
+  const [multiDeleteTargetClass, setMultiDeleteTargetClass] = useState<TimetableClass | null>(null);
+  const [isMultiDeleteModalOpen, setIsMultiDeleteModalOpen] = useState<boolean>(false);
+
+  // Student leave / vacation modal state
+  const [studentForLeave, setStudentForLeave] = useState<Student | null>(null);
+  const [isStudentLeaveModalOpen, setIsStudentLeaveModalOpen] = useState<boolean>(false);
+
+  // Student tutor shift / transfer modal state
+  const [studentForShift, setStudentForShift] = useState<Student | null>(null);
+  const [isShiftTutorModalOpen, setIsShiftTutorModalOpen] = useState<boolean>(false);
 
   // Weekly Progress Report Modal State
   const [isWeeklyReportModalOpen, setIsWeeklyReportModalOpen] = useState<boolean>(false);
@@ -609,6 +628,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       return;
     }
+
+    // Check if this student has multiple slots with this tutor
+    const matchingSlots = classes.filter(
+      c => c.studentId === cls.studentId && c.tutorId === cls.tutorId
+    );
+
+    if (matchingSlots.length > 1) {
+      setMultiDeleteTargetClass(cls);
+      setIsMultiDeleteModalOpen(true);
+      return;
+    }
+
     setDeleteConfirmTarget({
       id: classId,
       itemType: 'class',
@@ -649,6 +680,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
+  const handleConfirmMultiDayDelete = async (classIds: string[], summary: string) => {
+    try {
+      for (const id of classIds) {
+        const targetCls = classes.find(c => c.id === id);
+        const trashId = await deleteClass(id);
+        if (targetCls) {
+          setUndoStack(prev => [...prev, {
+            trashId,
+            originalId: id,
+            title: `Class for ${targetCls.studentName} (${targetCls.dayOfWeek} ${targetCls.startTimePKT})`,
+            studentName: targetCls.studentName,
+            dayOfWeek: targetCls.dayOfWeek,
+            startTimePKT: targetCls.startTimePKT,
+            classData: targetCls
+          }]);
+        }
+      }
+      await onRefreshData();
+      setUndoToast({
+        trashId: 'batch',
+        title: `${classIds.length} slot(s) deleted: ${summary}`,
+        itemType: 'class'
+      });
+    } catch (err) {
+      console.error("Failed to execute multi-day deletion:", err);
+    }
+  };
+
+  const handleSaveStudentLeave = async (params: {
+    studentId: string;
+    isOnLeave: boolean;
+    leaveStartDate?: string;
+    leaveEndDate?: string;
+    leaveReason?: string;
+    leaveType?: 'Specific Days' | 'Full Month' | 'Custom Range' | 'Indefinite';
+    updateClasses?: boolean;
+  }) => {
+    await setStudentLeave(params);
+    await onRefreshData();
+  };
+
+  const handleShiftStudentTutor = async (params: {
+    studentId: string;
+    oldTutorId: string;
+    newTutorId: string;
+    notes?: string;
+  }) => {
+    const res = await shiftStudentTutor(params);
+    await onRefreshData();
+    alert(res.message);
+  };
+
   const handleCancelClass = async (classId: string, newStatus: TimetableClass['status']) => {
     try {
       await updateClass(classId, { status: newStatus });
@@ -660,6 +743,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveStudent = async (studentData: Omit<Student, 'id'>, id?: string) => {
     if (id) {
+      const existingStudent = students.find(s => s.id === id || s.studentId === studentData.studentId);
+      if (
+        existingStudent &&
+        existingStudent.assignedTutorId &&
+        studentData.assignedTutorId &&
+        existingStudent.assignedTutorId !== studentData.assignedTutorId
+      ) {
+        // Automatically shift scheduled timetable classes, live Zoom link, and rosters
+        await shiftStudentTutor({
+          studentId: existingStudent.studentId,
+          oldTutorId: existingStudent.assignedTutorId,
+          newTutorId: studentData.assignedTutorId,
+          notes: 'Updated via Student Registry profile editor'
+        });
+      }
       await updateStudent(id, studentData);
     } else {
       await addStudent(studentData);
@@ -1959,6 +2057,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 Trial
                               </span>
                             )}
+                            {matchingStudent?.isOnLeave && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-0.5" title={`On leave until ${matchingStudent.leaveEndDate || 'specified date'}`}>
+                                <Palmtree className="w-2.5 h-2.5" /> On Leave
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-[#5A6B61] mt-0.5 flex items-center gap-2">
                             <span>Course: {matchingStudent?.courseType || 'Quran'}</span>
@@ -1993,10 +2096,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div className="flex items-center space-x-2">
                         {/* Zoom Live Meeting Button */}
                         <a
-                          href="https://zoom.us/j/online-quran-academy"
+                          href={tutors.find(t => t.tutorId === cls.tutorId)?.zoomLink || 'https://zoom.us'}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-3 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-xs font-semibold flex items-center space-x-1 transition-colors"
+                          className="px-3 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
+                          title={`Join ${cls.tutorId} Classroom (${tutors.find(t => t.tutorId === cls.tutorId)?.zoomLink || 'https://zoom.us'})`}
                         >
                           <Video className="w-3.5 h-3.5" />
                           <span>Join Classroom</span>
@@ -2560,7 +2664,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="w-full border-none focus:outline-none text-xs"
                   />
                 </div>
-                <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-3">
                   <label className="text-[#5A6B61] font-medium">Status Filter:</label>
                   <select
                     value={studentStatusFilter}
@@ -2568,6 +2672,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="border border-[#D5D0C6] rounded-md px-2.5 py-1 text-xs bg-white"
                   >
                     <option value="all">All Statuses ({students.length})</option>
+                    <option value="on_leave">🏖️ On Leave ({students.filter(s => s.isOnLeave).length})</option>
                     <option value="Trial">Trial</option>
                     <option value="Active">Active</option>
                     <option value="Confirmed">Confirmed</option>
@@ -2598,7 +2703,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const matchSearch = s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
                           s.studentId.toLowerCase().includes(studentSearch.toLowerCase()) ||
                           s.parentName?.toLowerCase().includes(studentSearch.toLowerCase());
-                        const matchStatus = studentStatusFilter === 'all' || s.status === studentStatusFilter;
+                        const matchStatus = studentStatusFilter === 'all'
+                          ? true
+                          : studentStatusFilter === 'on_leave'
+                          ? Boolean(s.isOnLeave)
+                          : s.status === studentStatusFilter;
                         return matchSearch && matchStatus;
                       })
                       .map(st => (
@@ -2609,17 +2718,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span className="text-[11px] text-[#5A6B61]">{st.email}</span>
                           </td>
                           <td className="py-3 px-4">
-                            {st.status === 'Trial' ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FFF9ED] text-[#8C5D08] border border-[#E8A93E]/40 flex items-center w-max gap-1">
-                                <Sparkles className="w-3 h-3" /> Trial ({st.trialSessionsCompleted || 0}/5)
-                              </span>
-                            ) : (
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
-                              }`}>
-                                {st.status}
-                              </span>
-                            )}
+                            <div className="space-y-1">
+                              {st.status === 'Trial' ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FFF9ED] text-[#8C5D08] border border-[#E8A93E]/40 flex items-center w-max gap-1">
+                                  <Sparkles className="w-3 h-3" /> Trial ({st.trialSessionsCompleted || 0}/5)
+                                </span>
+                              ) : (
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                  st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
+                                }`}>
+                                  {st.status}
+                                </span>
+                              )}
+                              {st.isOnLeave && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center w-max gap-1" title={`${st.leaveReason || 'On leave'} (${st.leaveStartDate || ''} to ${st.leaveEndDate || 'indefinite'})`}>
+                                  <Palmtree className="w-2.5 h-2.5 text-amber-700" />
+                                  On Leave
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4 font-medium text-[#161F1A]">{st.courseType}</td>
                           <td className="py-3 px-4 font-semibold text-[#2D8B5C]">{st.assignedTutorId}</td>
@@ -2645,28 +2762,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </span>
                           </td>
                           <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end space-x-1.5">
+                            <div className="flex items-center justify-end space-x-1.5 flex-wrap gap-y-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStudentForShift(st);
+                                  setIsShiftTutorModalOpen(true);
+                                }}
+                                className="px-2 py-1 text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 font-semibold rounded flex items-center space-x-1 cursor-pointer"
+                                title={`Shift/transfer ${st.name} to another tutor`}
+                              >
+                                <ArrowRight className="w-3 h-3" />
+                                <span>Shift</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setStudentForLeave(st);
+                                  setIsStudentLeaveModalOpen(true);
+                                }}
+                                className={`px-2 py-1 text-xs font-semibold rounded flex items-center space-x-1 cursor-pointer ${
+                                  st.isOnLeave
+                                    ? 'text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300'
+                                    : 'text-amber-700 bg-amber-50 hover:bg-amber-100'
+                                }`}
+                                title={st.isOnLeave ? "Manage active leave status" : "Set student on leave for days or month"}
+                              >
+                                <Palmtree className="w-3 h-3" />
+                                <span>{st.isOnLeave ? 'On Leave' : 'Leave'}</span>
+                              </button>
                               <button
                                 onClick={() => setInspectedStudent(st)}
                                 className="px-2.5 py-1 text-xs text-white bg-[#2D8B5C] font-semibold hover:bg-[#1E5C3D] rounded flex items-center space-x-1 shadow-xs cursor-pointer"
                                 title="Open full academic summary and lesson history card"
                               >
                                 <FolderOpen className="w-3.5 h-3.5" />
-                                <span>Academic Folder</span>
+                                <span>Folder</span>
                               </button>
                               <button
                                 onClick={() => {
                                   setSelectedStudent(st);
                                   setIsStudentModalOpen(true);
                                 }}
-                                className="px-2 py-1 text-xs text-[#2D8B5C] font-semibold hover:bg-[#2D8B5C]/10 rounded"
+                                className="px-2 py-1 text-xs text-[#2D8B5C] font-semibold hover:bg-[#2D8B5C]/10 rounded cursor-pointer"
                                 title="Edit registry details"
                               >
                                 Edit
                               </button>
                               <button
                                 onClick={() => handleDeleteStudent(st.id)}
-                                className="px-2 py-1 text-xs text-red-600 font-semibold hover:bg-red-50 rounded"
+                                className="px-2 py-1 text-xs text-red-600 font-semibold hover:bg-red-50 rounded cursor-pointer"
                               >
                                 Delete
                               </button>
@@ -5289,6 +5434,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         attendanceRecords={attendance}
         tutors={tutors}
         initialStudentId={weeklyReportStudentId}
+      />
+
+      {/* Multi-Day Timetable Slot Batch Deletion Modal */}
+      <MultiDayClassDeleteModal
+        isOpen={isMultiDeleteModalOpen}
+        onClose={() => {
+          setIsMultiDeleteModalOpen(false);
+          setMultiDeleteTargetClass(null);
+        }}
+        targetClass={multiDeleteTargetClass}
+        allClasses={classes}
+        onConfirmDelete={handleConfirmMultiDayDelete}
+      />
+
+      {/* Student Leave / Vacation Management Modal */}
+      <StudentLeaveModal
+        isOpen={isStudentLeaveModalOpen}
+        onClose={() => {
+          setIsStudentLeaveModalOpen(false);
+          setStudentForLeave(null);
+        }}
+        student={studentForLeave}
+        onSaveLeave={handleSaveStudentLeave}
+      />
+
+      {/* Shift Student to New Tutor Modal */}
+      <ShiftTutorModal
+        isOpen={isShiftTutorModalOpen}
+        onClose={() => {
+          setIsShiftTutorModalOpen(false);
+          setStudentForShift(null);
+        }}
+        student={studentForShift}
+        tutors={tutors}
+        classes={classes}
+        onConfirmShift={handleShiftStudentTutor}
       />
 
       {/* Strict Capitalized "DELETE" Confirmation Modal */}
