@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { clearInMemoryCache } from './dataService';
 import {
@@ -17,17 +17,13 @@ import {
 } from '../types';
 
 import { INITIAL_TUTOR_ENTITIES, INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
+import { ALL_INITIAL_STUDENTS, ALL_INITIAL_CLASSES } from '../data/studentsData';
 
 export const DUMMY_USERS_TO_SEED: UserProfile[] = [];
 
-export async function ensureDatabaseSeeded(): Promise<void> {
-  // Real database mode: tutor accounts are synchronized via ensureRegisteredTutorsSynchronized
-  return;
-}
-
 export const SEED_TUTORS: Tutor[] = INITIAL_TUTOR_ENTITIES;
-export const SEED_STUDENTS: Student[] = [];
-export const SEED_CLASSES: TimetableClass[] = [];
+export const SEED_STUDENTS: Student[] = ALL_INITIAL_STUDENTS;
+export const SEED_CLASSES: TimetableClass[] = ALL_INITIAL_CLASSES;
 export const SEED_LESSONS: Lesson[] = [];
 export const SEED_FEES: StudentFee[] = [];
 export const SEED_SALARIES: TutorSalary[] = [];
@@ -37,12 +33,39 @@ export const SEED_TUTOR_ATTENDANCE: TutorAttendanceRecord[] = [];
 export const SEED_MESSAGES: ChatMessage[] = [];
 export const SEED_ANNOUNCEMENTS: Announcement[] = [];
 
+export async function ensureDatabaseSeeded(): Promise<void> {
+  // Synchronize initial students and their classes into Firestore
+  try {
+    for (const student of ALL_INITIAL_STUDENTS) {
+      const studentRef = doc(db, 'students', student.id);
+      const studentSnap = await getDoc(studentRef);
+      if (!studentSnap.exists()) {
+        await setDoc(studentRef, student, { merge: true });
+      }
+    }
+
+    for (const cls of ALL_INITIAL_CLASSES) {
+      const classRef = doc(db, 'classes', cls.id);
+      const classSnap = await getDoc(classRef);
+      if (!classSnap.exists()) {
+        await setDoc(classRef, cls, { merge: true });
+      }
+    }
+  } catch (err) {
+    console.debug('[SeedData] Initial sync notice:', err);
+  }
+}
+
 export function isCleanDataMode(): boolean {
-  return true;
+  return false;
 }
 
 export function setCleanDataMode(_clean: boolean): void {
-  localStorage.setItem('it_data_mode', 'clean');
+  if (_clean) {
+    localStorage.setItem('it_data_mode', 'clean');
+  } else {
+    localStorage.removeItem('it_data_mode');
+  }
 }
 
 export async function reseedAllAcademyData(): Promise<{ success: boolean; count: number; message: string }> {

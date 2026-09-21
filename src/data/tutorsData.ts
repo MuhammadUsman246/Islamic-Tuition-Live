@@ -288,7 +288,41 @@ export const INITIAL_TUTOR_ENTITIES: Tutor[] = INITIAL_REGISTERED_TUTORS.map((t)
   availabilityStatus: 'Available',
   monthlySalaryPKR: t.salaryPKR,
   hourlyRatePKR: Math.round(t.salaryPKR / 40),
-  assignedStudentIds: [],
+  assignedStudentIds: t.tutorId === 'Tutor 2' 
+    ? ['STU-131', 'STU-132', 'STU-133', 'STU-134', 'STU-135', 'STU-136', 'STU-137', 'STU-138', 'STU-139']
+    : t.tutorId === 'Tutor 3'
+    ? ['STU-140', 'STU-141', 'STU-142', 'STU-143', 'STU-144', 'STU-145', 'STU-146', 'STU-147', 'STU-148', 'STU-149']
+    : t.tutorId === 'Tutor 4'
+    ? ['STU-150', 'STU-151', 'STU-152', 'STU-153', 'STU-154', 'STU-155', 'STU-156', 'STU-157']
+    : t.tutorId === 'Tutor 5'
+    ? ['STU-158', 'STU-159', 'STU-160', 'STU-161', 'STU-162', 'STU-163', 'STU-164', 'STU-165', 'STU-166']
+    : t.tutorId === 'Tutor 6'
+    ? ['STU-167', 'STU-168', 'STU-169', 'STU-170', 'STU-171', 'STU-172', 'STU-173', 'STU-174', 'STU-175', 'STU-176']
+    : t.tutorId === 'Tutor 7'
+    ? ['STU-177', 'STU-178', 'STU-179', 'STU-180', 'STU-181', 'STU-182', 'STU-183', 'STU-184', 'STU-185']
+    : t.tutorId === 'Tutor 8'
+    ? ['STU-186', 'STU-187', 'STU-188', 'STU-189', 'STU-190', 'STU-191', 'STU-192', 'STU-193', 'STU-194', 'STU-195', 'STU-196']
+    : t.tutorId === 'Tutor 9'
+    ? ['STU-197', 'STU-198', 'STU-199', 'STU-200', 'STU-201', 'STU-202', 'STU-203', 'STU-204', 'STU-205', 'STU-206']
+    : t.tutorId === 'Tutor 10'
+    ? ['STU-207', 'STU-208', 'STU-209', 'STU-210', 'STU-211', 'STU-212', 'STU-213', 'STU-214']
+    : t.tutorId === 'Tutor 13'
+    ? ['STU-215', 'STU-216', 'STU-217', 'STU-218', 'STU-219', 'STU-220', 'STU-221', 'STU-222']
+    : t.tutorId === 'Tutor 14'
+    ? ['STU-223', 'STU-224', 'STU-225', 'STU-226', 'STU-227', 'STU-228', 'STU-229']
+    : t.tutorId === 'Tutor 15'
+    ? ['STU-230', 'STU-231', 'STU-232', 'STU-233', 'STU-234', 'STU-235', 'STU-236', 'STU-237']
+    : t.tutorId === 'Tutor 16'
+    ? ['STU-238', 'STU-239', 'STU-240', 'STU-241', 'STU-242', 'STU-243', 'STU-244', 'STU-245', 'STU-246']
+    : t.tutorId === 'Tutor 17'
+    ? ['STU-247', 'STU-248', 'STU-249', 'STU-250', 'STU-251', 'STU-252', 'STU-253', 'STU-254', 'STU-255', 'STU-256']
+    : t.tutorId === 'Tutor 18'
+    ? ['STU-257', 'STU-258', 'STU-259', 'STU-260', 'STU-261', 'STU-262', 'STU-263', 'STU-264', 'STU-265']
+    : t.tutorId === 'Tutor 19'
+    ? ['STU-266', 'STU-267', 'STU-268', 'STU-269', 'STU-270', 'STU-271', 'STU-272', 'STU-273']
+    : t.tutorId === 'Tutor 20'
+    ? ['STU-274', 'STU-275']
+    : [],
   createdAt: '2026-09-20T00:00:00.000Z'
 }));
 

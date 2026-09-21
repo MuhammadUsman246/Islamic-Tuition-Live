@@ -39,6 +39,7 @@ import {
   subscribeToLessons,
   subscribeToStudents
 } from './services/dataService';
+import { ensureDatabaseSeeded } from './services/seedData';
 import { clearAllAcademyData } from './services/seedData';
 import { INITIAL_TUTOR_ENTITIES } from './data/tutorsData';
 import {
@@ -272,6 +273,7 @@ const MainPortal: React.FC = () => {
 
   useEffect(() => {
     const initData = async () => {
+      await ensureDatabaseSeeded();
       await loadAcademyData(true);
     };
     initData();

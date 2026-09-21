@@ -37,6 +37,27 @@ function formatTime12H(time24: string): string {
   }
 }
 
+// Parse HH:mm to minutes from midnight
+function parseTimeToMinutes(time24: string): number {
+  if (!time24) return 0;
+  const [hStr, mStr] = time24.split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+  if (isNaN(h) || isNaN(m)) return 0;
+  return h * 60 + m;
+}
+
+// Calculate end time in 12H format
+function calculateEndTime12H(startTime24: string, durationMinutes: number): string {
+  const startM = parseTimeToMinutes(startTime24);
+  const endM = (startM + durationMinutes) % (24 * 60);
+  const h = Math.floor(endM / 60);
+  const m = endM % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 === 0 ? 12 : h % 12;
+  return `${displayH}:${m.toString().padStart(2, '0')} ${period}`;
+}
+
 // Compact slot display labels (no redundant ranges)
 const COMPACT_SLOT_LABELS: Record<string, string> = {
   '01:00': '1:00 AM',
@@ -669,9 +690,17 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
           {TIME_SLOTS.map((slot) => {
             const compactLabel = COMPACT_SLOT_LABELS[slot] || formatTime12H(slot);
-            const slotClasses = filteredClasses.filter(
+            const slotStartM = parseTimeToMinutes(slot);
+            const directClasses = filteredClasses.filter(
               c => c.dayOfWeek === effectiveMobileDay && c.startTimePKT === slot
             );
+            const extendedClasses = filteredClasses.filter(c => {
+              if (c.dayOfWeek !== effectiveMobileDay) return false;
+              const cStart = parseTimeToMinutes(c.startTimePKT);
+              const cEnd = cStart + c.durationMinutes;
+              return cStart < slotStartM && cEnd > slotStartM;
+            });
+            const allSlotCount = directClasses.length + extendedClasses.length;
 
             return (
               <div
@@ -713,80 +742,127 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
                 {/* Class Content or Available Slot */}
                 <div className="flex-1 min-w-0 space-y-1.5">
-                  {slotClasses.length > 0 ? (
-                    slotClasses.map((cls) => {
-                      const matchingStudent = students.find(
-                        s => s.studentId === cls.studentId || s.name.toLowerCase() === cls.studentName.toLowerCase()
-                      );
-                      const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial' || Boolean(cls.notes?.toLowerCase().includes('trial'));
-                      const isCancelled = cls.status === 'Cancelled';
-                      const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
-                      const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
+                  {allSlotCount > 0 ? (
+                    <>
+                      {directClasses.map((cls) => {
+                        const matchingStudent = students.find(
+                          s => s.studentId === cls.studentId || s.name.toLowerCase() === cls.studentName.toLowerCase()
+                        );
+                        const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial' || Boolean(cls.notes?.toLowerCase().includes('trial'));
+                        const isCancelled = cls.status === 'Cancelled';
+                        const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
+                        const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
+                        const isLongSession = (cls.durationMinutes || 30) > 30;
 
-                      const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
-                      const theme = getSlotColorTheme(cls, isSingleTutor);
+                        const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                        const theme = getSlotColorTheme(cls, isSingleTutor);
 
-                      const cardBgClass = isCancelled
-                        ? 'bg-rose-50/85 border-rose-200 border-l-[3.5px] border-l-rose-500 text-rose-950 opacity-80'
-                        : isLeaveToday
-                        ? 'bg-indigo-50/90 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
-                        : isLeaveWeekly
-                        ? 'bg-amber-50/90 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
-                        : isTrial
-                        ? 'bg-[#FFF9EE] border-[#E8A93E] border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
-                        : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
+                        const cardBgClass = isCancelled
+                          ? 'bg-rose-50/85 border-rose-200 border-l-[3.5px] border-l-rose-500 text-rose-950 opacity-80'
+                          : isLeaveToday
+                          ? 'bg-indigo-50/90 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
+                          : isLeaveWeekly
+                          ? 'bg-amber-50/90 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
+                          : isLongSession
+                          ? 'bg-amber-50/95 border-amber-300 border-l-[4px] border-l-amber-500 text-amber-950 shadow-xs'
+                          : isTrial
+                          ? 'bg-[#FFF9EE] border-[#E8A93E] border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
+                          : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
 
-                      return (
-                        <div
-                          key={cls.id}
-                          onClick={() => setSelectedDetailClass(cls)}
-                          className={`p-2.5 rounded-xl border text-xs shadow-2xs cursor-pointer transition-all active:scale-[0.99] ${cardBgClass}`}
-                        >
-                          <div className="flex items-center justify-between gap-1.5">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`font-bold text-sm truncate ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-500' : theme.text}`}>
-                                {cls.studentName}
-                              </span>
-                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
-                                {cls.tutorId}
+                        return (
+                          <div
+                            key={cls.id}
+                            onClick={() => setSelectedDetailClass(cls)}
+                            className={`p-2.5 rounded-xl border text-xs shadow-2xs cursor-pointer transition-all active:scale-[0.99] ${cardBgClass}`}
+                          >
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`font-bold text-sm truncate ${isCancelled || isLeaveToday || isLeaveWeekly ? 'line-through text-slate-500' : isLongSession ? 'text-amber-950 font-black' : theme.text}`}>
+                                  {cls.studentName}
+                                </span>
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
+                                  {cls.tutorId}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {isLongSession && (
+                                  <span className="text-[9.5px] font-black text-amber-900 bg-amber-200/95 border border-amber-300 px-1.5 py-0.5 rounded shadow-3xs flex items-center gap-1">
+                                    <Clock className="w-2.5 h-2.5 shrink-0" />
+                                    <span>{cls.durationMinutes} MIN ({formatTime12H(cls.startTimePKT)}–{calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})</span>
+                                  </span>
+                                )}
+                                {isCancelled && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900">
+                                    Cancelled
+                                  </span>
+                                )}
+                                {isLeaveToday && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-900">
+                                    Leave (Today)
+                                  </span>
+                                )}
+                                {isLeaveWeekly && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-[#8C5D08]">
+                                    Leave (Weekly)
+                                  </span>
+                                )}
+                                {isTrial && !isCancelled && !isLeaveToday && !isLeaveWeekly && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8A93E] text-white inline-flex items-center gap-1">
+                                    <Star className="w-2.5 h-2.5 fill-white text-white shrink-0" />
+                                    <span>Trial Lesson</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between mt-1 text-[11px] text-[#5A6B61]">
+                              <span>ID: <strong className="text-[#161F1A] font-mono">{cls.studentId}</strong></span>
+                              <span className={`font-semibold ${isLongSession ? 'text-amber-900 font-bold' : theme.text}`}>
+                                {isLongSession ? `${cls.durationMinutes}m Class (${formatTime12H(cls.startTimePKT)} – ${calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})` : cls.tutorId}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              {isCancelled && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900">
-                                  Cancelled
+                            {cls.notes && (
+                              <p className="text-[10px] text-gray-600 mt-1 italic line-clamp-1">
+                                Note: {cls.notes}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {/* Extended / Spanned Class Cards */}
+                      {extendedClasses.map((cls) => {
+                        const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                        const theme = getSlotColorTheme(cls, isSingleTutor);
+                        const endLabel = calculateEndTime12H(cls.startTimePKT, cls.durationMinutes);
+                        return (
+                          <div
+                            key={`ext_mob_${cls.id}`}
+                            onClick={() => setSelectedDetailClass(cls)}
+                            className="p-2.5 rounded-xl border border-dashed border-amber-300 bg-amber-50/85 hover:bg-amber-100/80 text-amber-950 text-xs shadow-2xs cursor-pointer transition-all active:scale-[0.99]"
+                            title={`Extended ${cls.durationMinutes}m Session: Started at ${formatTime12H(cls.startTimePKT)} and continues until ${endLabel}`}
+                          >
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-extrabold text-sm text-amber-950 truncate flex items-center gap-1">
+                                  <span>⤷ {cls.studentName}</span>
                                 </span>
-                              )}
-                              {isLeaveToday && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-900">
-                                  Leave (Today)
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
+                                  {cls.tutorId}
                                 </span>
-                              )}
-                              {isLeaveWeekly && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-[#8C5D08]">
-                                  Leave (Weekly)
-                                </span>
-                              )}
-                              {isTrial && !isCancelled && !isLeaveToday && !isLeaveWeekly && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8A93E] text-white inline-flex items-center gap-1">
-                                  <Star className="w-2.5 h-2.5 fill-white text-white shrink-0" />
-                                  <span>Trial Lesson</span>
-                                </span>
-                              )}
+                              </div>
+                              <span className="text-[9.5px] font-black text-amber-900 bg-amber-200/90 border border-amber-300 px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-3xs">
+                                <Clock className="w-2.5 h-2.5 shrink-0" />
+                                <span>Cont. until {endLabel}</span>
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between mt-1 text-[11px] text-amber-800 font-medium">
+                              <span>{cls.durationMinutes}m Class ({formatTime12H(cls.startTimePKT)} – {endLabel})</span>
+                              <span className="font-bold text-amber-900 bg-amber-200/60 px-1.5 py-0.2 rounded text-[10px]">Slot Occupied</span>
                             </div>
                           </div>
-                          <div className="flex items-center justify-between mt-1 text-[11px] text-[#5A6B61]">
-                            <span>ID: <strong className="text-[#161F1A] font-mono">{cls.studentId}</strong></span>
-                            <span className={`font-semibold ${theme.text}`}>{cls.tutorId}</span>
-                          </div>
-                          {cls.notes && (
-                            <p className="text-[10px] text-gray-600 mt-1 italic line-clamp-1">
-                              Note: {cls.notes}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })
+                        );
+                      })}
+                    </>
                   ) : (
                     <div
                       onClick={() => onAddClass && onAddClass({ day: effectiveMobileDay, time: slot })}
@@ -929,22 +1005,33 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                   {activeDays.map((day) => {
                     const isToday = day === currentTeachingDay;
                     const isWeekend = day === 'Saturday' || day === 'Sunday';
-                    const cellClasses = filteredClasses.filter(
+                    const slotStartM = parseTimeToMinutes(slot);
+
+                    const directClasses = filteredClasses.filter(
                       c => c.dayOfWeek === day && c.startTimePKT === slot
                     );
+                    const extendedClasses = filteredClasses.filter(c => {
+                      if (c.dayOfWeek !== day) return false;
+                      const cStart = parseTimeToMinutes(c.startTimePKT);
+                      const cEnd = cStart + c.durationMinutes;
+                      return cStart < slotStartM && cEnd > slotStartM;
+                    });
+
+                    const totalCellClassesCount = directClasses.length + extendedClasses.length;
+                    const allCellClasses = [...directClasses, ...extendedClasses];
 
                     return (
                       <td
                         key={`${day}_${slot}`}
                         onClick={() => {
-                          if (cellClasses.length === 0) {
+                          if (totalCellClassesCount === 0) {
                             if (onAddClass) {
                               onAddClass({ day, time: slot });
                             }
-                          } else if (cellClasses.length === 1) {
-                            setSelectedDetailClass(cellClasses[0]);
+                          } else if (totalCellClassesCount === 1) {
+                            setSelectedDetailClass(allCellClasses[0]);
                           } else {
-                            setSelectedSlotDetails({ day, slot, classes: cellClasses });
+                            setSelectedSlotDetails({ day, slot, classes: allCellClasses });
                           }
                         }}
                         className={`p-1 border-r border-b border-[#EDEAE3] align-top min-w-[160px] relative group transition-all duration-150 ${
@@ -954,12 +1041,12 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                             ? 'bg-amber-50/25 hover:bg-amber-50/50'
                             : 'bg-white hover:bg-[#FAF9F7]'
                         } ${
-                          (cellClasses.length > 0 || onAddClass) ? 'cursor-pointer' : ''
+                          (totalCellClassesCount > 0 || onAddClass) ? 'cursor-pointer' : ''
                         }`}
                       >
-                        {cellClasses.length > 0 ? (
+                        {totalCellClassesCount > 0 ? (
                           <div className="space-y-1">
-                            {cellClasses.slice(0, 2).map((cls) => {
+                            {directClasses.slice(0, 2).map((cls) => {
                               const matchingStudent = students.find(
                                 s => s.studentId === cls.studentId || s.name.toLowerCase() === cls.studentName.toLowerCase()
                               );
@@ -967,6 +1054,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                               const isCancelled = cls.status === 'Cancelled';
                               const isLeaveToday = cls.status === 'Student on Leave' || Boolean(matchingStudent?.isOnLeave);
                               const isLeaveWeekly = cls.status === 'Student on Leave (Weekly)';
+                              const isLongSession = (cls.durationMinutes || 30) > 30;
 
                               const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
                               const theme = getSlotColorTheme(cls, isSingleTutor);
@@ -977,6 +1065,8 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                 ? 'bg-indigo-50/90 border-indigo-200 border-l-[3.5px] border-l-indigo-500 text-indigo-950 opacity-90'
                                 : isLeaveWeekly
                                 ? 'bg-amber-50/90 border-amber-200 border-l-[3.5px] border-l-amber-500 text-[#8C5D08] opacity-90'
+                                : isLongSession
+                                ? 'bg-amber-50/95 border-amber-300 border-l-[4px] border-l-amber-500 text-amber-950 shadow-xs'
                                 : isTrial
                                 ? 'bg-[#FFF9EE] border-[#E8A93E] border-l-[3.5px] border-l-[#E8A93E] text-[#8C5D08]'
                                 : `${theme.bg} ${theme.border} border-l-[3.5px] ${theme.accentBar} ${theme.text}`;
@@ -990,7 +1080,9 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                     setSelectedDetailClass(cls);
                                   }}
                                   className={`px-2.5 py-1.5 rounded-lg border text-xs shadow-2xs transition-all cursor-pointer hover:shadow-xs hover:scale-[1.01] flex items-center justify-between gap-1.5 ${cardClasses}`}
-                                  title="Click to view full class session details, edit, or cancel"
+                                  title={isLongSession 
+                                    ? `⭐ ${cls.durationMinutes}-Minute Extended Session (${formatTime12H(cls.startTimePKT)} – ${calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)}). Click for details.`
+                                    : "Click to view full class session details, edit, or cancel"}
                                 >
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -998,6 +1090,8 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                         className={`font-bold text-[11.5px] truncate tracking-tight leading-tight ${
                                           isCancelled || isLeaveToday || isLeaveWeekly
                                             ? 'line-through text-slate-400'
+                                            : isLongSession
+                                            ? 'text-amber-950 font-black'
                                             : theme.text
                                         }`}
                                         title={cls.studentName}
@@ -1011,6 +1105,16 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                           title={`Tutor: ${cls.tutorId}`}
                                         >
                                           {cls.tutorId}
+                                        </span>
+                                      )}
+
+                                      {isLongSession && (
+                                        <span
+                                          className="text-[8.5px] font-black text-amber-950 bg-amber-200/90 border border-amber-400/80 px-1.5 py-0.2 rounded inline-flex items-center gap-0.5 shadow-3xs"
+                                          title={`Extended Duration: ${cls.durationMinutes} Minutes (Ends ${calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})`}
+                                        >
+                                          <Clock className="w-2 h-2 text-amber-800 shrink-0" />
+                                          <span>{cls.durationMinutes}m ({formatTime12H(cls.startTimePKT)}–{calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})</span>
                                         </span>
                                       )}
 
@@ -1047,17 +1151,56 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                               );
                             })}
 
-                            {cellClasses.length > 2 && (
+                            {/* Extended / Spanned Continuation Cards in Desktop Table */}
+                            {extendedClasses.slice(0, 2).map((cls) => {
+                              const isSingleTutor = selectedTutorFilter !== 'all' || role === 'tutor';
+                              const theme = getSlotColorTheme(cls, isSingleTutor);
+                              const endLabel = calculateEndTime12H(cls.startTimePKT, cls.durationMinutes);
+                              return (
+                                <div
+                                  key={`ext_tbl_${cls.id}`}
+                                  id={`ext_class_card_${cls.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDetailClass(cls);
+                                  }}
+                                  className="px-2 py-1.5 rounded-lg border border-dashed border-amber-300 bg-amber-50/80 hover:bg-amber-100/85 text-xs shadow-2xs transition-all cursor-pointer hover:scale-[1.01] flex items-center justify-between gap-1"
+                                  title={`Occupied by ${cls.studentName}'s ${cls.durationMinutes}-minute session (started ${formatTime12H(cls.startTimePKT)}, ends ${endLabel}). Click for details.`}
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      <span className="font-extrabold text-[11px] text-amber-950 truncate flex items-center gap-0.5">
+                                        <span>⤷ {cls.studentName}</span>
+                                      </span>
+                                      {((role === 'admin' || role === 'supervisor') && selectedTutorFilter === 'all') && (
+                                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
+                                          {cls.tutorId}
+                                        </span>
+                                      )}
+                                      <span className="text-[8.5px] font-bold text-amber-800 bg-amber-100/90 border border-amber-300/80 px-1 py-0.2 rounded inline-flex items-center gap-0.5">
+                                        <Clock className="w-2 h-2 shrink-0" />
+                                        <span>Cont. until {endLabel}</span>
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span className="text-[8px] font-black px-1.5 py-0.2 rounded bg-amber-200/90 text-amber-900 uppercase shrink-0 border border-amber-300/60">
+                                    {cls.durationMinutes}m
+                                  </span>
+                                </div>
+                              );
+                            })}
+
+                            {totalCellClassesCount > 2 && (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSelectedSlotDetails({ day, slot, classes: cellClasses });
+                                  setSelectedSlotDetails({ day, slot, classes: allCellClasses });
                                 }}
                                 className="w-full mt-1.5 py-1 px-2 bg-[#E8F5E9] hover:bg-[#C8E6C9] border border-[#A5D6A7]/50 text-[#1E5C3D] hover:text-[#113C25] rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer shadow-3xs hover:scale-[1.01]"
                               >
                                 <span className="w-1.5 h-1.5 rounded-full bg-[#2D8B5C] animate-pulse" />
-                                <span>+ {cellClasses.length - 2} more classes</span>
+                                <span>+ {totalCellClassesCount - 2} more classes</span>
                               </button>
                             )}
                           </div>
@@ -1346,6 +1489,12 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
                       {/* Badges row */}
                       <div className="flex flex-wrap gap-1">
+                        {cls.durationMinutes && cls.durationMinutes > 30 && (
+                          <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-amber-200 text-amber-950 border border-amber-300 flex items-center gap-0.5 uppercase">
+                            <Clock className="w-2 h-2 shrink-0" />
+                            <span>{cls.durationMinutes}m ({formatTime12H(cls.startTimePKT)}–{calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})</span>
+                          </span>
+                        )}
                         {isCancelled && (
                           <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-rose-200 text-rose-900 uppercase">
                             Cancelled
@@ -1367,7 +1516,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                             <span>TRIAL</span>
                           </span>
                         )}
-                        {!isCancelled && !isLeaveToday && !isLeaveWeekly && !isTrial && (
+                        {!isCancelled && !isLeaveToday && !isLeaveWeekly && !isTrial && (!cls.durationMinutes || cls.durationMinutes === 30) && (
                           <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100/70 text-emerald-800 uppercase">
                             Regular
                           </span>
