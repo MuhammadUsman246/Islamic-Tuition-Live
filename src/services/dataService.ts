@@ -2751,14 +2751,13 @@ export function isUserAuthorizedForThread(threadId: string, userId: string, role
     return false;
   }
 
-  // Tutors can ONLY access their own dedicated support group and their own 1-to-1 with Admin.
-  // No combined staff group exists; tutors are completely isolated from other tutors' groups to prevent distractions.
+  // Tutors can ONLY access their own dedicated support group (desk_tutor_<tutorId>).
+  // Direct messages from tutors are disabled so all communication takes place in the support group
+  // where both Admins and Supervisors can see the chat together and take immediate action.
   if (role === 'tutor') {
-    if (threadId.startsWith('desk_tutor_') || threadId.startsWith('dm_admin_tutor_') || threadId.startsWith('channel_tutor_')) {
+    if (threadId.startsWith('desk_tutor_')) {
       const channelTutorSuffix = threadId
         .replace('desk_tutor_', '')
-        .replace('dm_admin_tutor_', '')
-        .replace('channel_tutor_', '')
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '');
 

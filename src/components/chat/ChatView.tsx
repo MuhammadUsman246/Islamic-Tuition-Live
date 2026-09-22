@@ -250,10 +250,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
 
   // Compute effective display name respecting inspection mode
   const effectiveDisplayName = useMemo(() => {
-    if (adminViewingRole === 'tutor') {
-      const match = tutors.find(t => t.tutorId === adminViewingTargetId);
-      if (match) return match.realName || match.tutorId;
-      return userProfile?.displayName || adminViewingTargetId || 'Tutor';
+    if (role === 'tutor' || adminViewingRole === 'tutor') {
+      const currentTutorId = adminViewingTargetId || userProfile?.tutorId || '';
+      const match = tutors.find(t => t.tutorId.toLowerCase() === currentTutorId.toLowerCase() || t.tutorId.toLowerCase().replace(/[^a-z0-9]/g, '') === currentTutorId.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      if (match) {
+        return match.realName ? `${match.realName} (${match.tutorId})` : match.tutorId;
+      }
+      return userProfile?.displayName || currentTutorId || 'Tutor';
     }
     if (adminViewingRole === 'supervisor') {
       return userProfile?.displayName || 'Academic Supervisor';
@@ -267,15 +270,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       return userProfile?.displayName || 'Parent';
     }
     return userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User';
-  }, [adminViewingRole, adminViewingTargetId, tutors, students, userProfile]);
+  }, [role, adminViewingRole, adminViewingTargetId, tutors, students, userProfile]);
 
   // Strict Chat Structure & Permissions:
   // 1. Dedicated Tutor Support Groups:
   //    - Each tutor has their own private group with [That Specific Tutor + All Admins + All Supervisors].
+  //    - Formatted as e.g. "Umar Nazakat (Tutor 3) (Support Group)" so tutors are clearly identified by Tutor ID.
   //    - There is NO group where all staff/tutors are combined.
-  //    - No other tutor can access this group, completely eliminating live class distractions.
+  //    - Tutors cannot send direct messages to Admin; they must message in this Support Group where both Admins and Supervisors see the chat.
   // 2. Direct 1-to-1 Channels:
-  //    - For Tutors: Displays strictly as "Admin" (no personal name).
   //    - For Supervisors: Displays strictly as "Admin".
   //    - For Students / Parents: Displays as "Admin".
   const availableChannels = useMemo<ChannelDef[]>(() => {
@@ -296,25 +299,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       // Tutor Support Groups (Admin + Supervisors + That Specific Tutor)
       tutors.forEach(t => {
         const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
+        const tutorLabel = t.realName ? `${t.realName} (${t.tutorId})` : t.tutorId;
         channels.push({
           id: `desk_tutor_${tKey}`,
-          name: `${t.realName || t.tutorId} (Support Group)`,
+          name: `${tutorLabel} (Support Group)`,
           category: 'tutor_desk',
-          description: `Support group with ${t.realName || t.tutorId}, Admins, and Supervisors.`,
-          targetUserId: t.tutorId,
-          targetRole: 'tutor',
-          avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
-        });
-      });
-
-      // Tutors 1-to-1 (Admin private line with each tutor)
-      tutors.forEach(t => {
-        const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
-        channels.push({
-          id: `dm_admin_tutor_${tKey}`,
-          name: `${t.realName || t.tutorId} (Direct)`,
-          category: 'direct_admin',
-          description: `Direct 1-to-1 private line with ${t.realName || t.tutorId}.`,
+          description: `Support group with ${tutorLabel}, Admins, and Supervisors.`,
           targetUserId: t.tutorId,
           targetRole: 'tutor',
           avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
@@ -367,11 +357,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       // Supervisor can monitor and coordinate in ALL tutor support groups
       tutors.forEach(t => {
         const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
+        const tutorLabel = t.realName ? `${t.realName} (${t.tutorId})` : t.tutorId;
         channels.push({
           id: `desk_tutor_${tKey}`,
-          name: `${t.realName || t.tutorId} (Support Group)`,
+          name: `${tutorLabel} (Support Group)`,
           category: 'tutor_desk',
-          description: `Support group with ${t.realName || t.tutorId}, Admins, and Supervisors.`,
+          description: `Support group with ${tutorLabel}, Admins, and Supervisors.`,
           targetUserId: t.tutorId,
           targetRole: 'tutor',
           avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
@@ -379,6 +370,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       });
     } else if (role === 'tutor') {
       // Tutor has their own dedicated Support Group (with Admin & Supervisors)
+      // Direct 1-to-1 with Admin is intentionally removed so tutors cannot bypass the group.
+      // All messages are sent here so both Admins and Supervisors are present and can see all chat.
       const currentTutorId = adminViewingTargetId || userProfile?.tutorId || (tutors.length > 0 ? tutors[0].tutorId : 'tutor_1');
       const tKey = currentTutorId.replace(/\s+/g, '_').toLowerCase();
 
@@ -389,16 +382,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
         description: 'Group chat with Admin and Academic Supervisors. Report student delays, attendance, or requests here.',
         targetRole: 'admin',
         avatarText: 'AS'
-      });
-
-      // Tutor private 1-to-1 with Admin (strictly "Admin" as requested)
-      channels.push({
-        id: `dm_admin_tutor_${tKey}`,
-        name: 'Admin',
-        category: 'direct_admin',
-        description: 'Direct 1-to-1 chat with Admin.',
-        targetRole: 'admin',
-        avatarText: 'AD'
       });
     } else if (role === 'student') {
       // Student has 1-to-1 line with Admin ONLY
@@ -1021,7 +1004,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
     if (threadId.startsWith('desk_tutor_')) {
       const tKey = threadId.replace('desk_tutor_', '').toLowerCase();
       const matchedTutor = tutors.find(t => t.tutorId.toLowerCase().replace(/[^a-z0-9]/g, '_') === tKey || t.tutorId.toLowerCase() === tKey);
-      const tName = matchedTutor ? (matchedTutor.realName || matchedTutor.tutorId) : 'Tutor';
+      const tName = matchedTutor ? (matchedTutor.realName ? `${matchedTutor.realName} (${matchedTutor.tutorId})` : matchedTutor.tutorId) : 'Tutor';
       return [
         { id: 'admin', name: 'Admin', role: 'admin' as UserRole },
         { id: 'supervisor', name: 'Academic Supervisor', role: 'supervisor' as UserRole },
