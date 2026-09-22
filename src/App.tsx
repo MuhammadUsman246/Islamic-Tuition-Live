@@ -318,34 +318,37 @@ const MainPortal: React.FC = () => {
   // Real-time subscribe to timetable classes so master timetable and tutor weekly classes update immediately
   useEffect(() => {
     if (!currentUser) return;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const unsub = subscribeToClasses((updatedClasses) => {
       if (updatedClasses && updatedClasses.length > 0) {
         setClasses(updatedClasses);
       }
     });
     return () => unsub();
-  }, [currentUser]);
+  }, [currentUser, role]);
 
   // Real-time subscribe to lessons so tutor entries immediately replicate to spreadsheets in Admin & Supervisor dashboards
   useEffect(() => {
     if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
+    const filterTutorId = role === 'tutor' ? (userProfile?.tutorId || undefined) : undefined;
     const unsub = subscribeToLessons((updatedLessons) => {
       setLessons(updatedLessons);
-    });
+    }, filterTutorId);
     return () => unsub();
-  }, [currentUser, role]);
+  }, [currentUser, role, userProfile?.tutorId]);
 
   // Real-time subscribe to students list so new student profiles created by Admin replicate immediately everywhere
   useEffect(() => {
     if (!currentUser) return;
+    if (role !== 'admin' && role !== 'supervisor') return;
     const unsub = subscribeToStudents((updatedStudents) => {
       if (updatedStudents && updatedStudents.length > 0) {
         setStudents(updatedStudents);
       }
     });
     return () => unsub();
-  }, [currentUser]);
+  }, [currentUser, role]);
 
   // Dynamic Linking Effect: Ensure logged in user's profile is linked to real student/parent/tutor record in Firestore
   useEffect(() => {
@@ -554,7 +557,7 @@ const MainPortal: React.FC = () => {
                 announcements={announcements}
                 attendance={attendance}
                 tutorAttendance={tutorAttendance}
-                onRefreshData={() => loadAcademyData(true)}
+                onRefreshData={() => loadAcademyData(false)}
               />
             ) : role === 'tutor' ? (
               <TutorDashboard
@@ -567,7 +570,7 @@ const MainPortal: React.FC = () => {
                 lessons={lessons}
                 attendance={attendance}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(true)}
+                onRefreshData={() => loadAcademyData(false)}
               />
             ) : role === 'supervisor' ? (
               <SupervisorDashboard
@@ -580,7 +583,7 @@ const MainPortal: React.FC = () => {
                 attendance={attendance}
                 tutorAttendance={tutorAttendance}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(true)}
+                onRefreshData={() => loadAcademyData(false)}
               />
             ) : role === 'student' ? (
               <StudentDashboard
@@ -599,7 +602,7 @@ const MainPortal: React.FC = () => {
                 attendance={attendance}
                 fees={fees}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(true)}
+                onRefreshData={() => loadAcademyData(false)}
               />
             ) : role === 'parent' ? (
               <ParentDashboard
@@ -613,7 +616,7 @@ const MainPortal: React.FC = () => {
                 attendance={attendance}
                 fees={fees}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(true)}
+                onRefreshData={() => loadAcademyData(false)}
               />
             ) : null}
           </div>

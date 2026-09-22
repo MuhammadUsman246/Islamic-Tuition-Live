@@ -330,7 +330,7 @@ export function saveCachedCollection<T>(key: keyof MemoryCacheStore, value: T): 
   } catch {}
 }
 
-export function isCachedCollectionFresh(key: keyof MemoryCacheStore, maxAgeMs = 180000): boolean {
+export function isCachedCollectionFresh(key: keyof MemoryCacheStore, maxAgeMs = 14400000): boolean {
   try {
     const timeStr = localStorage.getItem(`${CACHE_STORAGE_PREFIX}${String(key)}_time`);
     if (!timeStr) return false;
@@ -515,7 +515,7 @@ export async function getStudents(forceRefresh = false): Promise<Student[]> {
     return CACHE.students;
   }
   const stored = loadCachedCollection<Student[]>('students');
-  if (stored && stored.length > 0 && !forceRefresh && (isCachedCollectionFresh('students') || isFirestoreQuotaExceeded())) {
+  if (stored && stored.length > 0 && !forceRefresh) {
     CACHE.students = stored;
     return stored;
   }
@@ -1299,7 +1299,7 @@ export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
     return deduplicateTutors(CACHE.tutors);
   }
   const stored = loadCachedCollection<Tutor[]>('tutors');
-  if (stored && stored.length >= 20 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
+  if (stored && stored.length >= 20 && !forceRefresh) {
     const deduped = deduplicateTutors(stored);
     CACHE.tutors = deduped;
     return deduped;
@@ -1522,7 +1522,7 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
     return CACHE.classes;
   }
   const stored = loadCachedCollection<TimetableClass[]>('classes');
-  if (stored && stored.length > 0 && !forceRefresh && (isCachedCollectionFresh('classes') || isFirestoreQuotaExceeded())) {
+  if (stored && stored.length > 0 && !forceRefresh) {
     CACHE.classes = stored;
     return stored;
   }
@@ -1776,14 +1776,18 @@ function cleanExpiredScreenshots(lessons: Lesson[]): Lesson[] {
   });
 }
 
-export function subscribeToLessons(callback: (lessons: Lesson[]) => void): () => void {
+export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string): () => void {
   const getFallback = () => CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS);
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
   }
+  const q = filterTutorId
+    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(50))
+    : query(collection(db, LESSONS_COL), limit(150));
+
   return safeOnSnapshot(
-    collection(db, LESSONS_COL),
+    q,
     (snap) => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
       const cleaned = cleanExpiredScreenshots(items);
@@ -1813,13 +1817,13 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
     return CACHE.lessons;
   }
   const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
-  if (localItems.length > 0 && !forceRefresh && (isCachedCollectionFresh('lessons') || isFirestoreQuotaExceeded())) {
+  if (localItems.length > 0 && !forceRefresh) {
     CACHE.lessons = localItems;
     return localItems;
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
-      const snap = await getDocs(collection(db, LESSONS_COL));
+      const snap = await getDocs(query(collection(db, LESSONS_COL), limit(150)));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
         const cleaned = cleanExpiredScreenshots(items);
@@ -1953,6 +1957,10 @@ export async function getAttendanceRecords(forceRefresh = false): Promise<Attend
     return CACHE.attendance;
   }
   const localItems = loadCachedCollection<AttendanceRecord[]>('attendance') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.attendance = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, ATTENDANCE_COL));
@@ -2011,6 +2019,10 @@ export async function getTutorAttendanceRecords(forceRefresh = false): Promise<T
     return CACHE.tutorAttendance;
   }
   const localItems = loadCachedCollection<TutorAttendanceRecord[]>('tutorAttendance') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.tutorAttendance = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, TUTOR_ATTENDANCE_COL));
@@ -2123,6 +2135,10 @@ export async function getFees(forceRefresh = false): Promise<StudentFee[]> {
     return CACHE.fees;
   }
   const localItems = loadCachedCollection<StudentFee[]>('fees') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.fees = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, FEES_COL));
@@ -2205,6 +2221,10 @@ export async function getSalaries(forceRefresh = false): Promise<TutorSalary[]> 
     return CACHE.salaries;
   }
   const localItems = loadCachedCollection<TutorSalary[]>('salaries') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.salaries = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, SALARIES_COL));
@@ -2265,6 +2285,10 @@ export async function getReferrals(forceRefresh = false): Promise<Referral[]> {
     return CACHE.referrals;
   }
   const localItems = loadCachedCollection<Referral[]>('referrals') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.referrals = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, REFERRALS_COL));
@@ -2404,6 +2428,10 @@ export async function getAnnouncements(forceRefresh = false): Promise<Announceme
     return CACHE.announcements;
   }
   const localItems = loadCachedCollection<Announcement[]>('announcements') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.announcements = localItems;
+    return localItems;
+  }
   try {
     if (!isFirestoreQuotaExceeded()) {
       const snap = await getDocs(collection(db, ANNOUNCEMENTS_COL));

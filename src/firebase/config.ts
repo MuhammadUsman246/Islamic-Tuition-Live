@@ -37,8 +37,7 @@ let firestoreInstance;
 try {
   let localCache;
   try {
-    const isIframe = typeof window !== 'undefined' && window.self !== window.top;
-    if (typeof window !== 'undefined' && window.indexedDB && !isIframe) {
+    if (typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined') {
       localCache = persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       });

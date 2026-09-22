@@ -238,6 +238,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanEmail = rawEmail ? rawEmail.trim().toLowerCase() : '';
     const isOwnerAdmin = isAcademicOwner(cleanEmail);
 
+    // 0. ZERO-READ FAST PATH: Return cached profile immediately if email matches
+    if (cleanEmail) {
+      const cached = localStorage.getItem('it_cached_user_profile');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as UserProfile;
+          if (parsed.email && parsed.email.trim().toLowerCase() === cleanEmail) {
+            authLog('ProfileFetch', '⚡ Served profile instantly from localStorage cache (0 reads)');
+            return parsed;
+          }
+        } catch {}
+      }
+    }
+
+    // 0.5. ZERO-READ OWNER ADMIN: Owner admin is unconditionally admin
+    if (isOwnerAdmin) {
+      const ownerProf: UserProfile = {
+        uid,
+        email: cleanEmail,
+        displayName: 'Academic Director (Owner)',
+        role: 'admin',
+        status: 'active',
+        createdAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('it_cached_user_profile', JSON.stringify(ownerProf));
+      } catch {}
+      return ownerProf;
+    }
+
     let loadedProf: UserProfile | null = null;
 
     // 1. Check doc by uid (generous 4000ms timeout)
@@ -354,12 +384,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let tutData: Tutor | null = null;
         if (tutSnap && !tutSnap.empty) {
           tutData = tutSnap.docs[0].data() as Tutor;
-        } else {
-          const allTutSnap = await withTimeout(getDocs(collection(db, 'tutors')), 3000);
-          if (allTutSnap && !allTutSnap.empty) {
-            const found = allTutSnap.docs.map(d => d.data() as Tutor).find(t => t.email && t.email.trim().toLowerCase() === cleanEmail);
-            if (found) tutData = found;
-          }
         }
 
         if (tutData) {
@@ -413,13 +437,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (parentSnap && !parentSnap.empty) {
           childrenDocs = parentSnap.docs.map(d => d.data() as Student);
-        } else {
-          const allStuSnap = await withTimeout(getDocs(collection(db, 'students')), 3000);
-          if (allStuSnap && !allStuSnap.empty) {
-            childrenDocs = allStuSnap.docs
-              .map(d => d.data() as Student)
-              .filter(s => s.parentEmail && s.parentEmail.trim().toLowerCase() === cleanEmail);
-          }
         }
 
         if (childrenDocs.length > 0) {
@@ -452,26 +469,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!loadedProf || loadedProf.role === 'student' || (!loadedProf.studentId && loadedProf.role !== 'parent' && loadedProf.role !== 'admin' && loadedProf.role !== 'tutor' && loadedProf.role !== 'supervisor')) {
           let stuData: Student | null = null;
           let stuSnap = await withTimeout(
-            getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail))),
-            3000
+            getDocs(query(collection(db, 'students'), where('email', '==', cleanEmail), limit(1))),
+            2000
           );
           if ((!stuSnap || stuSnap.empty) && rawEmail !== cleanEmail) {
             stuSnap = await withTimeout(
-              getDocs(query(collection(db, 'students'), where('email', '==', rawEmail.trim()))),
-              3000
+              getDocs(query(collection(db, 'students'), where('email', '==', rawEmail.trim()), limit(1))),
+              2000
             );
           }
 
           if (stuSnap && !stuSnap.empty) {
             stuData = stuSnap.docs[0].data() as Student;
-          } else {
-            const allStuSnap = await withTimeout(getDocs(collection(db, 'students')), 3000);
-            if (allStuSnap && !allStuSnap.empty) {
-              const match = allStuSnap.docs
-                .map(d => d.data() as Student)
-                .find(s => s.email && s.email.trim().toLowerCase() === cleanEmail);
-              if (match) stuData = match;
-            }
           }
 
           if (stuData) {
