@@ -41,7 +41,9 @@ import {
   Receipt,
   FileImage,
   FileSpreadsheet,
-  Palmtree
+  Palmtree,
+  ShieldCheck,
+  CheckCircle2
 } from 'lucide-react';
 import {
   Student,
@@ -56,7 +58,9 @@ import {
   TutorAttendanceRecord,
   DayOfWeek,
   UserProfile,
-  DeleteConfirmTarget
+  DeleteConfirmTarget,
+  CourseType,
+  StudentStatus
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
@@ -119,6 +123,10 @@ import {
   deleteTutorAttendanceRecord,
   resetUserPassword,
   getSystemUsers,
+  getPendingUsers,
+  subscribeToPendingUsers,
+  approveUserAccount,
+  rejectUserAccount,
   deleteSystemUser,
   restoreTrashRecord,
   getAcademySettings,
@@ -553,9 +561,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Real-time Pending Registrations State
+  const [pendingUsers, setPendingUsers] = useState<UserProfile[]>([]);
+  const [approvingUid, setApprovingUid] = useState<string | null>(null);
+  const [rejectingUid, setRejectingUid] = useState<string | null>(null);
+  const [assignTutorMap, setAssignTutorMap] = useState<Record<string, string>>({});
+  const [assignCourseMap, setAssignCourseMap] = useState<Record<string, CourseType>>({});
+  const [assignStatusMap, setAssignStatusMap] = useState<Record<string, StudentStatus>>({});
+
   useEffect(() => {
     loadSystemUsers();
+    // Live subscription for new pending self-registrations
+    const unsub = subscribeToPendingUsers((pending) => {
+      setPendingUsers(pending);
+    });
+    return () => unsub();
   }, []);
+
+  const handleApprovePendingUser = async (user: UserProfile) => {
+    setApprovingUid(user.uid);
+    try {
+      const selectedTutor = assignTutorMap[user.uid] || 'Tutor 1';
+      const selectedCourse = assignCourseMap[user.uid] || user.courseType || 'Quran Reading / Nazra';
+      const selectedStatus = assignStatusMap[user.uid] || 'Active';
+
+      await approveUserAccount(user.uid, 'Director / Admin', {
+        assignedTutorId: selectedTutor,
+        courseType: selectedCourse,
+        studentStatus: selectedStatus
+      });
+
+      await onRefreshData();
+      await loadSystemUsers();
+      setPendingUsers(prev => prev.filter(p => p.uid !== user.uid));
+    } catch (err: any) {
+      alert(`Failed to approve user: ${err.message}`);
+    } finally {
+      setApprovingUid(null);
+    }
+  };
+
+  const handleRejectPendingUser = async (user: UserProfile) => {
+    if (!window.confirm(`Are you sure you want to decline registration for ${user.displayName || user.email}?`)) return;
+    setRejectingUid(user.uid);
+    try {
+      await rejectUserAccount(user.uid, 'Director / Admin');
+      await onRefreshData();
+      await loadSystemUsers();
+      setPendingUsers(prev => prev.filter(p => p.uid !== user.uid));
+    } catch (err: any) {
+      alert(`Failed to decline user: ${err.message}`);
+    } finally {
+      setRejectingUid(null);
+    }
+  };
 
   // Filtered classes for Timetable
   const filteredClasses = tutorFilter === 'all'
@@ -1242,6 +1301,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* 1. OVERVIEW TAB */}
       {currentTab === 'overview' && (
         <div className="space-y-6">
+          {/* Prominent Pending Online Registrations Approval Banner */}
+          {pendingUsers.length > 0 && (
+            <div id="admin_pending_registrations_banner" className="bg-gradient-to-r from-[#FFF9ED] via-amber-50 to-emerald-50/40 border-2 border-[#E8A93E] p-4 sm:p-5 rounded-2xl shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/60">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center relative shrink-0">
+                    <ShieldCheck className="w-5 h-5" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full border-2 border-white animate-ping" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full border-2 border-white" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {pendingUsers.length} New Registration{pendingUsers.length > 1 ? 's' : ''} Awaiting Admin Approval
+                      </h3>
+                      <span className="px-2 py-0.5 bg-amber-500 text-white rounded-full text-[10px] font-bold uppercase tracking-wider">
+                        Action Required
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Prospective students and parents who submitted self-registration online. Review details, assign faculty tutor, and approve to activate access.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCurrentTab('users')}
+                  className="text-xs font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors shrink-0 self-start sm:self-center cursor-pointer"
+                >
+                  Manage in Users Tab →
+                </button>
+              </div>
+
+              {/* Pending Users Review Cards */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+                {pendingUsers.map(user => {
+                  const isApproving = approvingUid === user.uid;
+                  const isRejecting = rejectingUid === user.uid;
+                  const assignedTutor = assignTutorMap[user.uid] || 'Tutor 1';
+                  const assignedCourse = assignCourseMap[user.uid] || user.courseType || 'Quran Reading / Nazra';
+                  const assignedStatus = assignStatusMap[user.uid] || 'Active';
+
+                  return (
+                    <div
+                      key={user.uid}
+                      className="bg-white p-3.5 rounded-xl border border-amber-200/80 shadow-2xs space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-xs sm:text-sm">{user.displayName || 'Prospective User'}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              user.role === 'student' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {user.role}
+                            </span>
+                            {user.studentId && (
+                              <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                {user.studentId}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 font-mono mt-0.5">{user.email}</p>
+                          {user.phone && <p className="text-[11px] text-slate-500 mt-0.5">📞 {user.phone}</p>}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] font-medium text-slate-400 block">
+                            {user.country || 'USA'} ({getTimezoneShortCode(user.timezone || 'America/New_York')})
+                          </span>
+                          <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 mt-1 inline-block font-semibold">
+                            Pending Review
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Course and Tutor Assignment Controls */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-[#FAF9F7] p-2.5 rounded-lg border border-[#EAE6DE] text-xs">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Course</label>
+                          <select
+                            value={assignedCourse}
+                            onChange={(e) => setAssignCourseMap(prev => ({ ...prev, [user.uid]: e.target.value as CourseType }))}
+                            className="w-full bg-white border border-[#D5D0C6] rounded px-2 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                          >
+                            <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                            <option value="Tajweed Rules & Pronunciation">Tajweed Rules</option>
+                            <option value="Hifz / Memorization">Hifz / Memorization</option>
+                            <option value="Islamic Studies & Duas">Islamic Studies</option>
+                            <option value="Arabic Language Basics">Arabic Language</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Assign Faculty</label>
+                          <select
+                            value={assignedTutor}
+                            onChange={(e) => setAssignTutorMap(prev => ({ ...prev, [user.uid]: e.target.value }))}
+                            className="w-full bg-white border border-[#D5D0C6] rounded px-2 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                          >
+                            {tutors.map(t => (
+                              <option key={t.id} value={t.tutorId}>
+                                {t.tutorId} - {t.realName || t.tutorId}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Initial Status</label>
+                          <select
+                            value={assignedStatus}
+                            onChange={(e) => setAssignStatusMap(prev => ({ ...prev, [user.uid]: e.target.value as StudentStatus }))}
+                            className="w-full bg-white border border-[#D5D0C6] rounded px-2 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                          >
+                            <option value="Active">Active Student</option>
+                            <option value="Trial">Free Trial (5 Sessions)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Approval Action Buttons */}
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={isRejecting || isApproving}
+                          onClick={() => handleRejectPendingUser(user)}
+                          className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          {isRejecting ? 'Declining...' : 'Decline'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isRejecting || isApproving}
+                          onClick={() => handleApprovePendingUser(user)}
+                          className="px-4 py-1.5 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg shadow-2xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>{isApproving ? 'Activating Account...' : 'Approve & Activate Access'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Decision Pending Banner if any trials finished 5 sessions */}
           {decisionPendingTrials.length > 0 && (
             <div className="bg-[#FFF9ED] border border-[#E8A93E] p-4 rounded-xl flex items-center justify-between shadow-xs">
@@ -5003,7 +5208,132 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {!hideUserGovernance && (
-              <div className="space-y-3 text-xs pt-1">
+              <div className="space-y-4 text-xs pt-1">
+                {/* 0. Pending Self-Registrations Awaiting Approval */}
+                <div id="users_tab_pending_approvals" className="bg-[#FFF9ED] p-3.5 rounded-xl border border-[#E8A93E] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <ShieldCheck className="w-4 h-4 text-amber-600" />
+                      <span className="font-bold text-[#161F1A] text-xs sm:text-sm">
+                        Pending Self-Registrations ({pendingUsers.length})
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-amber-800 font-semibold bg-amber-100 px-2 py-0.5 rounded-full">
+                      {pendingUsers.length === 0 ? 'All Reviewed' : `${pendingUsers.length} Awaiting Approval`}
+                    </span>
+                  </div>
+
+                  {pendingUsers.length === 0 ? (
+                    <div className="p-3 bg-white/80 border border-amber-200/60 rounded-lg text-center text-[#5A6B61]">
+                      <p className="font-medium text-xs text-slate-700">No new student or parent registrations pending review.</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        When users register via the enrollment form, they will appear here and in the Overview tab for immediate faculty assignment and activation.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {pendingUsers.map(user => {
+                        const isApproving = approvingUid === user.uid;
+                        const isRejecting = rejectingUid === user.uid;
+                        const assignedTutor = assignTutorMap[user.uid] || 'Tutor 1';
+                        const assignedCourse = assignCourseMap[user.uid] || user.courseType || 'Quran Reading / Nazra';
+                        const assignedStatus = assignStatusMap[user.uid] || 'Active';
+
+                        return (
+                          <div key={user.uid} className="p-3 bg-white border border-amber-200 rounded-lg shadow-2xs space-y-2.5">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-900">{user.displayName || 'Prospective User'}</span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                    user.role === 'student' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+                                  }`}>
+                                    {user.role}
+                                  </span>
+                                  {user.studentId && (
+                                    <span className="font-mono text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                      {user.studentId}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-[#5A6B61] font-mono">{user.email}</p>
+                                {user.phone && <p className="text-[10px] text-slate-500">Phone: {user.phone}</p>}
+                              </div>
+                              <div className="text-left sm:text-right text-[11px] text-slate-500">
+                                <span>{user.country || 'USA'} • {getTimezoneShortCode(user.timezone || 'America/New_York')}</span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-[#FAF9F7] p-2 rounded-md border border-[#EAE6DE] text-xs">
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-600 uppercase mb-0.5">Course</label>
+                                <select
+                                  value={assignedCourse}
+                                  onChange={(e) => setAssignCourseMap(prev => ({ ...prev, [user.uid]: e.target.value as CourseType }))}
+                                  className="w-full bg-white border border-[#D5D0C6] rounded px-1.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                                >
+                                  <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                                  <option value="Tajweed Rules & Pronunciation">Tajweed Rules</option>
+                                  <option value="Hifz / Memorization">Hifz / Memorization</option>
+                                  <option value="Islamic Studies & Duas">Islamic Studies</option>
+                                  <option value="Arabic Language Basics">Arabic Language</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-600 uppercase mb-0.5">Assign Faculty</label>
+                                <select
+                                  value={assignedTutor}
+                                  onChange={(e) => setAssignTutorMap(prev => ({ ...prev, [user.uid]: e.target.value }))}
+                                  className="w-full bg-white border border-[#D5D0C6] rounded px-1.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                                >
+                                  {tutors.map(t => (
+                                    <option key={t.id} value={t.tutorId}>
+                                      {t.tutorId} - {t.realName || t.tutorId}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-600 uppercase mb-0.5">Initial Status</label>
+                                <select
+                                  value={assignedStatus}
+                                  onChange={(e) => setAssignStatusMap(prev => ({ ...prev, [user.uid]: e.target.value as StudentStatus }))}
+                                  className="w-full bg-white border border-[#D5D0C6] rounded px-1.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
+                                >
+                                  <option value="Active">Active Student</option>
+                                  <option value="Trial">Free Trial (5 Sessions)</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                disabled={isRejecting || isApproving}
+                                onClick={() => handleRejectPendingUser(user)}
+                                className="px-3 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded transition-colors cursor-pointer disabled:opacity-50"
+                              >
+                                {isRejecting ? 'Declining...' : 'Decline'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isRejecting || isApproving}
+                                onClick={() => handleApprovePendingUser(user)}
+                                className="px-3.5 py-1 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded shadow-2xs transition-colors flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>{isApproving ? 'Activating...' : 'Approve & Activate'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 {/* 1. Admins & Supervisors */}
                 <div className="bg-[#FAF9F7] p-3 rounded-lg border border-[#E3DFD7] space-y-2">
                   <span className="font-bold text-[#161F1A] block">Academy Leadership & Administration</span>

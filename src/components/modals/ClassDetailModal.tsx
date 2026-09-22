@@ -152,7 +152,7 @@ export const ClassDetailModal: React.FC<ClassDetailModalProps> = ({
               </span>
             </div>
 
-            {tutor?.zoomLink && (
+            {tutor?.zoomLink && role !== 'tutor' && (
               <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
                 <span className="text-[#5A6B61] flex items-center gap-1.5">
                   <Video className="w-3.5 h-3.5 text-[#2D8B5C]" /> Classroom Link:

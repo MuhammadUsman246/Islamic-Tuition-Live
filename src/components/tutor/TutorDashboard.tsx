@@ -205,11 +205,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
 
   const handleLaunchZoomDesktop = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!tutor?.zoomLink) {
-      alert('No permanent Zoom classroom link has been registered for your faculty profile. Please contact the Academic Director.');
-      return;
-    }
-    launchTutorZoomDesktop(tutor.zoomLink);
+    launchTutorZoomDesktop(tutor?.zoomLink);
   };
 
   return (
@@ -402,23 +398,16 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                   )}
                 </div>
 
-                <div className="pt-2 border-t border-[#EAE6DE] flex items-center justify-between gap-2">
+                <div className="pt-2 border-t border-[#EAE6DE]">
                   <button
                     onClick={() => {
                       setSelectedStudentForLesson(st.studentId);
                       setIsLessonModalOpen(true);
                     }}
-                    className="flex-1 py-1.5 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors flex items-center justify-center space-x-1"
+                    className="w-full py-2 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors flex items-center justify-center space-x-1.5 shadow-2xs cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5" />
                     <span>Log Lesson</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleQuickAttendance(st.studentId, st.name, 'Present')}
-                    className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 rounded-lg"
-                  >
-                    Present
                   </button>
                 </div>
 

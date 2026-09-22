@@ -55,6 +55,8 @@ import {
   UserProfile,
   UserAccountStatus,
   CourseType,
+  StudentStatus,
+  AllowedCurrency,
   TutorStudentView,
   TrashRecord,
   TrashItemType,
@@ -2920,40 +2922,84 @@ export async function getPendingUsers(): Promise<UserProfile[]> {
 }
 
 /**
+ * Real-time subscription to pending approval registrations
+ */
+export function subscribeToPendingUsers(callback: (pendingUsers: UserProfile[]) => void): () => void {
+  const getFallback = () => ((CACHE as any).users || []).filter((u: UserProfile) => u.status === 'pending_approval');
+  if (isFirestoreQuotaExceeded()) {
+    callback(getFallback());
+    return () => {};
+  }
+  return safeOnSnapshot(
+    query(collection(db, USERS_COL), where('status', '==', 'pending_approval')),
+    (snap) => {
+      if (snap) {
+        const items = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
+        callback(items);
+      } else {
+        callback(getFallback());
+      }
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, USERS_COL);
+      callback(getFallback());
+    },
+    USERS_COL
+  );
+}
+
+/**
  * Admin approves a self-registered user account.
  * Transitions their status to 'active' and activates any linked student record.
  */
-export async function approveUserAccount(uid: string, adminName: string): Promise<void> {
+export async function approveUserAccount(
+  uid: string,
+  adminName: string,
+  options?: {
+    assignedTutorId?: string;
+    courseType?: CourseType;
+    studentStatus?: StudentStatus;
+    monthlyFee?: number;
+    feeCurrency?: AllowedCurrency;
+  }
+): Promise<void> {
   const approvalTimestamp = new Date().toISOString();
   try {
     const userDocRef = doc(db, USERS_COL, uid);
     const userSnap = await getDoc(userDocRef);
     const userData = userSnap.exists() ? (userSnap.data() as UserProfile) : null;
 
-    await setDoc(userDocRef, {
+    const userUpdates: Partial<UserProfile> = {
       status: 'active',
       approvedBy: adminName,
-      approvedAt: approvalTimestamp
-    }, { merge: true });
+      approvedAt: approvalTimestamp,
+      ...(options?.assignedTutorId ? { tutorId: options.assignedTutorId } : {}),
+      ...(options?.courseType ? { courseType: options.courseType } : {})
+    };
+
+    await setDoc(userDocRef, sanitizeFirestoreObject(userUpdates), { merge: true });
 
     // Also update by email doc ID if an alias exists
     if (userData?.email) {
       const emailDocId = userData.email.replace(/[@.]/g, '_');
       if (emailDocId !== uid) {
-        await setDoc(doc(db, USERS_COL, emailDocId), {
-          status: 'active',
-          approvedBy: adminName,
-          approvedAt: approvalTimestamp
-        }, { merge: true });
+        await setDoc(doc(db, USERS_COL, emailDocId), sanitizeFirestoreObject(userUpdates), { merge: true });
       }
 
-      // If user is a student, update their student profile in students collection
+      // If user is a student, activate their student profile in students collection
       if (userData.role === 'student') {
         const stSnap = await getDocs(query(collection(db, STUDENTS_COL), where('email', '==', userData.email)));
-        for (const sDoc of stSnap.docs) {
-          await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
-            status: 'Active'
-          });
+        if (!stSnap.empty) {
+          for (const sDoc of stSnap.docs) {
+            const studentUpdates: Partial<Student> = {
+              status: options?.studentStatus || 'Active',
+              ...(options?.assignedTutorId ? { assignedTutorId: options.assignedTutorId } : {}),
+              ...(options?.courseType ? { courseType: options.courseType } : {}),
+              ...(options?.monthlyFee !== undefined ? { monthlyFee: options.monthlyFee } : {}),
+              ...(options?.feeCurrency ? { feeCurrency: options.feeCurrency } : {})
+            };
+            await updateDoc(doc(db, STUDENTS_COL, sDoc.id), sanitizeFirestoreObject(studentUpdates));
+          }
         }
       }
     }
@@ -2966,12 +3012,37 @@ export async function approveUserAccount(uid: string, adminName: string): Promis
 /**
  * Admin rejects a pending user registration
  */
-export async function rejectUserAccount(uid: string): Promise<void> {
+export async function rejectUserAccount(uid: string, adminName = 'Admin'): Promise<void> {
   try {
     const userDocRef = doc(db, USERS_COL, uid);
+    const userSnap = await getDoc(userDocRef);
+    const userData = userSnap.exists() ? (userSnap.data() as UserProfile) : null;
+
     await setDoc(userDocRef, {
-      status: 'inactive'
+      status: 'inactive',
+      rejectedBy: adminName,
+      rejectedAt: new Date().toISOString()
     }, { merge: true });
+
+    if (userData?.email) {
+      const emailDocId = userData.email.replace(/[@.]/g, '_');
+      if (emailDocId !== uid) {
+        await setDoc(doc(db, USERS_COL, emailDocId), {
+          status: 'inactive',
+          rejectedBy: adminName,
+          rejectedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+
+      if (userData.role === 'student') {
+        const stSnap = await getDocs(query(collection(db, STUDENTS_COL), where('email', '==', userData.email)));
+        for (const sDoc of stSnap.docs) {
+          await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
+            status: 'Inactive'
+          });
+        }
+      }
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `${USERS_COL}/${uid}`);
     throw err;
@@ -3030,13 +3101,13 @@ export async function registerSelfStudentOrParent(params: {
     generatedStudentId = `STU-${Math.floor(100 + Math.random() * 900)}`;
   }
 
-  // 3. Persist profile in Firestore with status 'active' (NEVER write password to Firestore)
+  // 3. Persist profile in Firestore with status 'pending_approval' (Awaiting Director Review)
   const newProfile: UserProfile = {
     uid,
     email: cleanEmail,
     displayName: params.displayName.trim(),
     role: params.role,
-    status: 'active',
+    status: 'pending_approval',
     phone: params.phone ? params.phone.trim() : '',
     country: params.country || 'USA',
     timezone: params.timezone || 'America/New_York',
@@ -3054,7 +3125,7 @@ export async function registerSelfStudentOrParent(params: {
     await setDoc(doc(db, USERS_COL, emailDocId), sanitizeFirestoreObject(newProfile));
   }
 
-  // 4. Create entry in students collection if student
+  // 4. Create entry in students collection if student with status 'Pending'
   if (params.role === 'student' && generatedStudentId) {
     try {
       const newStudentDoc: Omit<Student, 'id'> = {
@@ -3069,10 +3140,10 @@ export async function registerSelfStudentOrParent(params: {
         country: params.country || 'USA',
         timezone: params.timezone || 'America/New_York',
         courseType: params.courseType || 'Quran Reading / Nazra',
-        status: 'Active',
+        status: 'Pending',
         trialSessionsCompleted: 0,
         trialSessionsTotal: 5,
-        trialStatus: 'In Progress',
+        trialStatus: 'Decision Pending',
         createdAt: new Date().toISOString()
       };
       await addDoc(collection(db, STUDENTS_COL), sanitizeFirestoreObject(newStudentDoc));
