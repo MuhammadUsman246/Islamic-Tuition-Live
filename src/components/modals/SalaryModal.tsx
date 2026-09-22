@@ -107,8 +107,8 @@ export const SalaryModal: React.FC<SalaryModalProps> = ({
               className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
               required
             >
-              {tutors.map(t => (
-                <option key={t.id} value={t.tutorId}>
+              {tutors.map((t, idx) => (
+                <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
                   {t.tutorId} ({t.realName})
                 </option>
               ))}

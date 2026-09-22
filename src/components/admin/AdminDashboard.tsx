@@ -3055,24 +3055,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {tutors.map((tutor) => {
+            {tutors.map((tutor, idx) => {
               const tutorClasses = classes.filter(c => c.tutorId === tutor.tutorId);
               const tutorStudents = students.filter(s => s.assignedTutorId === tutor.tutorId);
               return (
-                <div key={tutor.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
+                <div key={`${tutor.id || tutor.tutorId}_${idx}`} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
                   <div className="flex items-start justify-between">
                     <div>
                       <span className="text-xs font-bold text-[#2D8B5C] tracking-wide uppercase">{tutor.tutorId}</span>
                       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         <h4 className="text-sm font-bold text-[#161F1A]">{tutor.realName || tutor.tutorId}</h4>
-                        <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider uppercase inline-flex items-center gap-1 shrink-0 ${
-                          tutor.availabilityStatus === 'Available'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                            : 'bg-amber-100 text-amber-800 border border-amber-200'
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${tutor.availabilityStatus === 'Available' ? 'bg-[#25D366]' : 'bg-amber-500'}`} />
-                          {tutor.availabilityStatus || 'Busy'}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const current = tutor.availabilityStatus || (tutor.status === 'Active' ? 'Available' : 'Busy');
+                            const next = current === 'Available' ? 'Busy' : 'Available';
+                            await updateTutor(tutor.id, { availabilityStatus: next });
+                            if (onRefreshData) await onRefreshData();
+                          }}
+                          title="Click to toggle Live Availability (Available / Busy)"
+                          className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider uppercase inline-flex items-center gap-1 shrink-0 cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                            (tutor.availabilityStatus || (tutor.status === 'Active' ? 'Available' : 'Busy')) === 'Available'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200 hover:bg-amber-200'
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            (tutor.availabilityStatus || (tutor.status === 'Active' ? 'Available' : 'Busy')) === 'Available' 
+                              ? 'bg-[#25D366]' 
+                              : 'bg-amber-500'
+                          }`} />
+                          {tutor.availabilityStatus || (tutor.status === 'Active' ? 'Available' : 'Busy')}
+                        </button>
                       </div>
                       <p className="text-xs text-[#5A6B61]">{tutor.email}{tutor.phone ? ` • ${tutor.phone}` : ''}</p>
                     </div>
@@ -5569,6 +5583,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onClose={() => setIsTutorModalOpen(false)}
         onSave={handleSaveTutor}
         initialTutor={selectedTutor}
+        existingTutorsCount={tutors.length}
       />
 
       <LessonModal

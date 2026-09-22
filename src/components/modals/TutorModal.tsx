@@ -8,7 +8,7 @@ interface TutorModalProps {
   onClose: () => void;
   onSave: (tutorData: Omit<Tutor, 'id'>, id?: string) => Promise<void>;
   initialTutor?: Tutor | null;
-  existingTutorsCount: number;
+  existingTutorsCount?: number;
 }
 
 export const TutorModal: React.FC<TutorModalProps> = ({
@@ -16,7 +16,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
   onClose,
   onSave,
   initialTutor,
-  existingTutorsCount
+  existingTutorsCount = 20
 }) => {
   const [tutorId, setTutorId] = useState<string>('');
   const [realName, setRealName] = useState<string>('');
@@ -26,6 +26,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
   const [zoomLink, setZoomLink] = useState<string>('');
   const [monthlySalaryPKR, setMonthlySalaryPKR] = useState<number>(35000);
   const [status, setStatus] = useState<'Active' | 'Inactive' | 'On Leave'>('Active');
+  const [availabilityStatus, setAvailabilityStatus] = useState<'Available' | 'Busy'>('Available');
   const [notes, setNotes] = useState<string>('');
   const [createTutorUser, setCreateTutorUser] = useState<boolean>(true);
   const [tutorPassword, setTutorPassword] = useState<string>('tutor123');
@@ -42,6 +43,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
       setZoomLink(initialTutor.zoomLink || '');
       setMonthlySalaryPKR(initialTutor.monthlySalaryPKR || 35000);
       setStatus(initialTutor.status || 'Active');
+      setAvailabilityStatus(initialTutor.availabilityStatus || 'Available');
       setNotes(initialTutor.notes || '');
     } else {
       const nextId = `Tutor ${existingTutorsCount + 1}`;
@@ -53,6 +55,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
       setZoomLink('https://zoom.us/j/90000000000?pwd=tuition_secret');
       setMonthlySalaryPKR(35000);
       setStatus('Active');
+      setAvailabilityStatus('Available');
       setNotes('');
     }
   }, [initialTutor, existingTutorsCount, isOpen]);
@@ -85,6 +88,7 @@ export const TutorModal: React.FC<TutorModalProps> = ({
           zoomLink: zoomLink.trim(),
           monthlySalaryPKR: Number(monthlySalaryPKR) || 0,
           status,
+          availabilityStatus,
           notes: notes.trim()
         },
         initialTutor?.id
@@ -136,8 +140,8 @@ export const TutorModal: React.FC<TutorModalProps> = ({
             </div>
           )}
 
-          {/* Tutor ID & Status */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Tutor ID, Account Status & Availability */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-semibold text-[#161F1A] mb-1">
                 Tutor ID (e.g. Tutor 1)
@@ -164,6 +168,20 @@ export const TutorModal: React.FC<TutorModalProps> = ({
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive / Suspended</option>
                 <option value="On Leave">On Leave</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#161F1A] mb-1">
+                Live Availability
+              </label>
+              <select
+                value={availabilityStatus}
+                onChange={(e) => setAvailabilityStatus(e.target.value as any)}
+                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
+              >
+                <option value="Available">Available (Green)</option>
+                <option value="Busy">Busy (In Class)</option>
               </select>
             </div>
           </div>

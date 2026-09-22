@@ -217,9 +217,9 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
               onChange={(e) => setSelectedNewTutorId(e.target.value)}
               className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white text-[#161F1A] font-medium"
             >
-              {tutors.map((t) => (
+              {tutors.map((t, idx) => (
                 <option
-                  key={t.id}
+                  key={`${t.id || t.tutorId}_${idx}`}
                   value={t.tutorId}
                   disabled={t.tutorId === currentTutorId}
                 >

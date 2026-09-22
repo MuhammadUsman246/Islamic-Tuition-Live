@@ -303,8 +303,8 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                 onChange={(e) => setAssignedTutorId(e.target.value)}
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
               >
-                {tutors.map(t => (
-                  <option key={t.id} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
+                {tutors.map((t, idx) => (
+                  <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
                 ))}
               </select>
             </div>

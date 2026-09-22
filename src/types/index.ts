@@ -63,6 +63,7 @@ export interface Tutor {
   id: string; // document id
   tutorId: string; // Operational permanent identifier: "Tutor 1", "Tutor 2", etc.
   realName: string; // Stored separately, visible to Admin
+  displayName?: string; // Display name seen by students
   email: string;
   phone: string;
   zoomLink: string; // Permanent Tutor Zoom link managed by Admin

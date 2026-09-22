@@ -351,8 +351,8 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                         onChange={(e) => setAssignedTutorId(e.target.value)}
                         className="w-full border border-[#D5D0C6] rounded-lg p-1.5 bg-white"
                       >
-                        {availableTutors.map((t) => (
-                          <option key={t.id} value={t.tutorId}>
+                        {availableTutors.map((t, idx) => (
+                          <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
                             {t.realName} ({t.tutorId})
                           </option>
                         ))}

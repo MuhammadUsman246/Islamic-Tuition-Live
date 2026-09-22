@@ -540,12 +540,12 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
               >
                 <option value="all">All Faculty</option>
                 {tutors && tutors.length > 0 ? (
-                  tutors.map(t => (
-                    <option key={t.id} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
+                  tutors.map((t, idx) => (
+                    <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
                   ))
                 ) : (
-                  uniqueTutors.map(tId => (
-                    <option key={tId} value={tId}>{tId}</option>
+                  uniqueTutors.map((tId, idx) => (
+                    <option key={`${tId}_${idx}`} value={tId}>{tId}</option>
                   ))
                 )}
               </select>

@@ -1129,6 +1129,7 @@ export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: b
           phone: existingData.phone !== undefined ? existingData.phone : config.phone,
           zoomLink: existingData.zoomLink || config.zoomLink,
           status: existingData.status || 'Active',
+          availabilityStatus: existingData.availabilityStatus || 'Available',
           monthlySalaryPKR: existingData.monthlySalaryPKR !== undefined && existingData.monthlySalaryPKR > 0 ? existingData.monthlySalaryPKR : config.salaryPKR,
           hourlyRatePKR: existingData.hourlyRatePKR || Math.round(config.salaryPKR / 40),
           assignedStudentIds: existingData.assignedStudentIds || [],
@@ -1155,54 +1156,64 @@ export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: b
   return { success: true, count: syncedTutors.length, tutors: syncedTutors };
 }
 
-export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
-  if (CACHE.tutors && CACHE.tutors.length >= 20 && !forceRefresh) {
-    return CACHE.tutors;
+/**
+ * Returns the deterministic canonical Firestore document ID for a tutor.
+ * e.g., "Tutor 1" -> "tutor_1", "Tutor 2" -> "tutor_2"
+ */
+export function getCanonicalTutorDocId(tutorId: string): string {
+  const clean = (tutorId || '').trim();
+  const num = clean.replace(/\D/g, '');
+  if (num) {
+    return `tutor_${num}`;
   }
-  const stored = loadCachedCollection<Tutor[]>('tutors');
-  if (stored && stored.length >= 20 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
-    CACHE.tutors = stored;
-    return stored;
-  }
+  return `tutor_${clean.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+}
 
-  let firestoreTutors: Tutor[] = [];
-  if (!isFirestoreQuotaExceeded()) {
-    try {
-      const snap = await getDocs(collection(db, TUTORS_COL));
-      if (!snap.empty) {
-        firestoreTutors = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
-      }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, TUTORS_COL);
-    }
-  }
-
-  // Merge map: Baseline of all 19 official academy tutors
+/**
+ * Robustly deduplicates a list of tutors by tutorId.
+ * Guarantees that no duplicate "Tutor 2", "Tutor 3", etc. can ever appear in state or UI.
+ * Merges updated fields (realName, phone, status, zoomLink, salary) cleanly.
+ */
+export function deduplicateTutors(rawTutors: Tutor[]): Tutor[] {
   const map = new Map<string, Tutor>();
-  INITIAL_TUTOR_ENTITIES.forEach(t => map.set(t.tutorId, { ...t }));
 
-  // Overlay any locally saved updates
-  if (stored && Array.isArray(stored)) {
-    stored.forEach(t => {
-      const existing = map.get(t.tutorId);
-      if (existing) {
-        map.set(t.tutorId, { ...existing, ...t });
-      } else {
-        map.set(t.tutorId, t);
-      }
-    });
-  }
+  // 1. Initialize with baseline entities to preserve structure and permanent Zoom links
+  INITIAL_TUTOR_ENTITIES.forEach(t => {
+    const key = t.tutorId.trim().toLowerCase();
+    map.set(key, { ...t, availabilityStatus: t.availabilityStatus || 'Available' });
+  });
 
-  // Overlay any Firestore stored updates
-  if (firestoreTutors.length > 0) {
-    firestoreTutors.forEach(t => {
-      const existing = map.get(t.tutorId);
-      if (existing) {
-        map.set(t.tutorId, { ...existing, ...t });
-      } else {
-        map.set(t.tutorId, t);
-      }
-    });
+  // 2. Overlay any provided tutors (from cache or Firestore)
+  for (const t of rawTutors) {
+    if (!t || !t.tutorId) continue;
+    const key = t.tutorId.trim().toLowerCase();
+    const existing = map.get(key);
+    const canonicalId = getCanonicalTutorDocId(t.tutorId);
+
+    if (!existing) {
+      map.set(key, {
+        ...t,
+        id: canonicalId,
+        availabilityStatus: t.availabilityStatus || (t.status === 'Active' ? 'Available' : 'Busy')
+      });
+    } else {
+      map.set(key, {
+        ...existing,
+        ...t,
+        id: canonicalId, // Always keep canonical doc ID
+        realName: (t.realName && t.realName.trim()) ? t.realName.trim() : existing.realName,
+        displayName: (t.displayName && t.displayName.trim()) ? t.displayName.trim() : (t.realName?.trim() || existing.displayName),
+        email: (t.email && t.email.trim()) ? t.email.trim() : existing.email,
+        phone: (t.phone && t.phone.trim()) ? t.phone.trim() : existing.phone,
+        zoomLink: (t.zoomLink && t.zoomLink.trim()) ? t.zoomLink.trim() : existing.zoomLink,
+        status: t.status || existing.status || 'Active',
+        availabilityStatus: t.availabilityStatus || existing.availabilityStatus || (t.status === 'Active' ? 'Available' : 'Busy'),
+        monthlySalaryPKR: t.monthlySalaryPKR !== undefined && t.monthlySalaryPKR > 0 ? t.monthlySalaryPKR : existing.monthlySalaryPKR,
+        hourlyRatePKR: t.hourlyRatePKR || existing.hourlyRatePKR,
+        assignedStudentIds: t.assignedStudentIds && t.assignedStudentIds.length > 0 ? t.assignedStudentIds : existing.assignedStudentIds,
+        notes: t.notes !== undefined ? t.notes : existing.notes
+      });
+    }
   }
 
   const items = Array.from(map.values());
@@ -1211,14 +1222,118 @@ export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
     const numB = parseInt(b.tutorId.replace(/\D/g, '')) || 0;
     return numA - numB;
   });
+  return items;
+}
 
+/**
+ * Automatically cleans up any duplicate or non-canonical tutor documents in Firestore.
+ * Keeps only the single canonical document per tutor (e.g. `tutor_2`) and merges data.
+ */
+async function cleanupDuplicateFirestoreTutors(docs: any[]): Promise<void> {
+  if (isFirestoreQuotaExceeded() || !docs || docs.length === 0) return;
+  try {
+    const grouped = new Map<string, any[]>();
+    for (const d of docs) {
+      const data = d.data();
+      const tutorId = data?.tutorId || '';
+      if (!tutorId) continue;
+      const key = tutorId.trim().toLowerCase();
+      const list = grouped.get(key) || [];
+      list.push(d);
+      grouped.set(key, list);
+    }
+
+    for (const [, docList] of grouped) {
+      if (docList.length > 1) {
+        // Find or determine the canonical doc
+        const firstData = docList[0].data();
+        const canonicalId = getCanonicalTutorDocId(firstData.tutorId);
+        
+        // Find best realName, phone, etc. across all duplicates
+        let bestRealName = '';
+        let bestPhone = '';
+        let bestZoom = '';
+        let bestSalary = 0;
+        let bestStatus: any = 'Active';
+        let bestAvailability: any = 'Available';
+
+        for (const d of docList) {
+          const data = d.data();
+          if (data.realName && data.realName.trim()) bestRealName = data.realName.trim();
+          if (data.phone && data.phone.trim()) bestPhone = data.phone.trim();
+          if (data.zoomLink && data.zoomLink.trim()) bestZoom = data.zoomLink.trim();
+          if (data.monthlySalaryPKR && data.monthlySalaryPKR > 0) bestSalary = data.monthlySalaryPKR;
+          if (data.status) bestStatus = data.status;
+          if (data.availabilityStatus) bestAvailability = data.availabilityStatus;
+        }
+
+        // Set the single canonical document
+        await setDoc(doc(db, TUTORS_COL, canonicalId), sanitizeFirestoreObject({
+          ...firstData,
+          id: canonicalId,
+          ...(bestRealName ? { realName: bestRealName } : {}),
+          ...(bestPhone ? { phone: bestPhone } : {}),
+          ...(bestZoom ? { zoomLink: bestZoom } : {}),
+          ...(bestSalary ? { monthlySalaryPKR: bestSalary } : {}),
+          status: bestStatus,
+          availabilityStatus: bestAvailability
+        }), { merge: true });
+
+        // Delete all non-canonical or duplicate documents
+        for (const d of docList) {
+          if (d.id !== canonicalId) {
+            try {
+              await deleteDoc(d.ref);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.debug("[TutorsCleanup] Notice:", err);
+  }
+}
+
+export async function getTutors(forceRefresh = false): Promise<Tutor[]> {
+  if (CACHE.tutors && CACHE.tutors.length >= 20 && !forceRefresh) {
+    return deduplicateTutors(CACHE.tutors);
+  }
+  const stored = loadCachedCollection<Tutor[]>('tutors');
+  if (stored && stored.length >= 20 && !forceRefresh && (isCachedCollectionFresh('tutors') || isFirestoreQuotaExceeded())) {
+    const deduped = deduplicateTutors(stored);
+    CACHE.tutors = deduped;
+    return deduped;
+  }
+
+  let firestoreTutors: Tutor[] = [];
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const snap = await getDocs(collection(db, TUTORS_COL));
+      if (!snap.empty) {
+        firestoreTutors = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
+        if (snap.docs.length > 20) {
+          cleanupDuplicateFirestoreTutors(snap.docs).catch(() => {});
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, TUTORS_COL);
+    }
+  }
+
+  const combined = [
+    ...INITIAL_TUTOR_ENTITIES,
+    ...(stored && Array.isArray(stored) ? stored : []),
+    ...firestoreTutors
+  ];
+
+  const items = deduplicateTutors(combined);
   CACHE.tutors = items;
   saveCachedCollection('tutors', items);
   return items;
 }
 
 export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => void {
-  const getFallback = () => CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES;
+  const getFallback = () => deduplicateTutors(CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES);
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
@@ -1226,16 +1341,17 @@ export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => vo
   return safeOnSnapshot(
     collection(db, TUTORS_COL),
     (snap) => {
-      if (!snap.empty && snap.docs.length >= 20) {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
-        items.sort((a, b) => {
-          const numA = parseInt(a.tutorId.replace(/\D/g, '')) || 0;
-          const numB = parseInt(b.tutorId.replace(/\D/g, '')) || 0;
-          return numA - numB;
-        });
-        CACHE.tutors = items;
-        saveCachedCollection('tutors', items);
-        callback(items);
+      if (!snap.empty) {
+        const rawItems = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tutor));
+        const deduplicated = deduplicateTutors(rawItems);
+        CACHE.tutors = deduplicated;
+        saveCachedCollection('tutors', deduplicated);
+        callback(deduplicated);
+
+        // If duplicate documents exist in Firestore, clean them up in background
+        if (snap.docs.length > deduplicated.length) {
+          cleanupDuplicateFirestoreTutors(snap.docs).catch(() => {});
+        }
       } else {
         const fallback = getFallback();
         callback(fallback);
@@ -1252,30 +1368,78 @@ export function subscribeToTutors(callback: (tutors: Tutor[]) => void): () => vo
 }
 
 export async function addTutor(tutorData: Omit<Tutor, 'id'>): Promise<string> {
-  const docRef = doc(collection(db, TUTORS_COL));
-  const docId = docRef.id;
-  const newTutor: Tutor = { id: docId, ...tutorData };
-  CACHE.tutors = [newTutor, ...(CACHE.tutors || [])];
-  saveCachedCollection('tutors', CACHE.tutors);
+  const canonicalId = getCanonicalTutorDocId(tutorData.tutorId);
+
+  // Check if a tutor with this tutorId or ID already exists to prevent ANY duplication
+  const existing = (CACHE.tutors || []).find(t =>
+    t.tutorId.trim().toLowerCase() === tutorData.tutorId.trim().toLowerCase() ||
+    t.id === canonicalId
+  );
+
+  if (existing) {
+    // If it already exists, update in-place rather than creating a duplicate
+    await updateTutor(existing.id || canonicalId, tutorData);
+    return existing.id || canonicalId;
+  }
+
+  const newTutor: Tutor = {
+    id: canonicalId,
+    ...tutorData,
+    availabilityStatus: tutorData.availabilityStatus || 'Available'
+  };
+
+  const updatedList = deduplicateTutors([newTutor, ...(CACHE.tutors || [])]);
+  CACHE.tutors = updatedList;
+  saveCachedCollection('tutors', updatedList);
 
   if (!isFirestoreQuotaExceeded()) {
-    setDoc(docRef, sanitizeFirestoreObject(tutorData)).catch((err) => {
+    setDoc(doc(db, TUTORS_COL, canonicalId), sanitizeFirestoreObject(newTutor), { merge: true }).catch((err) => {
       handleFirestoreError(err, OperationType.CREATE, TUTORS_COL);
     });
   }
-  return docId;
+  return canonicalId;
 }
 
 export async function updateTutor(id: string, updates: Partial<Tutor>): Promise<void> {
+  // Determine canonical document ID
+  const matchedTutor = CACHE.tutors?.find(t => t.id === id || t.tutorId === id);
+  const targetTutorId = updates.tutorId || matchedTutor?.tutorId || (id.startsWith('tutor_') ? `Tutor ${id.replace(/\D/g, '')}` : id);
+  const canonicalId = getCanonicalTutorDocId(targetTutorId);
+
+  // 1. Optimistic Cache Update with strict deduplication
   if (CACHE.tutors) {
-    CACHE.tutors = CACHE.tutors.map(t => t.id === id ? { ...t, ...updates } : t);
+    const updated = CACHE.tutors.map(t => {
+      if (t.id === id || t.id === canonicalId || t.tutorId === targetTutorId) {
+        return {
+          ...t,
+          ...updates,
+          id: canonicalId,
+          availabilityStatus: updates.availabilityStatus || t.availabilityStatus || 'Available'
+        };
+      }
+      return t;
+    });
+    CACHE.tutors = deduplicateTutors(updated);
     saveCachedCollection('tutors', CACHE.tutors);
   }
+
+  // 2. Persist to Firestore using setDoc with merge to ensure document is created/updated cleanly
   if (!isFirestoreQuotaExceeded()) {
     try {
-      await updateDoc(doc(db, TUTORS_COL, id), sanitizeFirestoreObject(updates));
+      await setDoc(doc(db, TUTORS_COL, canonicalId), sanitizeFirestoreObject({
+        ...updates,
+        id: canonicalId,
+        tutorId: targetTutorId
+      }), { merge: true });
+
+      // If the old `id` was an arbitrary or duplicate document ID, delete it
+      if (id && id !== canonicalId) {
+        try {
+          await deleteDoc(doc(db, TUTORS_COL, id));
+        } catch (_) {}
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${TUTORS_COL}/${id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `${TUTORS_COL}/${canonicalId}`);
     }
   }
 }

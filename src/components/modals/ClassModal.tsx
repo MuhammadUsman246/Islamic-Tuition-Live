@@ -227,8 +227,8 @@ export const ClassModal: React.FC<ClassModalProps> = ({
                 onChange={(e) => setTutorId(e.target.value)}
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
               >
-                {tutors.map(t => (
-                  <option key={t.id} value={t.tutorId}>
+                {tutors.map((t, idx) => (
+                  <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
                     {t.tutorId} ({t.realName})
                   </option>
                 ))}

@@ -39,7 +39,8 @@ import {
   subscribeToLessons,
   subscribeToStudents,
   subscribeToClasses,
-  loadCachedCollection
+  loadCachedCollection,
+  deduplicateTutors
 } from './services/dataService';
 import { ensureDatabaseSeeded } from './services/seedData';
 import { clearAllAcademyData } from './services/seedData';
@@ -245,7 +246,7 @@ const MainPortal: React.FC = () => {
   });
   const [tutors, setTutors] = useState<Tutor[]>(() => {
     const cached = loadCachedCollection<Tutor[]>('tutors');
-    return cached && cached.length >= 20 ? cached : INITIAL_TUTOR_ENTITIES;
+    return deduplicateTutors(cached && cached.length >= 20 ? cached : INITIAL_TUTOR_ENTITIES);
   });
   const [classes, setClasses] = useState<TimetableClass[]>(() => {
     return loadCachedCollection<TimetableClass[]>('classes') || ALL_INITIAL_CLASSES;
@@ -279,7 +280,7 @@ const MainPortal: React.FC = () => {
       const data = await fetchAllAcademyData(forceRefresh);
 
       if (data.students && data.students.length > 0) setStudents(data.students);
-      if (data.tutors && data.tutors.length >= 20) setTutors(data.tutors);
+      if (data.tutors && data.tutors.length > 0) setTutors(deduplicateTutors(data.tutors));
       if (data.classes && data.classes.length > 0) setClasses(data.classes);
       if (data.lessons) setLessons(data.lessons);
       if (data.fees) setFees(data.fees);
@@ -308,7 +309,7 @@ const MainPortal: React.FC = () => {
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const unsub = subscribeToTutors((updatedTutors) => {
       if (updatedTutors && updatedTutors.length > 0) {
-        setTutors(updatedTutors);
+        setTutors(deduplicateTutors(updatedTutors));
       }
     });
     return () => unsub();
