@@ -5363,7 +5363,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {
                             uid: 'primary_admin',
                             email: 'muhammadusmanabbasi100@gmail.com',
-                            displayName: 'Academy Director (Admin)',
+                            displayName: 'Muhammad Usman',
                             role: 'admin' as const,
                             status: 'active' as const,
                             createdAt: new Date().toISOString()

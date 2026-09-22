@@ -118,7 +118,7 @@ const MainPortal: React.FC = () => {
 
   const currentUserId = (adminViewingRole && adminViewingTargetId)
     ? `${role}_${adminViewingTargetId}`
-    : (userProfile?.uid || 'user');
+    : (role === 'tutor' && userProfile?.tutorId ? userProfile.tutorId : (userProfile?.uid || 'user'));
 
   // Auto-request desktop notifications for workplace/academy devices
   useEffect(() => {
@@ -150,23 +150,36 @@ const MainPortal: React.FC = () => {
       playNotificationChime();
 
       // Trigger desktop push notification if enabled
-      const channelLabel = newMsg.threadId === 'channel_staff_group'
-        ? 'Faculty & Staff Group'
-        : `${newMsg.senderName}`;
+      let channelLabel = newMsg.senderName;
+      if (newMsg.threadId.startsWith('desk_tutor_')) {
+        channelLabel = role === 'tutor'
+          ? 'Admin & Supervisor Group'
+          : `${newMsg.senderName} (Support Group)`;
+      } else if (newMsg.threadId.startsWith('dm_admin_tutor_')) {
+        channelLabel = role === 'tutor' ? 'Admin' : `${newMsg.senderName} (Direct)`;
+      } else if (newMsg.threadId === 'dm_admin_supervisor') {
+        channelLabel = role === 'supervisor' ? 'Admin' : 'Academic Supervisor';
+      }
       
       const snippet = newMsg.attachment
         ? (newMsg.attachment.type === 'audio' ? 'Sent a voice note' : `Sent a ${newMsg.attachment.name}`)
         : (newMsg.text || 'Sent a message');
 
+      const senderDisplay = (role === 'tutor' && newMsg.senderRole === 'admin')
+        ? 'Admin'
+        : `${newMsg.senderName} (${newMsg.senderRole.toUpperCase()})`;
+
       sendDesktopNotification(
         newMsg.id,
-        `${newMsg.senderName} (${newMsg.senderRole.toUpperCase()})`,
+        senderDisplay,
         snippet
       );
 
       // Show in-app floating toast banner
       setIncomingMessageToast({
-        message: newMsg,
+        message: (role === 'tutor' && newMsg.senderRole === 'admin')
+          ? { ...newMsg, senderName: 'Admin' }
+          : newMsg,
         channelName: channelLabel
       });
     });

@@ -72,7 +72,7 @@ import {
 export interface ChannelDef {
   id: string;
   name: string;
-  category: 'staff_group' | 'direct_admin';
+  category: 'staff_group' | 'direct_admin' | 'tutor_desk';
   description: string;
   targetUserId?: string;
   targetRole?: UserRole;
@@ -88,7 +88,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
   const role: UserRole = activeRole || userProfile?.role || 'admin';
   const currentUserId = (adminViewingRole && adminViewingTargetId)
     ? `${role}_${adminViewingTargetId}`
-    : (userProfile?.uid || 'user');
+    : (role === 'tutor' && userProfile?.tutorId ? userProfile.tutorId : (userProfile?.uid || 'user'));
 
   const [students, setStudents] = useState<Student[]>([]);
   const [tutors, setTutors] = useState<Tutor[]>([]);
@@ -270,31 +270,20 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
   }, [adminViewingRole, adminViewingTargetId, tutors, students, userProfile]);
 
   // Strict Chat Structure & Permissions:
-  // 1. One Staff Group containing All Admins, All Supervisors, All Tutors.
-  // 2. Direct 1-to-1 chats:
-  //    - Tutor <-> Admin
-  //    - Supervisor <-> Admin
-  //    - Student <-> Admin
-  //    - Parent <-> Admin
-  // 3. Tutors CANNOT see other tutors' chats, student chats, or parent chats.
+  // 1. Dedicated Tutor Support Groups:
+  //    - Each tutor has their own private group with [That Specific Tutor + All Admins + All Supervisors].
+  //    - There is NO group where all staff/tutors are combined.
+  //    - No other tutor can access this group, completely eliminating live class distractions.
+  // 2. Direct 1-to-1 Channels:
+  //    - For Tutors: Displays strictly as "Admin" (no personal name).
+  //    - For Supervisors: Displays strictly as "Admin".
+  //    - For Students / Parents: Displays as "Admin".
   const availableChannels = useMemo<ChannelDef[]>(() => {
     const channels: ChannelDef[] = [];
-    const isStaff = role === 'admin' || role === 'supervisor' || role === 'tutor';
 
-    // 1. Staff Group (Strictly: Admin, Supervisor, Tutor)
-    if (isStaff) {
-      channels.push({
-        id: 'channel_staff_group',
-        name: 'Faculty & Staff Group',
-        category: 'staff_group',
-        description: 'Official group for Academy Director, Academic Supervisors, and Faculty Tutors.',
-        avatarText: 'FS'
-      });
-    }
-
-    // 2. Direct 1-to-1 Channels
+    // Role-specific channels
     if (role === 'admin') {
-      // Supervisor 1-to-1
+      // Direct 1-to-1 with Academic Supervisor
       channels.push({
         id: 'dm_admin_supervisor',
         name: 'Academic Supervisor',
@@ -304,14 +293,28 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
         avatarText: 'AS'
       });
 
-      // Tutors 1-to-1 (Admin can message each tutor)
+      // Tutor Support Groups (Admin + Supervisors + That Specific Tutor)
+      tutors.forEach(t => {
+        const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
+        channels.push({
+          id: `desk_tutor_${tKey}`,
+          name: `${t.realName || t.tutorId} (Support Group)`,
+          category: 'tutor_desk',
+          description: `Support group with ${t.realName || t.tutorId}, Admins, and Supervisors.`,
+          targetUserId: t.tutorId,
+          targetRole: 'tutor',
+          avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
+        });
+      });
+
+      // Tutors 1-to-1 (Admin private line with each tutor)
       tutors.forEach(t => {
         const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
         channels.push({
           id: `dm_admin_tutor_${tKey}`,
-          name: `${t.realName || t.tutorId} (${t.tutorId})`,
+          name: `${t.realName || t.tutorId} (Direct)`,
           category: 'direct_admin',
-          description: `Direct 1-to-1 faculty line with ${t.realName || t.tutorId}.`,
+          description: `Direct 1-to-1 private line with ${t.realName || t.tutorId}.`,
           targetUserId: t.tutorId,
           targetRole: 'tutor',
           avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
@@ -351,24 +354,49 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
         }
       });
     } else if (role === 'supervisor') {
-      // Supervisor can ONLY message the Admin (+ participates in Staff Group)
+      // Supervisor 1-to-1 with Admin (strictly "Admin")
       channels.push({
         id: 'dm_admin_supervisor',
-        name: 'Academy Director',
+        name: 'Admin',
         category: 'direct_admin',
-        description: 'Direct 1-to-1 priority desk with Academy Director.',
+        description: 'Direct 1-to-1 priority desk with Administration.',
         targetRole: 'admin',
         avatarText: 'AD'
       });
+
+      // Supervisor can monitor and coordinate in ALL tutor support groups
+      tutors.forEach(t => {
+        const tKey = t.tutorId.replace(/\s+/g, '_').toLowerCase();
+        channels.push({
+          id: `desk_tutor_${tKey}`,
+          name: `${t.realName || t.tutorId} (Support Group)`,
+          category: 'tutor_desk',
+          description: `Support group with ${t.realName || t.tutorId}, Admins, and Supervisors.`,
+          targetUserId: t.tutorId,
+          targetRole: 'tutor',
+          avatarText: (t.realName || t.tutorId).slice(0, 2).toUpperCase()
+        });
+      });
     } else if (role === 'tutor') {
-      // Tutor can ONLY message the Admin (+ participates in Staff Group)
+      // Tutor has their own dedicated Support Group (with Admin & Supervisors)
       const currentTutorId = adminViewingTargetId || userProfile?.tutorId || (tutors.length > 0 ? tutors[0].tutorId : 'tutor_1');
       const tKey = currentTutorId.replace(/\s+/g, '_').toLowerCase();
+
+      channels.push({
+        id: `desk_tutor_${tKey}`,
+        name: 'Admin & Supervisor Group',
+        category: 'tutor_desk',
+        description: 'Group chat with Admin and Academic Supervisors. Report student delays, attendance, or requests here.',
+        targetRole: 'admin',
+        avatarText: 'AS'
+      });
+
+      // Tutor private 1-to-1 with Admin (strictly "Admin" as requested)
       channels.push({
         id: `dm_admin_tutor_${tKey}`,
-        name: 'Academy Director',
+        name: 'Admin',
         category: 'direct_admin',
-        description: 'Direct 1-to-1 support line with Academy Director.',
+        description: 'Direct 1-to-1 chat with Admin.',
         targetRole: 'admin',
         avatarText: 'AD'
       });
@@ -378,9 +406,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       const sKey = currentStudentId.toLowerCase().replace(/[^a-z0-9]/g, '_');
       channels.push({
         id: `dm_admin_student_${sKey}`,
-        name: 'Academy Director',
+        name: 'Admin',
         category: 'direct_admin',
-        description: 'Direct 1-to-1 student support line with Academy Director.',
+        description: 'Direct 1-to-1 student support line with Admin.',
         targetRole: 'admin',
         avatarText: 'AD'
       });
@@ -389,9 +417,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       const currentParentKey = (adminViewingTargetId || userProfile?.uid || userProfile?.email || 'parent').toLowerCase().replace(/[^a-z0-9]/g, '_');
       channels.push({
         id: `dm_admin_parent_${currentParentKey}`,
-        name: 'Academy Director',
+        name: 'Admin',
         category: 'direct_admin',
-        description: 'Direct 1-to-1 parent support line with Academy Director.',
+        description: 'Direct 1-to-1 parent support line with Admin.',
         targetRole: 'admin',
         avatarText: 'AD'
       });
@@ -413,7 +441,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
     if (initialThreadId && availableChannels.some(c => c.id === initialThreadId)) {
       return initialThreadId;
     }
-    return role === 'student' || role === 'parent' ? (availableChannels[0]?.id || 'dm_admin_student') : 'channel_staff_group';
+    return availableChannels[0]?.id || '';
   });
 
   const [mobileChatView, setMobileChatView] = useState<'channels' | 'messages'>('messages');
@@ -476,11 +504,11 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
   };
 
   const activeChannel = availableChannels.find(c => c.id === activeThreadId) || availableChannels[0] || {
-    id: 'channel_staff_group',
-    name: 'Faculty & Staff Group',
-    category: 'staff_group',
-    description: 'Faculty and Administration Communications',
-    avatarText: 'FS'
+    id: 'support_group',
+    name: 'Admin & Supervisor Group',
+    category: 'tutor_desk' as const,
+    description: 'Support Communications',
+    avatarText: 'AS'
   };
 
   // Timestamp formatting
@@ -788,8 +816,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       alert('Security violation: You do not have permission to post in this channel.');
       return;
     }
-    if (activeThreadId === 'channel_staff_group' && (role === 'student' || role === 'parent')) {
-      alert('Security violation: Only staff members may communicate in the Staff Group.');
+    if (activeThreadId.startsWith('desk_tutor_') && (role === 'student' || role === 'parent')) {
+      alert('Security violation: Only staff members may communicate in this group.');
       return;
     }
 
@@ -975,7 +1003,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
       return (unreadMap[c.id] || 0) > 0;
     }
     if (filterTab === 'staff') {
-      return c.category === 'staff_group';
+      return c.category === 'staff_group' || c.category === 'tutor_desk';
     }
     if (filterTab === 'direct') {
       return c.category === 'direct_admin';
@@ -990,19 +1018,22 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
 
   // Helper for computing participant list for Message Info dialog
   const getThreadParticipants = (threadId: string) => {
-    if (threadId === 'channel_staff_group') {
-      const staffList = [
-        { id: 'admin', name: 'Academy Director', role: 'admin' as UserRole },
+    if (threadId.startsWith('desk_tutor_')) {
+      const tKey = threadId.replace('desk_tutor_', '').toLowerCase();
+      const matchedTutor = tutors.find(t => t.tutorId.toLowerCase().replace(/[^a-z0-9]/g, '_') === tKey || t.tutorId.toLowerCase() === tKey);
+      const tName = matchedTutor ? (matchedTutor.realName || matchedTutor.tutorId) : 'Tutor';
+      return [
+        { id: 'admin', name: 'Admin', role: 'admin' as UserRole },
         { id: 'supervisor', name: 'Academic Supervisor', role: 'supervisor' as UserRole },
-        ...tutors.map(t => ({ id: t.tutorId, name: t.realName || t.tutorId, role: 'tutor' as UserRole }))
+        { id: matchedTutor?.tutorId || tKey, name: tName, role: 'tutor' as UserRole }
       ];
-      return staffList;
     }
     const channel = availableChannels.find(c => c.id === threadId);
     if (channel) {
+      const targetLabel = (role === 'tutor' && channel.targetRole === 'admin') ? 'Admin' : channel.name;
       return [
         { id: currentUserId, name: effectiveDisplayName, role: role },
-        { id: channel.targetUserId || 'recipient', name: channel.name, role: channel.targetRole || 'admin' as UserRole }
+        { id: channel.targetUserId || 'recipient', name: targetLabel, role: channel.targetRole || 'admin' as UserRole }
       ];
     }
     return [{ id: currentUserId, name: effectiveDisplayName, role: role }];
@@ -1187,7 +1218,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                     : 'bg-[#F0F2F5] text-[#54656F] hover:bg-[#E9EDEF]'
                 }`}
               >
-                Staff Group
+                Groups
               </button>
             )}
             <button
@@ -1219,7 +1250,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                 })
                 .map((tutor) => {
                   const tKey = tutor.tutorId.replace(/\s+/g, '_').toLowerCase();
-                  const dmThreadId = role === 'admin' ? `dm_admin_tutor_${tKey}` : 'channel_staff_group';
+                  const dmThreadId = `desk_tutor_${tKey}`;
                   const tutorDisplayName = (role === 'admin' || role === 'supervisor') && tutor.realName
                     ? `${tutor.realName} (${tutor.tutorId})`
                     : tutor.tutorId;
@@ -1410,7 +1441,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                     {/* Avatar */}
                     <div className="relative shrink-0">
                       <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm shadow-xs ${
-                        isStaffGroup
+                        channel.category === 'tutor_desk'
+                          ? 'bg-gradient-to-br from-[#00A884] to-[#0284C7] text-white'
+                          : isStaffGroup
                           ? 'bg-[#00A884] text-white'
                           : channel.targetRole === 'supervisor'
                           ? 'bg-[#7C3AED] text-white'
@@ -1420,7 +1453,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                           ? 'bg-[#D97706] text-white'
                           : 'bg-[#1E5C3D] text-white'
                       }`}>
-                        {isStaffGroup ? (
+                        {channel.category === 'tutor_desk' ? (
+                          <GraduationCap className="w-6 h-6" />
+                        ) : isStaffGroup ? (
                           <Users className="w-6 h-6" />
                         ) : (
                           <span>{channel.avatarText}</span>
@@ -1437,14 +1472,16 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                         <span className={`text-[11px] shrink-0 font-mono ${
                           unreadCount > 0 ? 'text-[#25D366] font-bold' : 'text-[#667781]'
                         }`}>
-                          {isStaffGroup ? 'Group' : 'Direct'}
+                          {channel.category === 'tutor_desk' ? 'Group' : 'Direct'}
                         </span>
                       </div>
 
                       <div className="flex items-center justify-between gap-1">
                         <p className="text-xs text-[#54656F] truncate flex items-center gap-1">
-                          {isStaffGroup ? (
-                            <span className="text-[#00A884] font-medium">Faculty & Supervisors</span>
+                          {channel.category === 'tutor_desk' ? (
+                            <span className="text-[#0284C7] font-medium">
+                              {role === 'tutor' ? 'Admin & Academic Supervisors' : 'Admin, Supervisors & Tutor'}
+                            </span>
                           ) : (
                             <span>{channel.description}</span>
                           )}
@@ -1488,11 +1525,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
               </button>
 
               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs ${
-                activeChannel.category === 'staff_group'
+                activeChannel.category === 'tutor_desk'
+                  ? 'bg-gradient-to-br from-[#00A884] to-[#0284C7] text-white'
+                  : activeChannel.category === 'staff_group'
                   ? 'bg-[#00A884] text-white'
                   : 'bg-[#1E5C3D] text-white'
               }`}>
-                {activeChannel.category === 'staff_group' ? (
+                {activeChannel.category === 'tutor_desk' ? (
+                  <GraduationCap className="w-5 h-5" />
+                ) : activeChannel.category === 'staff_group' ? (
                   <Users className="w-5 h-5" />
                 ) : (
                   <span>{activeChannel.avatarText}</span>
@@ -1504,8 +1545,10 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                   {activeChannel.name}
                 </h4>
                 <p className="text-[11px] text-[#54656F] truncate">
-                  {activeChannel.category === 'staff_group'
-                    ? 'Faculty, Academic Supervisors & Academy Director'
+                  {activeChannel.category === 'tutor_desk'
+                    ? (role === 'tutor'
+                        ? 'Admin & Academic Supervisors'
+                        : `Admin & Supervisors with ${activeChannel.name.replace(' (Support Group)', '')}`)
                     : 'End-to-end encrypted private line'}
                 </p>
               </div>
@@ -1652,7 +1695,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                   {group.items.map((m) => {
                     const isMe = m.senderId === currentUserId;
                     const formattedTime = formatMessageTimestamp(m.timestamp);
-                    const isGroupChat = activeThreadId === 'channel_staff_group';
+                    const isGroupChat = activeThreadId === 'channel_staff_group' || activeThreadId.startsWith('desk_tutor_');
                     const seenByList = Array.isArray(m.seenBy) ? m.seenBy : [];
                     const deliveredToList = Array.isArray(m.deliveredTo) ? m.deliveredTo : [];
                     const listenedByList = Array.isArray(m.listenedBy) ? m.listenedBy : [];
@@ -1748,7 +1791,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                                   ? 'text-[#0284C7]'
                                   : 'text-[#D97706]'
                               }`}>
-                                {m.senderName}
+                                {(role === 'tutor' && m.senderRole === 'admin') ? 'Admin' : m.senderName}
                               </span>
                               <span className="text-[9px] px-1 py-0.2 rounded bg-black/5 text-[#54656F] font-mono uppercase font-semibold">
                                 {m.senderRole}

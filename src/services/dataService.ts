@@ -2737,50 +2737,85 @@ export async function deleteChatMessage(messageId: string, deletedBy: string, ca
  * Check if a user role and ID is authorized to participate in a specific chat thread
  */
 export function isUserAuthorizedForThread(threadId: string, userId: string, role: UserRole): boolean {
+  // All admins have access to participate in all channels
   if (role === 'admin') return true;
-  if (threadId === 'channel_staff_group' || threadId === 'channel_general') {
-    return role === 'supervisor' || role === 'tutor';
+
+  // Supervisors can access their direct line with Admin and ALL tutor support groups
+  if (role === 'supervisor') {
+    if (
+      threadId === 'dm_admin_supervisor' ||
+      threadId.startsWith('desk_tutor_')
+    ) {
+      return true;
+    }
+    return false;
   }
-  if (threadId === 'dm_admin_supervisor') {
-    return role === 'supervisor';
-  }
-  const cleanUserId = userId.toLowerCase().replace(/[^a-z0-9]/g, '_');
-  if (threadId.startsWith('dm_admin_tutor_') || threadId.startsWith('channel_tutor_')) {
-    if (role === 'tutor') {
-      const channelTutorSuffix = threadId.replace('dm_admin_tutor_', '').replace('channel_tutor_', '').toLowerCase();
+
+  // Tutors can ONLY access their own dedicated support group and their own 1-to-1 with Admin.
+  // No combined staff group exists; tutors are completely isolated from other tutors' groups to prevent distractions.
+  if (role === 'tutor') {
+    if (threadId.startsWith('desk_tutor_') || threadId.startsWith('dm_admin_tutor_') || threadId.startsWith('channel_tutor_')) {
+      const channelTutorSuffix = threadId
+        .replace('desk_tutor_', '')
+        .replace('dm_admin_tutor_', '')
+        .replace('channel_tutor_', '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      const cleanUserId = (userId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const rawNumDesk = channelTutorSuffix.replace('tutor', '');
+      const rawNumUser = cleanUserId.replace('tutor', '');
+
       return (
         cleanUserId === channelTutorSuffix ||
-        cleanUserId.endsWith(`_${channelTutorSuffix}`) ||
-        channelTutorSuffix.endsWith(`_${cleanUserId}`) ||
-        cleanUserId === `tutor_${channelTutorSuffix}`
+        cleanUserId.endsWith(channelTutorSuffix) ||
+        channelTutorSuffix.endsWith(cleanUserId) ||
+        (rawNumDesk !== '' && rawNumDesk === rawNumUser)
       );
     }
     return false;
   }
-  if (threadId.startsWith('dm_admin_student_') || threadId.startsWith('channel_student_')) {
-    if (role === 'student') {
-      const channelStudentSuffix = threadId.replace('dm_admin_student_', '').replace('channel_student_', '').toLowerCase();
+
+  if (role === 'student') {
+    if (threadId.startsWith('dm_admin_student_') || threadId.startsWith('channel_student_')) {
+      const channelStudentSuffix = threadId
+        .replace('dm_admin_student_', '')
+        .replace('channel_student_', '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      const cleanUserId = (userId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const rawNumStudent = channelStudentSuffix.replace('student', '');
+      const rawNumUser = cleanUserId.replace('student', '');
       return (
         cleanUserId === channelStudentSuffix ||
-        cleanUserId.endsWith(`_${channelStudentSuffix}`) ||
-        channelStudentSuffix.endsWith(`_${cleanUserId}`) ||
-        cleanUserId === `student_${channelStudentSuffix}`
+        cleanUserId.endsWith(channelStudentSuffix) ||
+        channelStudentSuffix.endsWith(cleanUserId) ||
+        (rawNumStudent !== '' && rawNumStudent === rawNumUser)
       );
     }
     return false;
   }
-  if (threadId.startsWith('dm_admin_parent_') || threadId.startsWith('channel_parent_')) {
-    if (role === 'parent') {
-      const channelParentSuffix = threadId.replace('dm_admin_parent_', '').replace('channel_parent_', '').toLowerCase();
+
+  if (role === 'parent') {
+    if (threadId.startsWith('dm_admin_parent_') || threadId.startsWith('channel_parent_')) {
+      const channelParentSuffix = threadId
+        .replace('dm_admin_parent_', '')
+        .replace('channel_parent_', '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      const cleanUserId = (userId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const rawNumParent = channelParentSuffix.replace('parent', '');
+      const rawNumUser = cleanUserId.replace('parent', '');
       return (
         cleanUserId === channelParentSuffix ||
-        cleanUserId.endsWith(`_${channelParentSuffix}`) ||
-        channelParentSuffix.endsWith(`_${cleanUserId}`) ||
-        cleanUserId === `parent_${channelParentSuffix}`
+        cleanUserId.endsWith(channelParentSuffix) ||
+        channelParentSuffix.endsWith(cleanUserId) ||
+        (rawNumParent !== '' && rawNumParent === rawNumUser)
       );
     }
     return false;
   }
+
   return false;
 }
 

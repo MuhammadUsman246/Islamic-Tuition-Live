@@ -13,7 +13,7 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
 import { UserProfile, UserRole, Student, Tutor } from '../types';
 import { INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
@@ -145,7 +145,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const cached = localStorage.getItem('it_cached_user_profile');
       if (cached) {
-        return JSON.parse(cached) as UserProfile;
+        const parsed = JSON.parse(cached) as UserProfile;
+        if (parsed.email && (parsed.email.toLowerCase().includes('muhammadusman') || isAcademicOwner(parsed.email))) {
+          parsed.displayName = 'Muhammad Usman';
+          try {
+            localStorage.setItem('it_cached_user_profile', JSON.stringify(parsed));
+          } catch {}
+        }
+        return parsed;
       }
     } catch {}
     return null;
@@ -192,29 +199,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       targetProfile = {
         uid: 'user_' + fallbackProfile.replace(/[^a-z0-9]/g, '_'),
         email: fallbackProfile,
-        displayName: isOwner ? 'Academic Director (Owner)' : fallbackProfile.split('@')[0],
+        displayName: isOwner ? 'Muhammad Usman' : fallbackProfile.split('@')[0],
         role: isOwner ? 'admin' : 'student',
         status: 'active',
         createdAt: new Date().toISOString()
       };
     } else if (fallbackProfile && fallbackProfile.email) {
+      const isOwner = isAcademicOwner(fallbackProfile.email);
       targetProfile = {
         uid: fallbackProfile.uid || 'user_bypass',
         email: fallbackProfile.email,
-        displayName: fallbackProfile.displayName || 'Academic Director',
+        displayName: isOwner ? 'Muhammad Usman' : (fallbackProfile.displayName || 'Muhammad Usman'),
         role: fallbackProfile.role || 'admin',
         status: fallbackProfile.status || 'active',
         createdAt: new Date().toISOString(),
         ...fallbackProfile
       };
     } else if (userProfile) {
-      targetProfile = userProfile;
+      targetProfile = {
+        ...userProfile,
+        displayName: isAcademicOwner(userProfile.email) ? 'Muhammad Usman' : userProfile.displayName
+      };
     } else {
       // Default to Academic Director Admin
       targetProfile = {
         uid: 'auth_owner_admin',
         email: 'muhammadusmanabbasi100@gmail.com',
-        displayName: 'Academic Director (Owner)',
+        displayName: 'Muhammad Usman',
         role: 'admin',
         status: 'active',
         createdAt: new Date().toISOString()
@@ -245,6 +256,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const parsed = JSON.parse(cached) as UserProfile;
           if (parsed.email && parsed.email.trim().toLowerCase() === cleanEmail) {
+            if (isOwnerAdmin && parsed.displayName !== 'Muhammad Usman') {
+              parsed.displayName = 'Muhammad Usman';
+              try {
+                localStorage.setItem('it_cached_user_profile', JSON.stringify(parsed));
+              } catch {}
+            }
             authLog('ProfileFetch', '⚡ Served profile instantly from localStorage cache (0 reads)');
             return parsed;
           }
@@ -257,7 +274,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const ownerProf: UserProfile = {
         uid,
         email: cleanEmail,
-        displayName: 'Academic Director (Owner)',
+        displayName: 'Muhammad Usman',
         role: 'admin',
         status: 'active',
         createdAt: new Date().toISOString()
@@ -535,7 +552,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loadedProf = {
         uid: uid,
         email: cleanEmail || rawEmail || '',
-        displayName: userDisplayName || cleanEmail.split('@')[0] || (isOwnerAdmin ? 'Academic Director (Owner)' : 'User'),
+        displayName: isOwnerAdmin ? 'Muhammad Usman' : (userDisplayName || cleanEmail.split('@')[0] || 'User'),
         role: defaultRole,
         status: 'active',
         createdAt: new Date().toISOString()
