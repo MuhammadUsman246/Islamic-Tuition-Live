@@ -77,6 +77,42 @@ export const LessonModal: React.FC<LessonModalProps> = ({
     return students.find(s => s.studentId === selectedStudentId) || null;
   }, [students, selectedStudentId]);
 
+  // Reset all text fields whenever modal opens or student changes to keep form completely clean
+  useEffect(() => {
+    if (isOpen) {
+      setLessonCovered('');
+      setRevision('');
+      setMemorization('');
+      setAdaabManners('');
+      setAbsentReason('');
+      setScreenshots([]);
+      setMushafPage('');
+      setJuz('');
+      setSurahNumber('');
+      setAyahStart('');
+      setAyahEnd('');
+      setAutoFilledNotice(null);
+    }
+  }, [isOpen, selectedStudentId]);
+
+  // Check if a lesson for selected student and date has already been recorded within 10 hours
+  const existingTodayLesson = useMemo(() => {
+    if (!selectedStudentId || !date || !allLessons || allLessons.length === 0) return null;
+    const nowMs = Date.now();
+    return allLessons.find(l => {
+      if (l.studentId !== selectedStudentId) return false;
+      if (l.date === date) return true;
+      if (l.createdAt) {
+        const createdMs = new Date(l.createdAt).getTime();
+        const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+        if (hoursAgo >= 0 && hoursAgo < 10 && l.date === date) {
+          return true;
+        }
+      }
+      return false;
+    }) || null;
+  }, [selectedStudentId, date, allLessons]);
+
   // Prepopulate or update student & find last lesson
   useEffect(() => {
     let activeId = selectedStudentId;
@@ -100,7 +136,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         }
       }
 
-      // Fetch student's last recorded lesson to suggest progression
+      // Fetch student's last recorded lesson reference
       getLessons().then(lessons => {
         setAllLessons(lessons);
         const studentLessons = lessons
@@ -108,8 +144,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
           .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
         if (studentLessons.length > 0) {
-          const prev = studentLessons[0];
-          setLastLesson(prev);
+          setLastLesson(studentLessons[0]);
         } else {
           setLastLesson(null);
         }
@@ -357,6 +392,38 @@ export const LessonModal: React.FC<LessonModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // 10-Hour / Same-Day Cooldown Throttle Validation
+    // Prevents submitting duplicate lesson entries for the same student on the same date within 10 hours
+    if (selectedStudentId) {
+      try {
+        const latestLessons = await getLessons();
+        const studentLessons = latestLessons.filter(l => l.studentId === selectedStudentId);
+        const nowMs = Date.now();
+
+        const duplicateOrRecent = studentLessons.find(l => {
+          // Check if a report was already submitted for the exact same date
+          if (l.date === date) return true;
+
+          // Check if a report was created within the last 10 hours for the same date
+          if (l.createdAt) {
+            const createdMs = new Date(l.createdAt).getTime();
+            const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+            if (hoursAgo >= 0 && hoursAgo < 10 && l.date === date) {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (duplicateOrRecent) {
+          alert(`Today's lesson report for ${currentStudent?.name || 'this student'} has already been saved for ${date}.\n\nTo prevent duplicate reports, tutors cannot log multiple reports for the same student on the same day within 10 hours.\n\nIf you are logging a lesson for a different date or makeup session, please select a different 'Date' above.`);
+          return;
+        }
+      } catch (err) {
+        console.warn('Cooldown check failed:', err);
+      }
+    }
+
     // Auto calculate month label
     const dateObj = new Date(date);
     const month = dateObj.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -501,6 +568,20 @@ export const LessonModal: React.FC<LessonModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+          {existingTodayLesson && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex items-start space-x-3 text-red-800 text-xs">
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Today's Lesson Already Saved!</p>
+                <p className="text-red-700 mt-0.5">
+                  A lesson report for <strong>{currentStudent?.name || 'this student'}</strong> has already been saved for <strong>{date}</strong>. Tutors cannot log multiple reports for the same student on the same day within 10 hours.
+                </p>
+                <p className="text-[11px] text-red-600 mt-1 font-medium">
+                  If you are logging a lesson for a different date or a makeup session, please select a different date in the <strong>Date</strong> field below.
+                </p>
+              </div>
+            </div>
+          )}
           {/* Top Row: Student, Date & Lesson Type */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -1174,19 +1255,23 @@ export const LessonModal: React.FC<LessonModalProps> = ({
             <button
               id="save_lesson_submit_button"
               type="submit"
-              disabled={saving || (attendanceStatus !== 'Absent' && !!quranError)}
-              className={`px-5 py-2.5 text-xs font-bold text-white rounded-lg shadow-xs flex items-center space-x-2 cursor-pointer transition-all ${
-                attendanceStatus === 'Absent'
-                  ? 'bg-[#E02424] hover:bg-[#C81E1E]'
+              disabled={saving || !!existingTodayLesson || (attendanceStatus !== 'Absent' && !!quranError)}
+              className={`px-5 py-2.5 text-xs font-bold text-white rounded-lg shadow-xs flex items-center space-x-2 transition-all ${
+                existingTodayLesson
+                  ? 'bg-gray-400 cursor-not-allowed opacity-80'
+                  : attendanceStatus === 'Absent'
+                  ? 'bg-[#E02424] hover:bg-[#C81E1E] cursor-pointer'
                   : quranError || saving
                   ? 'bg-gray-400 cursor-not-allowed opacity-75'
-                  : 'bg-[#2D8B5C] hover:bg-[#1E5C3D]'
+                  : 'bg-[#2D8B5C] hover:bg-[#1E5C3D] cursor-pointer'
               }`}
             >
               <CheckCircle className="w-4 h-4" />
               <span>
                 {saving
                   ? 'Saving...'
+                  : existingTodayLesson
+                  ? 'Today\'s Lesson Already Saved'
                   : attendanceStatus === 'Absent'
                   ? 'Save Absent Report'
                   : 'Save Lesson Report'}

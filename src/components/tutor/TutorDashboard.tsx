@@ -29,6 +29,7 @@ import {
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
+import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
 import { sanitizeStudentForTutor, addLesson, addAttendanceRecord, updateClass } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
@@ -62,6 +63,8 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
 }) => {
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
   const [selectedStudentForLesson, setSelectedStudentForLesson] = useState<string>('');
+  const [selectedStudentForMonthReport, setSelectedStudentForMonthReport] = useState<Student | null>(null);
+  const [isMonthReportModalOpen, setIsMonthReportModalOpen] = useState<boolean>(false);
 
   const { userProfile, adminViewingRole, adminViewingTargetId } = useAuth();
 
@@ -398,16 +401,29 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                   )}
                 </div>
 
-                <div className="pt-2 border-t border-[#EAE6DE]">
+                <div className="pt-2 border-t border-[#EAE6DE] grid grid-cols-2 gap-2">
                   <button
                     onClick={() => {
                       setSelectedStudentForLesson(st.studentId);
                       setIsLessonModalOpen(true);
                     }}
-                    className="w-full py-2 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors flex items-center justify-center space-x-1.5 shadow-2xs cursor-pointer"
+                    className="py-2 px-2 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors flex items-center justify-center space-x-1 shadow-2xs cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5" />
                     <span>Log Lesson</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const fullStudentObj = students.find(s => s.studentId === st.studentId) || null;
+                      setSelectedStudentForMonthReport(fullStudentObj);
+                      setIsMonthReportModalOpen(true);
+                    }}
+                    className="py-2 px-2 text-xs font-semibold text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors flex items-center justify-center space-x-1 border border-emerald-200 cursor-pointer"
+                    title="View student's 30-day lesson progression history"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                    <span>30-Day Report</span>
                   </button>
                 </div>
 
@@ -703,6 +719,18 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         students={students.filter(s => s.assignedTutorId === tutor?.tutorId)}
         currentTutorId={tutor?.tutorId}
         initialStudentId={selectedStudentForLesson}
+      />
+
+      {/* 30-Day Student Lesson Progression Report Modal */}
+      <StudentMonthReportModal
+        isOpen={isMonthReportModalOpen}
+        onClose={() => setIsMonthReportModalOpen(false)}
+        student={selectedStudentForMonthReport}
+        lessons={lessons}
+        onOpenLogLesson={(studentId) => {
+          setSelectedStudentForLesson(studentId);
+          setIsLessonModalOpen(true);
+        }}
       />
     </div>
   );
