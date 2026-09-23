@@ -3978,27 +3978,68 @@ export async function getActiveUserSessions(forceRefresh = false): Promise<Acade
     });
   }
 
-  // Filter and compute active/idle/stale status
-  const validActiveSessions: AcademyUserSession[] = [];
+  // Filter, deduplicate per user+device signature, and compute active/idle/stale status
+  const latestByDeviceMap = new Map<string, AcademyUserSession>();
+  const staleOrDuplicateIds: string[] = [];
+
   records.forEach(session => {
-    if (session.status === 'terminated') return; // Skip terminated
+    if (session.status === 'terminated') {
+      staleOrDuplicateIds.push(session.id);
+      return; // Skip terminated
+    }
 
     const lastActiveMs = new Date(session.lastActiveTimestamp || session.loginTimestamp || 0).getTime();
     const diffMs = nowMs - lastActiveMs;
 
     // Consider active if heartbeat within last 8 minutes, idle if within 30 minutes, prune if older than 4 hours
     if (diffMs > 4 * 60 * 60 * 1000) {
+      staleOrDuplicateIds.push(session.id);
       return; // Skip stale sessions
     }
 
     const updatedStatus: 'active' | 'idle' = diffMs <= 8 * 60 * 1000 ? 'active' : 'idle';
-    validActiveSessions.push({
+    
+    // Normalize displayName for Director/Admin if raw email username was stored
+    let cleanDisplayName = session.displayName || session.email;
+    const cleanEmail = (session.email || '').toLowerCase().trim();
+    if (cleanEmail.includes('muhammadusman') && (!cleanDisplayName || cleanDisplayName.includes('@') || cleanDisplayName === 'muhammadusmanabbasi100')) {
+      cleanDisplayName = 'Muhammad Usman';
+    }
+
+    const normalizedSession: AcademyUserSession = {
       ...session,
+      displayName: cleanDisplayName,
       status: updatedStatus,
       isOnline: updatedStatus === 'active'
-    });
+    };
+
+    // Device Signature: Allows multiple DISTINCT devices per user (e.g. Mobile + Desktop),
+    // but merges and removes duplicate/ghost sessions on the SAME device & browser.
+    const deviceKey = `${cleanEmail || session.uid}_${session.deviceType || 'Desktop'}_${session.browser || 'Web'}`;
+
+    const existing = latestByDeviceMap.get(deviceKey);
+    if (!existing) {
+      latestByDeviceMap.set(deviceKey, normalizedSession);
+    } else {
+      const existingTime = new Date(existing.lastActiveTimestamp || existing.loginTimestamp || 0).getTime();
+      const thisTime = new Date(normalizedSession.lastActiveTimestamp || normalizedSession.loginTimestamp || 0).getTime();
+      if (thisTime > existingTime) {
+        staleOrDuplicateIds.push(existing.id);
+        latestByDeviceMap.set(deviceKey, normalizedSession);
+      } else {
+        staleOrDuplicateIds.push(normalizedSession.id);
+      }
+    }
   });
 
+  // Background cleanup of older superseded duplicates or stale ghost session docs from Firestore
+  if (staleOrDuplicateIds.length > 0 && auth.currentUser && !isFirestoreQuotaExceeded()) {
+    staleOrDuplicateIds.forEach(id => {
+      deleteDoc(doc(db, SESSIONS_COL, id)).catch(() => {});
+    });
+  }
+
+  const validActiveSessions = Array.from(latestByDeviceMap.values());
   const sorted = sortAcademySessions(validActiveSessions);
   MEMORY_SESSIONS = sorted;
   return sorted;
