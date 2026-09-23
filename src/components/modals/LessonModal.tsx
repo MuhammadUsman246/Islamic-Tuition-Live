@@ -8,7 +8,7 @@ import {
   getSectionsForLesson,
   getLinesForSection
 } from '../../data/qaidaData';
-import { getLessons } from '../../services/dataService';
+import { loadCachedCollection } from '../../services/dataService';
 import { compressAndConvertToWebP } from '../../utils/chatMediaUtils';
 
 interface LessonModalProps {
@@ -34,7 +34,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
 
   // Attendance Status State
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>('Present');
-  const [lateMinutes, setLateMinutes] = useState<number>(10);
+  const [lateMinutes, setLateMinutes] = useState<number | ''>(10);
   const [absentReason, setAbsentReason] = useState<string>('');
 
   // Quran Selection State - Requires active selection
@@ -136,19 +136,18 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         }
       }
 
-      // Fetch student's last recorded lesson reference
-      getLessons().then(lessons => {
-        setAllLessons(lessons);
-        const studentLessons = lessons
-          .filter(l => l.studentId === activeId && l.attendanceStatus !== 'Absent')
-          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      // Fetch student's last recorded lesson reference from fast local cache (0 Firestore reads)
+      const cachedLessons = loadCachedCollection<Lesson[]>('lessons') || [];
+      setAllLessons(cachedLessons);
+      const studentLessons = cachedLessons
+        .filter(l => l.studentId === activeId && l.attendanceStatus !== 'Absent')
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-        if (studentLessons.length > 0) {
-          setLastLesson(studentLessons[0]);
-        } else {
-          setLastLesson(null);
-        }
-      }).catch(console.error);
+      if (studentLessons.length > 0) {
+        setLastLesson(studentLessons[0]);
+      } else {
+        setLastLesson(null);
+      }
     }
   }, [initialStudentId, students, selectedStudentId]);
 
@@ -297,21 +296,22 @@ export const LessonModal: React.FC<LessonModalProps> = ({
     return null;
   }, [juz, surahNumber]);
 
+  // Clear ayah inputs if changing to a Juz/Surah where current inputs are out of range
   useEffect(() => {
     if (currentAyahRange && typeof juz === 'number' && typeof surahNumber === 'number') {
-      if (typeof ayahStart !== 'number' || ayahStart < currentAyahRange.min || ayahStart > currentAyahRange.max) {
-        setAyahStart(currentAyahRange.min);
+      if (typeof ayahStart === 'number' && (ayahStart < currentAyahRange.min || ayahStart > currentAyahRange.max)) {
+        setAyahStart('');
       }
-      if (typeof ayahEnd !== 'number' || ayahEnd < currentAyahRange.min || ayahEnd > currentAyahRange.max) {
-        setAyahEnd(Math.min(currentAyahRange.min + 10, currentAyahRange.max));
+      if (typeof ayahEnd === 'number' && (ayahEnd < currentAyahRange.min || ayahEnd > currentAyahRange.max)) {
+        setAyahEnd('');
       }
       setQuranError(null);
     }
-  }, [juz, surahNumber, currentAyahRange, ayahStart, ayahEnd]);
+  }, [juz, surahNumber, currentAyahRange]);
 
-  // Validate on ayah input change
+  // Live in-memory validation on ayah input change (Zero Firebase overhead)
   useEffect(() => {
-    if (attendanceStatus === 'Absent') {
+    if (attendanceStatus === 'Absent' || lessonType === 'Noorani Qaida' || lessonType === 'Islamic Studies') {
       setQuranError(null);
       return;
     }
@@ -321,6 +321,25 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         setQuranError(null);
         return;
       }
+
+      const surahMeta = availableSurahs.find(s => s.number === surahNumber);
+      const range = currentAyahRange;
+
+      if (typeof ayahStart === 'number' && range) {
+        if (ayahStart < range.min || ayahStart > range.max) {
+          setQuranError(`From Ayah ${ayahStart} is out of bounds for ${surahMeta?.englishName || 'this Surah'} in Juz ${juz}. (Valid range: Ayah ${range.min} to ${range.max})`);
+          return;
+        }
+      }
+
+      if (typeof ayahEnd === 'number' && range) {
+        const minEnd = typeof ayahStart === 'number' ? ayahStart : range.min;
+        if (ayahEnd < minEnd || ayahEnd > range.max) {
+          setQuranError(`To Ayah ${ayahEnd} is invalid for ${surahMeta?.englishName || 'this Surah'}. (Valid max Ayah in Juz ${juz} is ${range.max})`);
+          return;
+        }
+      }
+
       if (typeof ayahStart === 'number' && typeof ayahEnd === 'number') {
         const val = validateQuranSelection(juz, surahNumber, ayahStart, ayahEnd);
         if (!val.valid) {
@@ -328,11 +347,13 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         } else {
           setQuranError(null);
         }
+      } else {
+        setQuranError(null);
       }
     } else {
       setQuranError(null);
     }
-  }, [juz, surahNumber, ayahStart, ayahEnd, lessonType, attendanceStatus]);
+  }, [juz, surahNumber, ayahStart, ayahEnd, currentAyahRange, availableSurahs, lessonType, attendanceStatus]);
 
   if (!isOpen) return null;
 
@@ -396,7 +417,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
     // Prevents submitting duplicate lesson entries for the same student on the same date within 10 hours
     if (selectedStudentId) {
       try {
-        const latestLessons = await getLessons();
+        const latestLessons = loadCachedCollection<Lesson[]>('lessons') || [];
         const studentLessons = latestLessons.filter(l => l.studentId === selectedStudentId);
         const nowMs = Date.now();
 
@@ -456,6 +477,14 @@ export const LessonModal: React.FC<LessonModalProps> = ({
       return;
     }
 
+    // IF LATE: Validate minutes
+    if (attendanceStatus === 'Late') {
+      if (lateMinutes === '' || typeof lateMinutes !== 'number' || isNaN(lateMinutes) || lateMinutes < 1) {
+        alert("Please enter the number of minutes the student was late (e.g. 5, 10, 15 minutes).");
+        return;
+      }
+    }
+
     // MANDATORY VALIDATIONS:
     if (!memorization.trim()) {
       alert("Please fill in the 'Memorization / Kalima / Duas / Ahadith' field (Required).");
@@ -470,13 +499,26 @@ export const LessonModal: React.FC<LessonModalProps> = ({
     // Determine Quran / Qaida structured details
     let quranDetails = undefined;
     if (lessonType === 'Quran Reading / Nazra' || lessonType === 'Hifz') {
-      if (typeof juz !== 'number' || typeof surahNumber !== 'number' || typeof ayahStart !== 'number' || typeof ayahEnd !== 'number') {
-        setQuranError('Please select the specific Juz, Surah, and Ayah range taught today.');
+      if (typeof juz !== 'number') {
+        setQuranError('Please select the Juz (Para) *');
+        alert('Please select the Juz (Para) *');
+        return;
+      }
+      if (typeof surahNumber !== 'number') {
+        setQuranError('Please select the Surah *');
+        alert('Please select the Surah *');
+        return;
+      }
+      if (typeof ayahStart !== 'number' || typeof ayahEnd !== 'number' || isNaN(ayahStart) || isNaN(ayahEnd)) {
+        const rangeNote = currentAyahRange ? ` (Valid range in Juz ${juz}: Ayah ${currentAyahRange.min} to ${currentAyahRange.max})` : '';
+        setQuranError(`Please enter both From Ayah and To Ayah${rangeNote}`);
+        alert(`Please enter both From Ayah and To Ayah${rangeNote}`);
         return;
       }
       const val = validateQuranSelection(juz, surahNumber, ayahStart, ayahEnd);
       if (!val.valid) {
         setQuranError(val.error || 'Please correct the Quran selection before saving');
+        alert(val.error || 'Please correct the Quran selection before saving');
         return;
       }
       const surahMeta = availableSurahs.find(s => s.number === surahNumber);
@@ -762,7 +804,16 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                       min={1}
                       max={120}
                       value={lateMinutes}
-                      onChange={(e) => setLateMinutes(parseInt(e.target.value, 10) || 1)}
+                      placeholder="10"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setLateMinutes('');
+                        } else {
+                          const parsed = parseInt(val, 10);
+                          setLateMinutes(isNaN(parsed) ? '' : parsed);
+                        }
+                      }}
                       className="w-16 border border-[#D5D0C6] rounded-md px-2 py-1 text-xs text-center font-bold text-[#161F1A] bg-white focus:outline-none focus:border-[#E8A93E]"
                     />
                     <span className="text-xs text-[#5A6B61]">mins</span>
@@ -870,11 +921,15 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                       </label>
                       <input
                         type="number"
-                        min={1}
-                        placeholder="1"
+                        min={currentAyahRange?.min || 1}
+                        max={currentAyahRange?.max}
+                        placeholder={currentAyahRange ? `${currentAyahRange.min}` : "1"}
                         value={ayahStart}
-                        onChange={(e) => setAyahStart(e.target.value ? parseInt(e.target.value, 10) : '')}
-                        className={`w-full border rounded-md px-2 py-1.5 text-xs focus:outline-none ${
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAyahStart(val === '' ? '' : parseInt(val, 10));
+                        }}
+                        className={`w-full border rounded-md px-2 py-1.5 text-xs focus:outline-none font-medium ${
                           quranError ? 'border-red-400 bg-red-50/40' : 'border-[#D5D0C6] focus:border-[#2D8B5C]'
                         }`}
                         required
@@ -887,11 +942,15 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                       </label>
                       <input
                         type="number"
-                        min={typeof ayahStart === 'number' ? ayahStart : 1}
-                        placeholder="7"
+                        min={typeof ayahStart === 'number' ? ayahStart : (currentAyahRange?.min || 1)}
+                        max={currentAyahRange?.max}
+                        placeholder={currentAyahRange ? `${currentAyahRange.max}` : "7"}
                         value={ayahEnd}
-                        onChange={(e) => setAyahEnd(e.target.value ? parseInt(e.target.value, 10) : '')}
-                        className={`w-full border rounded-md px-2 py-1.5 text-xs focus:outline-none ${
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAyahEnd(val === '' ? '' : parseInt(val, 10));
+                        }}
+                        className={`w-full border rounded-md px-2 py-1.5 text-xs focus:outline-none font-medium ${
                           quranError ? 'border-red-400 bg-red-50/40' : 'border-[#D5D0C6] focus:border-[#2D8B5C]'
                         }`}
                         required

@@ -612,12 +612,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             studentId: loadedProf.studentId
           });
 
-          // Save/merge to Firestore in background without blocking UI
-          const emailDocId = loadedProf.email.replace(/[@.]/g, '_');
+          // Save/merge to Firestore in background without blocking UI (single doc write)
           setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(() => {});
-          if (emailDocId !== user.uid) {
-            setDoc(doc(db, 'users', emailDocId), loadedProf, { merge: true }).catch(() => {});
-          }
         } catch (err) {
           authWarn('ProfileFetch', 'Error resolving user profile in onAuthStateChanged:', err);
           setLoading(false);
@@ -676,15 +672,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }).catch(e => console.warn('Heartbeat update notice:', e));
     };
 
-    // Initial heartbeat
+    // Initial heartbeat on mount
     sendHeartbeat();
 
-    // 60-second recurring heartbeat
-    const interval = setInterval(sendHeartbeat, 60000);
-
-    // Also send on window focus
-    const onFocus = () => sendHeartbeat();
-    window.addEventListener('focus', onFocus);
+    // 10-minute recurring heartbeat (600,000ms) to dramatically reduce database writes
+    const interval = setInterval(sendHeartbeat, 600000);
 
     // 1. Real-time listener for current session document in Firestore
     let unsubSession: (() => void) | null = null;
@@ -737,7 +729,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => {
       clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
       if (unsubSession) unsubSession();
       if (unsubUser) unsubUser();
     };

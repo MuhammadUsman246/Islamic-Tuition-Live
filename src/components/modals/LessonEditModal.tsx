@@ -37,7 +37,7 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
   const [date, setDate] = useState<string>(lesson.date || '');
   const [lessonType, setLessonType] = useState<CourseType>(lesson.lessonType || 'Quran Reading / Nazra');
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>(lesson.attendanceStatus || 'Present');
-  const [lateMinutes, setLateMinutes] = useState<number>(lesson.lateMinutes || 10);
+  const [lateMinutes, setLateMinutes] = useState<number | ''>(lesson.lateMinutes || 10);
   const [absentReason, setAbsentReason] = useState<string>(lesson.absentReason || '');
   const [lessonCovered, setLessonCovered] = useState<string>(lesson.lessonCovered || '');
   const [mushafPage, setMushafPage] = useState<string>(lesson.mushafPage ? String(lesson.mushafPage) : '');
@@ -75,7 +75,7 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
         month,
         lessonType,
         attendanceStatus,
-        lateMinutes: attendanceStatus === 'Late' ? lateMinutes : undefined,
+        lateMinutes: attendanceStatus === 'Late' ? (typeof lateMinutes === 'number' ? lateMinutes : 10) : undefined,
         absentReason: attendanceStatus === 'Absent' ? absentReason : undefined,
         lessonCovered: attendanceStatus === 'Absent' ? (absentReason ? `Absent (${absentReason})` : 'Absent') : lessonCovered.trim(),
         mushafPage: mushafPage.trim() || undefined,
@@ -187,7 +187,16 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
                 min={1}
                 max={120}
                 value={lateMinutes}
-                onChange={(e) => setLateMinutes(Number(e.target.value))}
+                placeholder="10"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setLateMinutes('');
+                  } else {
+                    const parsed = parseInt(val, 10);
+                    setLateMinutes(isNaN(parsed) ? '' : parsed);
+                  }
+                }}
                 className="w-full text-xs border border-amber-300 rounded-lg px-2.5 py-1.5 bg-amber-50/40"
               />
             </div>

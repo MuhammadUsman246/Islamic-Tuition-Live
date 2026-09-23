@@ -357,10 +357,10 @@ const MainPortal: React.FC = () => {
     }
   }, [currentTab, role]);
 
-  // Real-time subscribe to tutors list to capture Live Availability Status immediately
+  // Real-time subscribe to tutors list to capture Live Availability Status immediately (Admin & Supervisor only)
   useEffect(() => {
     if (!currentUser) return;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
+    if (role !== 'admin' && role !== 'supervisor') return;
     const unsub = subscribeToTutors((updatedTutors) => {
       if (updatedTutors && updatedTutors.length > 0) {
         setTutors(deduplicateTutors(updatedTutors));

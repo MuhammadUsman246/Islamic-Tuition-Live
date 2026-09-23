@@ -3932,15 +3932,6 @@ export async function recordUserSessionHeartbeat(session: {
   try {
     const sessionRef = doc(db, SESSIONS_COL, sessionId);
     await setDoc(sessionRef, sanitizeFirestoreObject(sessionRecord), { merge: true });
-    
-    // Also update user's profile with lastActiveAt & lastLoginAt
-    const userRef = doc(db, USERS_COL, session.uid);
-    await setDoc(userRef, {
-      lastActiveAt: now,
-      lastLoginAt: loginTimestamp,
-      sessionStatus: 'online',
-      deviceInfo: `${browser} on ${operatingSystem}`
-    }, { merge: true });
   } catch (err) {
     // Silent fallback to memory sessions
   }
