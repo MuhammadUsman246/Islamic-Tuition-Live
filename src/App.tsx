@@ -40,7 +40,12 @@ import {
   subscribeToStudents,
   subscribeToClasses,
   loadCachedCollection,
-  deduplicateTutors
+  deduplicateTutors,
+  ensureFeesLoaded,
+  ensureSalariesLoaded,
+  ensureReferralsLoaded,
+  ensureAttendanceLoaded,
+  ensureTutorAttendanceLoaded
 } from './services/dataService';
 import { ensureDatabaseSeeded } from './services/seedData';
 import { clearAllAcademyData } from './services/seedData';
@@ -287,27 +292,31 @@ const MainPortal: React.FC = () => {
   });
   const [dataLoading, setDataLoading] = useState<boolean>(false);
 
-  // Load all real database entities with high-speed parallel caching
+  // Load real database entities with intelligent role-scoped startup and high-speed memory caching
   const loadAcademyData = useCallback(async (forceRefresh = false) => {
     try {
-      const data = await fetchAllAcademyData(forceRefresh);
+      const targetId = role === 'tutor'
+        ? (userProfile?.tutorId || currentUserId)
+        : (userProfile?.studentId || currentUserId);
+
+      const data = await fetchAllAcademyData(forceRefresh, role, targetId);
 
       if (data.students && data.students.length > 0) setStudents(data.students);
       if (data.tutors && data.tutors.length > 0) setTutors(deduplicateTutors(data.tutors));
       if (data.classes && data.classes.length > 0) setClasses(data.classes);
       if (data.lessons) setLessons(data.lessons);
-      if (data.fees) setFees(data.fees);
-      if (data.salaries) setSalaries(data.salaries);
-      if (data.referrals) setReferrals(data.referrals);
+      if (data.fees && data.fees.length > 0) setFees(data.fees);
+      if (data.salaries && data.salaries.length > 0) setSalaries(data.salaries);
+      if (data.referrals && data.referrals.length > 0) setReferrals(data.referrals);
       if (data.announcements) setAnnouncements(data.announcements.filter(a => isAnnouncementTargetedForRole(a, role)));
-      if (data.attendance) setAttendance(data.attendance);
-      if (data.tutorAttendance) setTutorAttendance(data.tutorAttendance);
+      if (data.attendance && data.attendance.length > 0) setAttendance(data.attendance);
+      if (data.tutorAttendance && data.tutorAttendance.length > 0) setTutorAttendance(data.tutorAttendance);
     } catch (err) {
       console.error("Error loading academy database:", err);
     } finally {
       setDataLoading(false);
     }
-  }, [role]);
+  }, [role, userProfile?.tutorId, userProfile?.studentId, currentUserId]);
 
   useEffect(() => {
     // 1. Instantly load / refresh data in background
@@ -315,6 +324,38 @@ const MainPortal: React.FC = () => {
     // 2. Non-blocking verification of seeding (0ms if already seeded)
     ensureDatabaseSeeded().catch(() => {});
   }, [loadAcademyData]);
+
+  // Lazy-load heavy secondary collections on-demand when specific tabs are activated
+  useEffect(() => {
+    if (role === 'admin') {
+      if (currentTab === 'fees') {
+        ensureFeesLoaded().then(loadedFees => {
+          if (loadedFees && loadedFees.length > 0) setFees(loadedFees);
+        });
+      } else if (currentTab === 'salaries') {
+        ensureSalariesLoaded().then(loadedSalaries => {
+          if (loadedSalaries && loadedSalaries.length > 0) setSalaries(loadedSalaries);
+        });
+      } else if (currentTab === 'referrals') {
+        ensureReferralsLoaded().then(loadedReferrals => {
+          if (loadedReferrals && loadedReferrals.length > 0) setReferrals(loadedReferrals);
+        });
+      } else if (currentTab === 'attendance' || currentTab === 'tutor_attendance') {
+        ensureAttendanceLoaded().then(loadedAttendance => {
+          if (loadedAttendance && loadedAttendance.length > 0) setAttendance(loadedAttendance);
+        });
+        ensureTutorAttendanceLoaded().then(loadedTutorAtt => {
+          if (loadedTutorAtt && loadedTutorAtt.length > 0) setTutorAttendance(loadedTutorAtt);
+        });
+      }
+    } else if (role === 'student' || role === 'parent') {
+      if (currentTab === 'student_fees' || currentTab === 'parent_fees') {
+        ensureFeesLoaded().then(loadedFees => {
+          if (loadedFees && loadedFees.length > 0) setFees(loadedFees);
+        });
+      }
+    }
+  }, [currentTab, role]);
 
   // Real-time subscribe to tutors list to capture Live Availability Status immediately
   useEffect(() => {
@@ -332,36 +373,38 @@ const MainPortal: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
+    const tutorFilter = role === 'tutor' ? (userProfile?.tutorId || currentUserId) : undefined;
     const unsub = subscribeToClasses((updatedClasses) => {
       if (updatedClasses && updatedClasses.length > 0) {
         setClasses(updatedClasses);
       }
-    });
+    }, tutorFilter);
     return () => unsub();
-  }, [currentUser, role]);
+  }, [currentUser, role, userProfile?.tutorId, currentUserId]);
 
   // Real-time subscribe to lessons so tutor entries immediately replicate to spreadsheets in Admin & Supervisor dashboards
   useEffect(() => {
     if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
-    const filterTutorId = role === 'tutor' ? (userProfile?.tutorId || undefined) : undefined;
+    const filterTutorId = role === 'tutor' ? (userProfile?.tutorId || currentUserId) : undefined;
     const unsub = subscribeToLessons((updatedLessons) => {
       setLessons(updatedLessons);
     }, filterTutorId);
     return () => unsub();
-  }, [currentUser, role, userProfile?.tutorId]);
+  }, [currentUser, role, userProfile?.tutorId, currentUserId]);
 
   // Real-time subscribe to students list so new student profiles created by Admin replicate immediately everywhere
   useEffect(() => {
     if (!currentUser) return;
-    if (role !== 'admin' && role !== 'supervisor') return;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
+    const tutorFilter = role === 'tutor' ? (userProfile?.tutorId || currentUserId) : undefined;
     const unsub = subscribeToStudents((updatedStudents) => {
       if (updatedStudents && updatedStudents.length > 0) {
         setStudents(updatedStudents);
       }
-    });
+    }, tutorFilter);
     return () => unsub();
-  }, [currentUser, role]);
+  }, [currentUser, role, userProfile?.tutorId, currentUserId]);
 
   // Dynamic Linking Effect: Ensure logged in user's profile is linked to real student/parent/tutor record in Firestore
   useEffect(() => {
@@ -555,7 +598,11 @@ const MainPortal: React.FC = () => {
           <div className="max-w-[1360px] mx-auto space-y-5">
             {/* Internal Messages View */}
             {currentTab === 'messages' ? (
-              <ChatView initialThreadId={activeChatThreadId} />
+              <ChatView
+                initialThreadId={activeChatThreadId}
+                students={students}
+                tutors={tutors}
+              />
             ) : role === 'admin' ? (
               <AdminDashboard
                 currentTab={currentTab}

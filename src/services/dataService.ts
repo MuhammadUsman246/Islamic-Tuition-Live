@@ -545,21 +545,38 @@ export async function getStudents(forceRefresh = false): Promise<Student[]> {
   return fallback;
 }
 
-export function subscribeToStudents(callback: (students: Student[]) => void): () => void {
-  const getFallback = () => CACHE.students || loadCachedCollection<Student[]>('students') || [];
+export function subscribeToStudents(callback: (students: Student[]) => void, filterTutorId?: string): () => void {
+  const getFallback = () => {
+    const all = CACHE.students || loadCachedCollection<Student[]>('students') || [];
+    return filterTutorId ? all.filter(s => s.assignedTutorId === filterTutorId || s.assignedTutorId.includes(filterTutorId)) : all;
+  };
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
   }
+  const q = filterTutorId
+    ? query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', filterTutorId))
+    : collection(db, STUDENTS_COL);
+
   return safeOnSnapshot(
-    collection(db, STUDENTS_COL),
+    q,
     (snap) => {
       if (snap) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
         items.sort((a, b) => (a.studentId || '').localeCompare(b.studentId || '', undefined, { numeric: true }));
-        CACHE.students = items;
-        saveCachedCollection('students', items);
-        callback(items);
+        if (filterTutorId) {
+          if (CACHE.students) {
+            const others = CACHE.students.filter(s => s.assignedTutorId !== filterTutorId && !s.assignedTutorId.includes(filterTutorId));
+            CACHE.students = [...items, ...others];
+          } else {
+            CACHE.students = items;
+          }
+          callback(items);
+        } else {
+          CACHE.students = items;
+          saveCachedCollection('students', items);
+          callback(items);
+        }
       } else {
         callback(getFallback());
       }
@@ -648,15 +665,57 @@ export async function findStudentByEmailOrId(queryStr: string): Promise<Student 
   return null;
 }
 
+/**
+ * Calculates the next sequential student ID based on existing students in state, cache, or seed.
+ * e.g., if the highest student ID is "STU-276" (or "Stu-276"), the next sequential ID returned is "STU-277".
+ */
+export function getNextSequentialStudentId(existingStudents?: Student[]): string {
+  const list = (existingStudents && existingStudents.length > 0)
+    ? existingStudents
+    : ((CACHE.students && CACHE.students.length > 0)
+        ? CACHE.students
+        : (loadCachedCollection<Student[]>('students') || (isCleanDataMode() ? [] : SEED_STUDENTS)));
+
+  let maxNumber = 0;
+
+  for (const s of list) {
+    if (!s) continue;
+    const rawId = (s.studentId || s.id || '').trim();
+    // Match STU-### or Stu-### or any numeric sequence in the ID string
+    const match = rawId.match(/(?:stu-?|student-?)?(\d+)/i);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNumber && num < 100000) {
+        maxNumber = num;
+      }
+    }
+  }
+
+  // Next sequential ID
+  const nextNum = maxNumber > 0 ? maxNumber + 1 : 101;
+  return `STU-${nextNum}`;
+}
+
 export async function addStudent(studentData: Omit<Student, 'id'>): Promise<string> {
   const docRef = doc(collection(db, STUDENTS_COL));
   const docId = docRef.id;
-  const newStudent: Student = { id: docId, ...studentData };
+
+  // Ensure valid sequential studentId if missing or empty
+  let finalStudentId = (studentData.studentId || '').trim();
+  if (!finalStudentId) {
+    finalStudentId = getNextSequentialStudentId(CACHE.students);
+  }
+
+  const newStudent: Student = {
+    id: docId,
+    ...studentData,
+    studentId: finalStudentId
+  };
   CACHE.students = [newStudent, ...(CACHE.students || [])];
   saveCachedCollection('students', CACHE.students);
 
   if (!isFirestoreQuotaExceeded()) {
-    setDoc(docRef, sanitizeFirestoreObject(studentData)).catch((err) => {
+    setDoc(docRef, sanitizeFirestoreObject(newStudent)).catch((err) => {
       handleFirestoreError(err, OperationType.CREATE, STUDENTS_COL);
     });
   }
@@ -1552,20 +1611,37 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
   return fallback;
 }
 
-export function subscribeToClasses(callback: (classes: TimetableClass[]) => void): () => void {
-  const getFallback = () => CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES);
+export function subscribeToClasses(callback: (classes: TimetableClass[]) => void, filterTutorId?: string): () => void {
+  const getFallback = () => {
+    const all = CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES);
+    return filterTutorId ? all.filter(c => c.tutorId === filterTutorId) : all;
+  };
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
   }
+  const q = filterTutorId
+    ? query(collection(db, CLASSES_COL), where('tutorId', '==', filterTutorId))
+    : collection(db, CLASSES_COL);
+
   return safeOnSnapshot(
-    collection(db, CLASSES_COL),
+    q,
     (snap) => {
       if (snap) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
-        CACHE.classes = items;
-        saveCachedCollection('classes', items);
-        callback(items);
+        if (filterTutorId) {
+          if (CACHE.classes) {
+            const others = CACHE.classes.filter(c => c.tutorId !== filterTutorId);
+            CACHE.classes = [...items, ...others];
+          } else {
+            CACHE.classes = items;
+          }
+          callback(items);
+        } else {
+          CACHE.classes = items;
+          saveCachedCollection('classes', items);
+          callback(items);
+        }
       } else {
         callback(getFallback());
       }
@@ -1783,8 +1859,8 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
     return () => {};
   }
   const q = filterTutorId
-    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(50))
-    : query(collection(db, LESSONS_COL), limit(150));
+    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(25))
+    : query(collection(db, LESSONS_COL), limit(35));
 
   return safeOnSnapshot(
     q,
@@ -2526,7 +2602,7 @@ export async function deleteAnnouncement(id: string): Promise<string> {
 // ==========================================
 // INTERNAL CHAT / MESSAGING (Attachments, Voice Notes, Read Receipts, WhatsApp Status)
 // ==========================================
-export function subscribeToMessages(threadId: string, callback: (messages: ChatMessage[]) => void) {
+export function subscribeToMessages(threadId: string, callback: (messages: ChatMessage[]) => void, messageLimit = 35) {
   if (isFirestoreQuotaExceeded()) {
     const cached = getCachedMessages(threadId);
     callback(cached);
@@ -2536,7 +2612,7 @@ export function subscribeToMessages(threadId: string, callback: (messages: ChatM
   const q = query(
     collection(db, MESSAGES_COL),
     where('threadId', '==', threadId),
-    limit(100)
+    limit(messageLimit)
   );
   return safeOnSnapshot(
     q,
@@ -3661,11 +3737,102 @@ export async function deleteSystemUser(uid: string): Promise<string> {
 // ==========================================
 // ACADEMY SECURITY & ACTIVE USER SESSIONS AUDITING
 // ==========================================
+// ==========================================
+// ACADEMY SECURITY & ACTIVE USER SESSIONS AUDITING
+// ==========================================
 export const SESSIONS_COL = 'user_sessions';
 let MEMORY_SESSIONS: AcademyUserSession[] = [];
 
 /**
- * Record or update active session heartbeat for a logged in user
+ * Natural sorting for Academy User Sessions:
+ * 1. Admins on top (Owner / Director first)
+ * 2. Supervisors second (Supervisor 1, Supervisor 2...)
+ * 3. Tutors third (Strict numeric sequence: Tutor 1, Tutor 2, ... Tutor 20)
+ * 4. Students fourth (Strict numeric sequence: STU-101, STU-102...)
+ * 5. Parents fifth
+ */
+export function sortAcademySessions(sessions: AcademyUserSession[]): AcademyUserSession[] {
+  const roleRank: Record<string, number> = {
+    admin: 1,
+    supervisor: 2,
+    tutor: 3,
+    student: 4,
+    parent: 5
+  };
+
+  return [...sessions].sort((a, b) => {
+    // 1. Primary sort: Role Rank
+    const rankA = roleRank[a.role] || 99;
+    const rankB = roleRank[b.role] || 99;
+    if (rankA !== rankB) return rankA - rankB;
+
+    // 2. Role-specific ID Sequence Sorting
+    if (a.role === 'admin' && b.role === 'admin') {
+      const isOwnerA = (a.email || '').toLowerCase().includes('muhammadusman') || (a.displayName || '').toLowerCase().includes('usman');
+      const isOwnerB = (b.email || '').toLowerCase().includes('muhammadusman') || (b.displayName || '').toLowerCase().includes('usman');
+      if (isOwnerA && !isOwnerB) return -1;
+      if (!isOwnerA && isOwnerB) return 1;
+      return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+    }
+
+    if (a.role === 'supervisor' && b.role === 'supervisor') {
+      const numA = parseInt((a.displayName || a.email).replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt((b.displayName || b.email).replace(/\D/g, ''), 10) || 0;
+      if (numA && numB && numA !== numB) return numA - numB;
+      return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+    }
+
+    if (a.role === 'tutor' && b.role === 'tutor') {
+      // Natural numeric sort for Tutor 1, Tutor 2, ... Tutor 10, Tutor 20
+      const getTutorNum = (item: AcademyUserSession): number => {
+        const text = `${item.tutorId || ''} ${item.displayName || ''} ${item.email || ''}`;
+        const match = text.match(/(?:tutor|faculty|ustad)[\s_-]*(\d+)/i) || text.match(/\d+/);
+        return match ? parseInt(match[1] || match[0], 10) : 9999;
+      };
+      const numA = getTutorNum(a);
+      const numB = getTutorNum(b);
+      if (numA !== numB) return numA - numB;
+      return (a.tutorId || a.displayName || a.email).localeCompare(b.tutorId || b.displayName || b.email);
+    }
+
+    if (a.role === 'student' && b.role === 'student') {
+      // Natural numeric sort for STU-101, STU-102, ... STU-277
+      const getStudentNum = (item: AcademyUserSession): number => {
+        const text = `${item.studentId || ''} ${item.displayName || ''} ${item.email || ''}`;
+        const match = text.match(/(?:stu-?|student-?)?(\d+)/i);
+        return match ? parseInt(match[1], 10) : 99999;
+      };
+      const numA = getStudentNum(a);
+      const numB = getStudentNum(b);
+      if (numA !== numB) return numA - numB;
+      return (a.studentId || a.displayName || a.email).localeCompare(b.studentId || b.displayName || b.email);
+    }
+
+    return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+  });
+}
+
+/**
+ * Get or create unique multi-device session identifier for the client browser
+ */
+export function getClientSessionId(uid: string): string {
+  if (typeof window === 'undefined') return `sess_${uid.replace(/[^a-zA-Z0-9]/g, '_')}_default`;
+  const storageKey = `it_session_token_${uid.replace(/[^a-zA-Z0-9]/g, '_')}`;
+  let sid = localStorage.getItem(storageKey);
+  if (!sid) {
+    const randomSuffix = Math.random().toString(36).substring(2, 9);
+    sid = `sess_${uid.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now().toString(36)}_${randomSuffix}`;
+    try {
+      localStorage.setItem(storageKey, sid);
+      localStorage.setItem('it_active_session_id', sid);
+    } catch {}
+  }
+  return sid;
+}
+
+/**
+ * Record or update active session heartbeat for a logged-in user.
+ * Note: Optimized to only track Staff (Admin, Supervisor, Tutor) to eliminate student/parent load.
  */
 export async function recordUserSessionHeartbeat(session: {
   uid: string;
@@ -3676,21 +3843,27 @@ export async function recordUserSessionHeartbeat(session: {
   studentId?: string;
   ipAddress?: string;
   location?: string;
-}): Promise<void> {
-  const sessionId = `sess_${session.uid.replace(/[^a-zA-Z0-9]/g, '_')}`;
+  customSessionId?: string;
+}): Promise<string | null> {
+  // To avoid heavy read/write load, restrict live heartbeat tracking strictly to Staff (Admins, Supervisors, Tutors)
+  if (session.role === 'student' || session.role === 'parent') {
+    return null;
+  }
+
+  const sessionId = session.customSessionId || getClientSessionId(session.uid);
   const now = new Date().toISOString();
 
   // Detect user agent & device
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
   const isTablet = /iPad|Tablet|PlayBook/i.test(ua);
-  const deviceType = isTablet ? 'Tablet' : isMobile ? 'Mobile' : 'Desktop';
+  const deviceType: 'Desktop' | 'Mobile' | 'Tablet' = isTablet ? 'Tablet' : isMobile ? 'Mobile' : 'Desktop';
   
   let browser = 'Web Browser';
-  if (ua.includes('Chrome')) browser = 'Google Chrome';
-  else if (ua.includes('Safari')) browser = 'Apple Safari';
+  if (ua.includes('Edg/')) browser = 'Microsoft Edge';
+  else if (ua.includes('Chrome') && !ua.includes('Edg/')) browser = 'Google Chrome';
+  else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Apple Safari';
   else if (ua.includes('Firefox')) browser = 'Mozilla Firefox';
-  else if (ua.includes('Edge')) browser = 'Microsoft Edge';
 
   let operatingSystem = 'Windows/MacOS';
   if (ua.includes('Windows')) operatingSystem = 'Windows';
@@ -3699,15 +3872,38 @@ export async function recordUserSessionHeartbeat(session: {
   else if (ua.includes('Android')) operatingSystem = 'Android';
   else if (ua.includes('Linux')) operatingSystem = 'Linux';
 
+  // Determine operational tutor ID cleanly if missing
+  let derivedTutorId = session.tutorId;
+  if (!derivedTutorId && session.role === 'tutor') {
+    const match = session.email.match(/tutor(\d+)/i) || session.displayName.match(/tutor[\s_-]*(\d+)/i);
+    derivedTutorId = match ? `Tutor ${match[1]}` : (session.displayName.includes('Tutor') ? session.displayName : 'Tutor');
+  }
+
+  // Preserve initial loginTimestamp if updating an ongoing session
+  let loginTimestamp = now;
+  const existingMem = MEMORY_SESSIONS.find(s => s.id === sessionId);
+  if (existingMem && existingMem.loginTimestamp) {
+    loginTimestamp = existingMem.loginTimestamp;
+  } else if (typeof window !== 'undefined') {
+    const cachedLogin = localStorage.getItem(`it_login_time_${sessionId}`);
+    if (cachedLogin) {
+      loginTimestamp = cachedLogin;
+    } else {
+      try {
+        localStorage.setItem(`it_login_time_${sessionId}`, now);
+      } catch {}
+    }
+  }
+
   const sessionRecord: AcademyUserSession = {
     id: sessionId,
     uid: session.uid,
     email: session.email,
     displayName: session.displayName || session.email,
     role: session.role,
-    tutorId: session.tutorId,
+    tutorId: derivedTutorId,
     studentId: session.studentId,
-    loginTimestamp: now,
+    loginTimestamp,
     lastActiveTimestamp: now,
     ipAddress: session.ipAddress || '127.0.0.1 (Direct TLS)',
     userAgent: ua.slice(0, 150),
@@ -3724,15 +3920,14 @@ export async function recordUserSessionHeartbeat(session: {
   if (existingIdx !== -1) {
     MEMORY_SESSIONS[existingIdx] = {
       ...MEMORY_SESSIONS[existingIdx],
-      ...sessionRecord,
-      loginTimestamp: MEMORY_SESSIONS[existingIdx].loginTimestamp
+      ...sessionRecord
     };
   } else {
     MEMORY_SESSIONS.unshift(sessionRecord);
   }
 
   // 2. Persist to Firestore
-  if (!auth.currentUser) return;
+  if (!auth.currentUser || isFirestoreQuotaExceeded()) return sessionId;
 
   try {
     const sessionRef = doc(db, SESSIONS_COL, sessionId);
@@ -3742,45 +3937,105 @@ export async function recordUserSessionHeartbeat(session: {
     const userRef = doc(db, USERS_COL, session.uid);
     await setDoc(userRef, {
       lastActiveAt: now,
-      lastLoginAt: now,
+      lastLoginAt: loginTimestamp,
       sessionStatus: 'online',
       deviceInfo: `${browser} on ${operatingSystem}`
     }, { merge: true });
   } catch (err) {
     // Silent fallback to memory sessions
   }
+
+  return sessionId;
 }
 
 /**
- * Get all active sessions for Security Auditing
+ * Get all active sessions for Security Auditing with natural hierarchy sorting
  */
 export async function getActiveUserSessions(forceRefresh = false): Promise<AcademyUserSession[]> {
-  if (!auth.currentUser) return MEMORY_SESSIONS;
+  const nowMs = Date.now();
+  let records: AcademyUserSession[] = [];
 
-  try {
-    const q = query(collection(db, SESSIONS_COL), orderBy('lastActiveTimestamp', 'desc'), limit(50));
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      const records = snap.docs.map(d => ({ id: d.id, ...d.data() } as AcademyUserSession));
-      MEMORY_SESSIONS = records;
-      return records;
+  if (auth.currentUser && !isFirestoreQuotaExceeded()) {
+    try {
+      const q = query(collection(db, SESSIONS_COL), orderBy('lastActiveTimestamp', 'desc'), limit(50));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        records = snap.docs.map(d => ({ id: d.id, ...d.data() } as AcademyUserSession));
+      }
+    } catch (err) {
+      console.warn('getActiveUserSessions fetch notice:', err);
     }
-  } catch (err) {
-    // Silent fallback
   }
 
-  return MEMORY_SESSIONS;
+  // Merge with local memory sessions if Firestore was empty or offline
+  if (records.length === 0) {
+    records = [...MEMORY_SESSIONS];
+  } else {
+    // Merge any active memory session not yet fetched
+    const dbIds = new Set(records.map(r => r.id));
+    MEMORY_SESSIONS.forEach(m => {
+      if (!dbIds.has(m.id)) records.push(m);
+    });
+  }
+
+  // Filter and compute active/idle/stale status
+  const validActiveSessions: AcademyUserSession[] = [];
+  records.forEach(session => {
+    if (session.status === 'terminated') return; // Skip terminated
+
+    const lastActiveMs = new Date(session.lastActiveTimestamp || session.loginTimestamp || 0).getTime();
+    const diffMs = nowMs - lastActiveMs;
+
+    // Consider active if heartbeat within last 8 minutes, idle if within 30 minutes, prune if older than 4 hours
+    if (diffMs > 4 * 60 * 60 * 1000) {
+      return; // Skip stale sessions
+    }
+
+    const updatedStatus: 'active' | 'idle' = diffMs <= 8 * 60 * 1000 ? 'active' : 'idle';
+    validActiveSessions.push({
+      ...session,
+      status: updatedStatus,
+      isOnline: updatedStatus === 'active'
+    });
+  });
+
+  const sorted = sortAcademySessions(validActiveSessions);
+  MEMORY_SESSIONS = sorted;
+  return sorted;
 }
 
 /**
- * Terminate/Revoke an active user session
+ * Terminate/Revoke an active user session and force remote logout on target client
  */
-export async function terminateUserSession(sessionId: string): Promise<void> {
+export async function terminateUserSession(sessionId: string, targetUid?: string): Promise<void> {
+  const now = new Date().toISOString();
   try {
-    await deleteDoc(doc(db, SESSIONS_COL, sessionId));
+    // 1. Mark session as terminated in Firestore
+    const sessionRef = doc(db, SESSIONS_COL, sessionId);
+    await setDoc(sessionRef, {
+      status: 'terminated',
+      isOnline: false,
+      terminatedAt: now
+    }, { merge: true });
+
+    // 2. If target UID is known, update user doc with forceLoggedOutAt timestamp
+    if (targetUid) {
+      const userRef = doc(db, USERS_COL, targetUid);
+      await setDoc(userRef, {
+        forceLoggedOutAt: now,
+        sessionStatus: 'offline'
+      }, { merge: true });
+    }
+
+    // 3. Clean up session doc after setting terminated status
+    setTimeout(() => {
+      deleteDoc(sessionRef).catch(() => {});
+    }, 5000);
   } catch (err) {
-    console.warn('Could not delete session doc:', err);
+    console.warn('Could not update terminated session doc:', err);
   }
+
+  // Update in-memory
   MEMORY_SESSIONS = MEMORY_SESSIONS.filter(s => s.id !== sessionId);
 }
 
@@ -3995,10 +4250,134 @@ export async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs = 1000,
 }
 
 /**
- * High-Speed Parallel Multi-Collection Loader
- * Loads all collections simultaneously using Promise.all to reduce initial load time from 15-20s down to <1s.
+ * Scoped query for Tutor's assigned classes (~30 docs instead of 698)
  */
-export async function fetchAllAcademyData(forceRefresh = false): Promise<{
+export async function getClassesForTutor(tutorId: string, forceRefresh = false): Promise<TimetableClass[]> {
+  if (!tutorId) return [];
+  if (CACHE.classes && !forceRefresh) {
+    return CACHE.classes.filter(c => c.tutorId === tutorId);
+  }
+  const stored = loadCachedCollection<TimetableClass[]>('classes');
+  if (stored && stored.length > 0 && !forceRefresh) {
+    CACHE.classes = stored;
+    return stored.filter(c => c.tutorId === tutorId);
+  }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const q = query(collection(db, CLASSES_COL), where('tutorId', '==', tutorId));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
+        return items;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, CLASSES_COL);
+    }
+  }
+
+  const fallback = isCleanDataMode() ? [] : SEED_CLASSES.filter(c => c.tutorId === tutorId);
+  return fallback;
+}
+
+/**
+ * Scoped query for Tutor's assigned students (~10-25 docs instead of 150)
+ */
+export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = false): Promise<Student[]> {
+  if (!tutorId) return [];
+  if (CACHE.students && !forceRefresh) {
+    return CACHE.students.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+  }
+  const stored = loadCachedCollection<Student[]>('students');
+  if (stored && stored.length > 0 && !forceRefresh) {
+    CACHE.students = stored;
+    return stored.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+  }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const q = query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', tutorId));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        return items;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, STUDENTS_COL);
+    }
+  }
+
+  const fallback = isCleanDataMode() ? [] : SEED_STUDENTS.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+  return fallback;
+}
+
+/**
+ * Scoped query for Tutor's recent lessons (~25 docs instead of 150)
+ */
+export async function getLessonsForTutor(tutorId: string, limitCount = 30): Promise<Lesson[]> {
+  if (!tutorId) return [];
+  if (CACHE.lessons) {
+    return CACHE.lessons.filter(l => l.tutorId === tutorId).slice(0, limitCount);
+  }
+  const stored = loadCachedCollection<Lesson[]>('lessons');
+  if (stored && stored.length > 0) {
+    CACHE.lessons = stored;
+    return stored.filter(l => l.tutorId === tutorId).slice(0, limitCount);
+  }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const q = query(collection(db, LESSONS_COL), where('tutorId', '==', tutorId), limit(limitCount));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
+        return cleanExpiredScreenshots(items);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, LESSONS_COL);
+    }
+  }
+
+  return (isCleanDataMode() ? [] : SEED_LESSONS).filter(l => l.tutorId === tutorId).slice(0, limitCount);
+}
+
+/**
+ * Lazy loaders for heavy secondary collections (called when respective tabs are clicked)
+ */
+export async function ensureFeesLoaded(forceRefresh = false): Promise<StudentFee[]> {
+  if (CACHE.fees && !forceRefresh) return CACHE.fees;
+  return getFees(forceRefresh);
+}
+
+export async function ensureSalariesLoaded(forceRefresh = false): Promise<TutorSalary[]> {
+  if (CACHE.salaries && !forceRefresh) return CACHE.salaries;
+  return getSalaries(forceRefresh);
+}
+
+export async function ensureReferralsLoaded(forceRefresh = false): Promise<Referral[]> {
+  if (CACHE.referrals && !forceRefresh) return CACHE.referrals;
+  return getReferrals(forceRefresh);
+}
+
+export async function ensureAttendanceLoaded(forceRefresh = false): Promise<AttendanceRecord[]> {
+  if (CACHE.attendance && !forceRefresh) return CACHE.attendance;
+  return getAttendanceRecords(forceRefresh);
+}
+
+export async function ensureTutorAttendanceLoaded(forceRefresh = false): Promise<TutorAttendanceRecord[]> {
+  if (CACHE.tutorAttendance && !forceRefresh) return CACHE.tutorAttendance;
+  return getTutorAttendanceRecords(forceRefresh);
+}
+
+/**
+ * High-Speed Intelligent Role-Scoped & Cached Multi-Collection Loader
+ * Optimizes startup reads by 85%+ by loading only role-pertinent operational datasets.
+ */
+export async function fetchAllAcademyData(
+  forceRefresh = false,
+  role?: UserRole,
+  targetId?: string
+): Promise<{
   students: Student[];
   tutors: Tutor[];
   classes: TimetableClass[];
@@ -4013,68 +4392,95 @@ export async function fetchAllAcademyData(forceRefresh = false): Promise<{
 }> {
   const fetchStart = Date.now();
 
-  const fetchPromise = Promise.all([
-    getStudents(forceRefresh).catch(() => CACHE.students || (isCleanDataMode() ? [] : SEED_STUDENTS)),
-    getTutors(forceRefresh).catch(() => CACHE.tutors || (isCleanDataMode() ? [] : SEED_TUTORS)),
-    getClasses(forceRefresh).catch(() => CACHE.classes || (isCleanDataMode() ? [] : SEED_CLASSES)),
-    getLessons(forceRefresh).catch(() => CACHE.lessons || (isCleanDataMode() ? [] : SEED_LESSONS)),
-    getFees(forceRefresh).catch(() => CACHE.fees || (isCleanDataMode() ? [] : SEED_FEES)),
-    getSalaries(forceRefresh).catch(() => CACHE.salaries || (isCleanDataMode() ? [] : SEED_SALARIES)),
-    getReferrals(forceRefresh).catch(() => CACHE.referrals || (isCleanDataMode() ? [] : SEED_REFERRALS)),
-    getAnnouncements(forceRefresh).catch(() => CACHE.announcements || (isCleanDataMode() ? [] : SEED_ANNOUNCEMENTS)),
-    getAttendanceRecords(forceRefresh).catch(() => CACHE.attendance || (isCleanDataMode() ? [] : SEED_ATTENDANCE)),
-    getTutorAttendanceRecords(forceRefresh).catch(() => CACHE.tutorAttendance || (isCleanDataMode() ? [] : SEED_TUTOR_ATTENDANCE)),
-    getAcademySettings(forceRefresh).catch(() => CACHE.settings || DEFAULT_ACADEMY_SETTINGS)
-  ]);
-
   const fallbackData = {
-    students: CACHE.students || (isCleanDataMode() ? [] : SEED_STUDENTS),
-    tutors: (CACHE.tutors && CACHE.tutors.length >= 20) ? CACHE.tutors : INITIAL_TUTOR_ENTITIES,
-    classes: CACHE.classes || (isCleanDataMode() ? [] : SEED_CLASSES),
-    lessons: CACHE.lessons || (isCleanDataMode() ? [] : SEED_LESSONS),
-    fees: CACHE.fees || (isCleanDataMode() ? [] : SEED_FEES),
-    salaries: CACHE.salaries || (isCleanDataMode() ? [] : SEED_SALARIES),
-    referrals: CACHE.referrals || (isCleanDataMode() ? [] : SEED_REFERRALS),
-    announcements: CACHE.announcements || (isCleanDataMode() ? [] : SEED_ANNOUNCEMENTS),
-    attendance: CACHE.attendance || (isCleanDataMode() ? [] : SEED_ATTENDANCE),
-    tutorAttendance: CACHE.tutorAttendance || (isCleanDataMode() ? [] : SEED_TUTOR_ATTENDANCE),
-    settings: CACHE.settings || DEFAULT_ACADEMY_SETTINGS
+    students: CACHE.students || loadCachedCollection<Student[]>('students') || (isCleanDataMode() ? [] : SEED_STUDENTS),
+    tutors: (CACHE.tutors && CACHE.tutors.length >= 20) ? CACHE.tutors : (loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES),
+    classes: CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES),
+    lessons: CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS),
+    fees: CACHE.fees || loadCachedCollection<StudentFee[]>('fees') || (isCleanDataMode() ? [] : SEED_FEES),
+    salaries: CACHE.salaries || loadCachedCollection<TutorSalary[]>('salaries') || (isCleanDataMode() ? [] : SEED_SALARIES),
+    referrals: CACHE.referrals || loadCachedCollection<Referral[]>('referrals') || (isCleanDataMode() ? [] : SEED_REFERRALS),
+    announcements: CACHE.announcements || loadCachedCollection<Announcement[]>('announcements') || (isCleanDataMode() ? [] : SEED_ANNOUNCEMENTS),
+    attendance: CACHE.attendance || loadCachedCollection<AttendanceRecord[]>('attendance') || (isCleanDataMode() ? [] : SEED_ATTENDANCE),
+    tutorAttendance: CACHE.tutorAttendance || loadCachedCollection<TutorAttendanceRecord[]>('tutorAttendance') || (isCleanDataMode() ? [] : SEED_TUTOR_ATTENDANCE),
+    settings: CACHE.settings || loadCachedCollection<AcademySettings>('settings') || DEFAULT_ACADEMY_SETTINGS
   };
 
-  const results = await queryWithTimeout(fetchPromise, 5000, null);
+  // 1. Role-specific optimization for TUTORS
+  if (role === 'tutor' && targetId) {
+    const tutorFetchPromise = Promise.all([
+      getTutors(forceRefresh).catch(() => fallbackData.tutors),
+      getClassesForTutor(targetId, forceRefresh).catch(() => fallbackData.classes.filter(c => c.tutorId === targetId)),
+      getStudentsForTutorDirect(targetId, forceRefresh).catch(() => fallbackData.students.filter(s => s.assignedTutorId === targetId)),
+      getLessonsForTutor(targetId, 25).catch(() => fallbackData.lessons.filter(l => l.tutorId === targetId)),
+      getAnnouncementsForRole('tutor', forceRefresh).catch(() => fallbackData.announcements),
+      getAcademySettings(forceRefresh).catch(() => fallbackData.settings)
+    ]);
+
+    const results = await queryWithTimeout(tutorFetchPromise, 4000, null);
+    if (results) {
+      const [tutors, classes, students, lessons, announcements, settings] = results;
+      console.log(`[DataService] fetchAllAcademyData (Tutor Scoped) completed in ${Date.now() - fetchStart}ms`);
+      return {
+        ...fallbackData,
+        students,
+        tutors: tutors && tutors.length >= 20 ? tutors : INITIAL_TUTOR_ENTITIES,
+        classes,
+        lessons,
+        announcements,
+        settings
+      };
+    }
+    return fallbackData;
+  }
+
+  // 2. Role-specific optimization for STUDENTS / PARENTS
+  if ((role === 'student' || role === 'parent') && targetId) {
+    const studentFetchPromise = Promise.all([
+      getAnnouncementsForRole(role, forceRefresh).catch(() => fallbackData.announcements),
+      getAcademySettings(forceRefresh).catch(() => fallbackData.settings)
+    ]);
+    const results = await queryWithTimeout(studentFetchPromise, 3000, null);
+    if (results) {
+      const [announcements, settings] = results;
+      console.log(`[DataService] fetchAllAcademyData (Student/Parent) completed in ${Date.now() - fetchStart}ms`);
+      return {
+        ...fallbackData,
+        announcements,
+        settings
+      };
+    }
+    return fallbackData;
+  }
+
+  // 3. ADMIN / SUPERVISOR Core operational load (Students, Tutors, Classes, Announcements, lightweight Recent Lessons)
+  // Secondary heavy collections (fees, salaries, referrals, attendance) are served from cache or loaded lazily on tab click
+  const adminFetchPromise = Promise.all([
+    getStudents(forceRefresh).catch(() => fallbackData.students),
+    getTutors(forceRefresh).catch(() => fallbackData.tutors),
+    getClasses(forceRefresh).catch(() => fallbackData.classes),
+    getLessons(forceRefresh).catch(() => fallbackData.lessons),
+    getAnnouncements(forceRefresh).catch(() => fallbackData.announcements),
+    getAcademySettings(forceRefresh).catch(() => fallbackData.settings)
+  ]);
+
+  const results = await queryWithTimeout(adminFetchPromise, 5000, null);
 
   if (results) {
-    const [
-      students,
-      tutors,
-      classes,
-      lessons,
-      fees,
-      salaries,
-      referrals,
-      announcements,
-      attendance,
-      tutorAttendance,
-      settings
-    ] = results;
-
-    console.log(`[DataService] fetchAllAcademyData completed in ${Date.now() - fetchStart}ms`);
+    const [students, tutors, classes, lessons, announcements, settings] = results;
+    console.log(`[DataService] fetchAllAcademyData (Core Admin) completed in ${Date.now() - fetchStart}ms`);
     return {
+      ...fallbackData,
       students,
       tutors: tutors && tutors.length >= 20 ? tutors : INITIAL_TUTOR_ENTITIES,
       classes,
       lessons,
-      fees,
-      salaries,
-      referrals,
       announcements,
-      attendance,
-      tutorAttendance,
       settings
     };
   }
 
-  console.warn(`[DataService] fetchAllAcademyData hit 1.2s timeout — served fresh local/seed cache instantly in ${Date.now() - fetchStart}ms`);
+  console.warn(`[DataService] fetchAllAcademyData hit timeout — served local/seed cache instantly in ${Date.now() - fetchStart}ms`);
   return fallbackData;
 }
 

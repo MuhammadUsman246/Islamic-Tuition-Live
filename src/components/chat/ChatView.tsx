@@ -81,20 +81,48 @@ export interface ChannelDef {
 
 interface ChatViewProps {
   initialThreadId?: string;
+  students?: Student[];
+  tutors?: Tutor[];
 }
 
-export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
+export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: propStudents, tutors: propTutors }) => {
   const { userProfile, activeRole, adminViewingRole, adminViewingTargetId } = useAuth();
   const role: UserRole = activeRole || userProfile?.role || 'admin';
   const currentUserId = (adminViewingRole && adminViewingTargetId)
     ? `${role}_${adminViewingTargetId}`
     : (role === 'tutor' && userProfile?.tutorId ? userProfile.tutorId : (userProfile?.uid || 'user'));
 
-  const [students, setStudents] = useState<Student[]>([]);
-  const [tutors, setTutors] = useState<Tutor[]>([]);
-  const [, setLoadingData] = useState(true);
+  const [students, setStudents] = useState<Student[]>(() => propStudents && propStudents.length > 0 ? propStudents : []);
+  const [tutors, setTutors] = useState<Tutor[]>(() => propTutors && propTutors.length > 0 ? propTutors : []);
+  const [messageLimit, setMessageLimit] = useState<number>(35);
+  const [, setLoadingData] = useState(false);
 
-  // File Inputs references
+  // Sync props when updated from parent without extra Firestore reads
+  useEffect(() => {
+    if (propStudents && propStudents.length > 0) setStudents(propStudents);
+    if (propTutors && propTutors.length > 0) setTutors(propTutors);
+  }, [propStudents, propTutors]);
+
+  // Fallback metadata loader only if not provided by parent/cache
+  useEffect(() => {
+    if (students.length > 0 && tutors.length > 0) return;
+    let mounted = true;
+    const fetchMeta = async () => {
+      try {
+        const [stList, tuList] = await Promise.all([getStudents(), getTutors()]);
+        if (mounted) {
+          if (students.length === 0) setStudents(stList);
+          if (tutors.length === 0) setTutors(tuList);
+        }
+      } catch (err) {
+        console.warn('Could not fetch students/tutors for chat:', err);
+      }
+    };
+    fetchMeta();
+    return () => {
+      mounted = false;
+    };
+  }, [students.length, tutors.length]);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -172,42 +200,10 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load students & tutors
-  useEffect(() => {
-    let mounted = true;
-    const fetchMeta = async () => {
-      try {
-        const [stList, tuList] = await Promise.all([getStudents(), getTutors()]);
-        if (mounted) {
-          setStudents(stList);
-          setTutors(tuList);
-        }
-      } catch (err) {
-        console.warn('Could not fetch students/tutors for chat:', err);
-      } finally {
-        if (mounted) setLoadingData(false);
-      }
-    };
-    fetchMeta();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   // Subscribe to live unread counts
   useEffect(() => {
     const unsub = subscribeToUnreadMessages(currentUserId, role, (_total, byThread) => {
       setUnreadMap(byThread || {});
-    });
-    return () => unsub();
-  }, [currentUserId, role]);
-
-  // Subscribe to live incoming calls
-  useEffect(() => {
-    const unsub = subscribeToIncomingCalls(currentUserId, role, (incomingCall) => {
-      if (incomingCall) {
-        setActiveCallSession(incomingCall);
-      }
     });
     return () => unsub();
   }, [currentUserId, role]);
@@ -461,13 +457,19 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
     }
   }, [activeThreadId, currentUserId, messages.length]);
 
-  // Subscribe to active thread
+  // Reset messageLimit when switching active thread
   useEffect(() => {
+    setMessageLimit(35);
+  }, [activeThreadId]);
+
+  // Subscribe to active thread with 35-message windowing limit
+  useEffect(() => {
+    if (!activeThreadId) return;
     const unsub = subscribeToMessages(activeThreadId, (msgs) => {
       setMessages(msgs);
-    });
+    }, messageLimit);
     return () => unsub();
-  }, [activeThreadId]);
+  }, [activeThreadId, messageLimit]);
 
   // Auto-scroll on new message
   useEffect(() => {
@@ -1666,7 +1668,21 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                 </div>
               </div>
             ) : (
-              groupedMessages.map((group) => (
+              <>
+                {/* Load Older Messages Pagination Button */}
+                {messages.length >= messageLimit && (
+                  <div className="flex justify-center my-2">
+                    <button
+                      type="button"
+                      onClick={() => setMessageLimit(prev => prev + 35)}
+                      className="px-3.5 py-1.5 rounded-full bg-white/95 hover:bg-white text-[#00A884] hover:text-[#008f6f] border border-[#E9EDEF] shadow-xs text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Load older messages (Showing {messages.length})</span>
+                    </button>
+                  </div>
+                )}
+                {groupedMessages.map((group) => (
                 <div key={group.dateLabel} className="space-y-2.5">
                   {/* WhatsApp Center Date Bubble */}
                   <div className="flex justify-center my-2">
@@ -1903,8 +1919,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId }) => {
                     );
                   })}
                 </div>
-              ))
-            )}
+              ))}
+            </>
+          )}
             <div ref={messagesEndRef} />
           </div>
 

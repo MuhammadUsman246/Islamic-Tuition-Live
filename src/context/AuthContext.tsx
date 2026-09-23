@@ -13,12 +13,12 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, query, where, getDocs, limit, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
 import { UserProfile, UserRole, Student, Tutor } from '../types';
 import { INITIAL_REGISTERED_TUTORS } from '../data/tutorsData';
 import { ensureDatabaseSeeded } from '../services/seedData';
-import { recordUserSessionHeartbeat } from '../services/dataService';
+import { recordUserSessionHeartbeat, getClientSessionId, SESSIONS_COL } from '../services/dataService';
 
 export interface DummyPersona {
   id: string;
@@ -653,31 +653,94 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Continuous Session Heartbeat for Security Auditing
+  // Continuous Session Heartbeat & Remote Termination Listener for Security Auditing
   useEffect(() => {
-    if (userProfile && userProfile.uid) {
+    if (!userProfile || !userProfile.uid) return;
+
+    // Only monitor staff accounts (Admin, Supervisor, Tutor) to eliminate heavy read/write load for students & parents
+    const isStaff = userProfile.role === 'admin' || userProfile.role === 'supervisor' || userProfile.role === 'tutor';
+    if (!isStaff) return;
+
+    const clientSessionId = getClientSessionId(userProfile.uid);
+    let isTerminatedHandled = false;
+
+    const sendHeartbeat = () => {
       recordUserSessionHeartbeat({
         uid: userProfile.uid,
         email: userProfile.email,
         displayName: userProfile.displayName,
         role: userProfile.role,
         tutorId: userProfile.tutorId,
-        studentId: userProfile.studentId
+        studentId: userProfile.studentId,
+        customSessionId: clientSessionId
       }).catch(e => console.warn('Heartbeat update notice:', e));
+    };
 
-      const interval = setInterval(() => {
-        recordUserSessionHeartbeat({
-          uid: userProfile.uid,
-          email: userProfile.email,
-          displayName: userProfile.displayName,
-          role: userProfile.role,
-          tutorId: userProfile.tutorId,
-          studentId: userProfile.studentId
-        }).catch(e => console.warn('Heartbeat update notice:', e));
-      }, 120000);
+    // Initial heartbeat
+    sendHeartbeat();
 
-      return () => clearInterval(interval);
+    // 60-second recurring heartbeat
+    const interval = setInterval(sendHeartbeat, 60000);
+
+    // Also send on window focus
+    const onFocus = () => sendHeartbeat();
+    window.addEventListener('focus', onFocus);
+
+    // 1. Real-time listener for current session document in Firestore
+    let unsubSession: (() => void) | null = null;
+    let unsubUser: (() => void) | null = null;
+
+    try {
+      unsubSession = onSnapshot(doc(db, SESSIONS_COL, clientSessionId), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data && data.status === 'terminated' && !isTerminatedHandled) {
+            isTerminatedHandled = true;
+            authLog('RemoteTermination', 'Session marked as terminated by administrator. Forcing logout...');
+            try {
+              localStorage.setItem(
+                'it_auth_notice',
+                'Your session was remotely terminated by the Academy Administrator. Please sign in again with your email and password.'
+              );
+            } catch {}
+            forceLogout();
+          }
+        }
+      }, (err) => {
+        // Silent snapshot error fallback
+      });
+
+      // 2. Also listen for forceLoggedOutAt timestamp on user's profile
+      unsubUser = onSnapshot(doc(db, 'users', userProfile.uid), (snap) => {
+        if (snap.exists()) {
+          const uData = snap.data();
+          if (uData?.forceLoggedOutAt && !isTerminatedHandled) {
+            const forceTime = new Date(uData.forceLoggedOutAt).getTime();
+            const sessionLoginTime = new Date(localStorage.getItem(`it_login_time_${clientSessionId}`) || 0).getTime();
+            if (forceTime >= sessionLoginTime - 1000) {
+              isTerminatedHandled = true;
+              authLog('RemoteTermination', 'User account forced logout by administrator.');
+              try {
+                localStorage.setItem(
+                  'it_auth_notice',
+                  'Your session was remotely terminated by the Academy Administrator. Please sign in again with your email and password.'
+                );
+              } catch {}
+              forceLogout();
+            }
+          }
+        }
+      }, () => {});
+    } catch (err) {
+      console.warn('Session security listener setup note:', err);
     }
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      if (unsubSession) unsubSession();
+      if (unsubUser) unsubUser();
+    };
   }, [userProfile?.uid, userProfile?.role, userProfile?.email]);
 
   const loginWithEmail = async (email: string, pass: string, rememberMe: boolean = true) => {
@@ -946,6 +1009,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const forceLogout = async () => {
     authLog('forceLogout', 'Signing out user session unconditionally...');
+    if (userProfile?.uid) {
+      try {
+        const clientSessionId = getClientSessionId(userProfile.uid);
+        deleteDoc(doc(db, SESSIONS_COL, clientSessionId)).catch(() => {});
+      } catch {}
+    }
     try {
       await fbSignOut(auth);
     } catch (err) {

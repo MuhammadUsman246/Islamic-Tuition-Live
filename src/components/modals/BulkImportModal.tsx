@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, CheckCircle, Sparkles, AlertCircle, Loader2, Copy, FileSpreadsheet } from 'lucide-react';
 import { Student, Tutor, TimetableClass, DayOfWeek, CourseType, AllowedCurrency } from '../../types';
-import { addStudent, addClass } from '../../services/dataService';
+import { addStudent, addClass, getNextSequentialStudentId } from '../../services/dataService';
 
 interface BulkImportModalProps {
   isOpen: boolean;
@@ -55,16 +55,10 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
     const lines = pastedText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return;
 
-    // Highest ID fallback tracker
-    let startCounter = 301;
-    students.forEach((s) => {
-      if (s.studentId && s.studentId.startsWith('STU-')) {
-        const num = parseInt(s.studentId.replace('STU-', ''), 10);
-        if (!isNaN(num) && num >= startCounter) {
-          startCounter = num + 1;
-        }
-      }
-    });
+    // Calculate next sequential student ID base number
+    const nextSeqId = getNextSequentialStudentId(students);
+    const parsedNum = parseInt(nextSeqId.replace(/[^0-9]/g, ''), 10);
+    const startCounter = !isNaN(parsedNum) ? parsedNum : 101;
 
     const parsed: ImportItem[] = [];
 

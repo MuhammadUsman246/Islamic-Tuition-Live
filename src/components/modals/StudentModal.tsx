@@ -3,7 +3,7 @@ import { X, UserPlus, CheckCircle, Key, Shield, CreditCard, Share2 } from 'lucid
 import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency } from '../../types';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
-import { registerUserAccount, addReferral } from '../../services/dataService';
+import { registerUserAccount, addReferral, getNextSequentialStudentId } from '../../services/dataService';
 
 interface StudentModalProps {
   isOpen: boolean;
@@ -22,7 +22,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   students = [],
   initialStudent
 }) => {
-  const [studentId, setStudentId] = useState<string>('STU-106');
+  const [studentId, setStudentId] = useState<string>(() => getNextSequentialStudentId(students));
   const [name, setName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [phone, setPhone] = useState<string>('');
@@ -77,7 +77,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setReferralRewardAmount(initialStudent.referralRewardAmount ?? 30);
       setReferralStatus((initialStudent.referralStatus as any) || 'Pending');
     } else {
-      setStudentId(`STU-${Math.floor(100 + Math.random() * 900)}`);
+      setStudentId(getNextSequentialStudentId(students));
       setName('');
       setEmail('');
       setPhone('');
@@ -101,7 +101,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setReferralRewardAmount(30);
       setReferralStatus('Pending');
     }
-  }, [initialStudent, tutors]);
+  }, [isOpen, initialStudent, tutors, students]);
 
   if (!isOpen) return null;
 

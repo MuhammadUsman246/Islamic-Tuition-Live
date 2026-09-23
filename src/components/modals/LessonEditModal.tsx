@@ -155,11 +155,11 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
                 onChange={(e) => setLessonType(e.target.value as any)}
                 className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
               >
-                <option value="Noorani Qaida">Noorani Qaida</option>
                 <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
-                <option value="Hifz">Hifz</option>
+                <option value="Noorani Qaida">Noorani Qaida</option>
+                <option value="Hifz">Hifz (Quran Memorization)</option>
                 <option value="Tajweed & Tarteel">Tajweed & Tarteel</option>
-                <option value="Islamic Studies">Islamic Studies</option>
+                <option value="Islamic Studies">Islamic Studies / Duas Only (No Qaida/Quran Read)</option>
               </select>
             </div>
 

@@ -5744,6 +5744,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onClose={() => setIsCreateUserModalOpen(false)}
         onSuccess={onRefreshData}
         availableTutors={tutors}
+        students={students}
       />
 
       {/* Family Group Management Modal */}

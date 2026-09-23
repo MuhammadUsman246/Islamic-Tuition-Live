@@ -40,6 +40,16 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [terminationNotice, setTerminationNotice] = useState<string | null>(() => {
+    try {
+      const notice = localStorage.getItem('it_auth_notice');
+      if (notice) {
+        localStorage.removeItem('it_auth_notice');
+        return notice;
+      }
+    } catch {}
+    return null;
+  });
 
   // Sign In Form State
   const [signInEmail, setSignInEmail] = useState('');
@@ -311,6 +321,16 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
           </div>
 
           <div className="p-4 sm:p-8 space-y-5 sm:space-y-6">
+            {terminationNotice && (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs flex items-start gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-bold">Session Forcefully Revoked</p>
+                  <p className="text-[11px] mt-0.5 text-amber-800">{terminationNotice}</p>
+                </div>
+              </div>
+            )}
+
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />

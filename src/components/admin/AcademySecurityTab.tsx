@@ -4,6 +4,8 @@ import {
   Users,
   Clock,
   Laptop,
+  Smartphone,
+  Tablet,
   Globe,
   AlertTriangle,
   RefreshCw,
@@ -13,11 +15,12 @@ import {
   Key,
   ShieldAlert,
   Search,
-  Eye,
-  Activity
+  Activity,
+  X,
+  UserCheck
 } from 'lucide-react';
 import { AcademyUserSession, UserRole, UserProfile } from '../../types';
-import { getActiveUserSessions, terminateUserSession } from '../../services/dataService';
+import { getActiveUserSessions, terminateUserSession, sortAcademySessions } from '../../services/dataService';
 import { useAuth } from '../../context/AuthContext';
 
 interface AcademySecurityTabProps {
@@ -34,8 +37,12 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'idle' | 'terminated'>('all');
-  const [terminatingId, setTerminatingId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'idle'>('all');
+  
+  // Termination confirmation modal state
+  const [sessionToTerminate, setSessionToTerminate] = useState<AcademyUserSession | null>(null);
+  const [isTerminating, setIsTerminating] = useState(false);
+  
   const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [passwordResetEmail, setPasswordResetEmail] = useState('');
   const [isSendingReset, setIsSendingReset] = useState(false);
@@ -48,8 +55,9 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
   const fetchSessions = async () => {
     setLoadingSessions(true);
     try {
-      const liveSessions = await getActiveUserSessions();
-      setSessions(liveSessions);
+      const liveSessions = await getActiveUserSessions(true);
+      const sorted = sortAcademySessions(liveSessions);
+      setSessions(sorted);
     } catch (err) {
       console.error('Error fetching active sessions:', err);
     } finally {
@@ -59,22 +67,22 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
 
   useEffect(() => {
     fetchSessions();
-    const interval = setInterval(fetchSessions, 30000); // refresh every 30 seconds
+    const interval = setInterval(fetchSessions, 20000); // refresh every 20 seconds
     return () => clearInterval(interval);
   }, []);
 
-  const handleTerminateSession = async (sessionId: string, userDisplayName: string) => {
-    if (!window.confirm(`Are you sure you want to terminate and revoke the session for ${userDisplayName}? This will force the user to sign in again.`)) {
-      return;
-    }
+  const handleConfirmTerminate = async () => {
+    if (!sessionToTerminate) return;
 
-    setTerminatingId(sessionId);
+    setIsTerminating(true);
+    const targetName = sessionToTerminate.displayName || sessionToTerminate.email;
     try {
-      await terminateUserSession(sessionId);
+      await terminateUserSession(sessionToTerminate.id, sessionToTerminate.uid);
       setFeedbackMsg({
-        text: `Session for ${userDisplayName} was successfully terminated and revoked.`,
+        text: `Active session for ${targetName} was forcefully terminated. The user has been disconnected on that device.`,
         type: 'success'
       });
+      setSessionToTerminate(null);
       await fetchSessions();
     } catch (err: any) {
       setFeedbackMsg({
@@ -82,8 +90,8 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
         type: 'error'
       });
     } finally {
-      setTerminatingId(null);
-      setTimeout(() => setFeedbackMsg(null), 4000);
+      setIsTerminating(false);
+      setTimeout(() => setFeedbackMsg(null), 5000);
     }
   };
 
@@ -93,7 +101,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
     try {
       await resetPassword(email.trim());
       setFeedbackMsg({
-        text: `Official password reset instructions sent to ${email}.`,
+        text: `Official password reset instructions dispatched to ${email}.`,
         type: 'success'
       });
       setPasswordResetEmail('');
@@ -108,12 +116,38 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
     }
   };
 
+  const formatDateTime = (isoDate?: string): string => {
+    if (!isoDate) return 'Active now';
+    const d = new Date(isoDate);
+    if (isNaN(d.getTime())) return 'Active now';
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const formatTimeOnly = (isoDate?: string): string => {
+    if (!isoDate) return 'Just now';
+    const d = new Date(isoDate);
+    if (isNaN(d.getTime())) return 'Just now';
+    return d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  };
+
   const filteredSessions = sessions.filter(s => {
     const matchesSearch =
       s.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.uid?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.deviceInfo?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.tutorId && s.tutorId.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (s.studentId && s.studentId.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      s.deviceType?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.browser?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.ipAddress?.toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesRole = roleFilter === 'all' || s.role === roleFilter;
@@ -139,7 +173,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
             <div>
               <h2 className="text-base font-bold text-[#161F1A]">Academy Security & Active Session Audit</h2>
               <p className="text-xs text-[#5A6B61]">
-                Live monitoring of logged-in faculty, parents, and students with real-time access revocation and policy controls.
+                Real-time active faculty & staff monitoring with natural sequence order, multi-device tracking, and instant remote revocation.
               </p>
             </div>
           </div>
@@ -227,7 +261,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
           </div>
           <p className="text-2xl font-bold text-[#2D8B5C] mt-2">Protected</p>
           <p className="text-[11px] text-emerald-800 font-medium mt-1">
-            <span>Auth v9 + Heartbeat Active</span>
+            <span>Auth v9 + Real-time Heartbeat</span>
           </p>
         </div>
       </div>
@@ -239,7 +273,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
           <div className="flex items-center space-x-2">
             <h3 className="text-sm font-bold text-[#161F1A]">Live Authenticated User Sessions</h3>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-              {filteredSessions.length} sessions
+              {filteredSessions.length} active sessions
             </span>
           </div>
 
@@ -251,7 +285,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search user, email, IP..."
+                placeholder="Search tutor, admin, IP..."
                 className="pl-8 pr-3 py-1.5 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A] placeholder-[#5A6B61] focus:ring-1 focus:ring-[#2D8B5C] w-48"
               />
             </div>
@@ -265,7 +299,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
               <option value="all">All Roles</option>
               <option value="admin">Admins</option>
               <option value="supervisor">Supervisors</option>
-              <option value="tutor">Tutors</option>
+              <option value="tutor">Tutors (1-20)</option>
               <option value="student">Students</option>
               <option value="parent">Parents</option>
             </select>
@@ -277,9 +311,8 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
               className="px-2.5 py-1.5 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A]"
             >
               <option value="all">All Statuses</option>
-              <option value="active">Active Now</option>
+              <option value="active">Active Online</option>
               <option value="idle">Idle</option>
-              <option value="terminated">Terminated</option>
             </select>
           </div>
         </div>
@@ -289,8 +322,8 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
               <tr>
-                <th className="py-3 px-4">User Account</th>
-                <th className="py-3 px-4">Role</th>
+                <th className="py-3 px-4">User Account & Sequence</th>
+                <th className="py-3 px-4">Role & Identifier</th>
                 <th className="py-3 px-4">Status & Heartbeat</th>
                 <th className="py-3 px-4">Login Time</th>
                 <th className="py-3 px-4">Device / Browser</th>
@@ -301,66 +334,88 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
             <tbody className="divide-y divide-[#EAE6DE]">
               {filteredSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-[#5A6B61]">
-                    No user sessions matched the specified criteria.
+                  <td colSpan={7} className="py-12 text-center text-[#5A6B61]">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <ShieldCheck className="w-8 h-8 text-gray-300" />
+                      <p className="font-semibold text-gray-600">No active sessions match the specified filter</p>
+                      <p className="text-[11px] text-gray-400">Only currently logged-in faculty and staff are shown.</p>
+                    </div>
                   </td>
                 </tr>
               ) : (
                 filteredSessions.map((session) => {
                   const isCurrentUser = session.uid === userProfile?.uid;
-                  const isTerminating = terminatingId === session.id;
 
-                  // Format dates
-                  const loginTimeStr = new Date(session.loginAt).toLocaleString();
-                  const lastActiveTimeStr = new Date(session.lastActiveAt).toLocaleTimeString();
+                  // Format dates safely
+                  const loginTimeStr = formatDateTime(session.loginTimestamp);
+                  const lastActiveTimeStr = formatTimeOnly(session.lastActiveTimestamp);
+
+                  const DeviceIcon = session.deviceType === 'Mobile' 
+                    ? Smartphone 
+                    : session.deviceType === 'Tablet' 
+                    ? Tablet 
+                    : Laptop;
 
                   return (
                     <tr
                       key={session.id}
-                      className={`hover:bg-[#FAF9F7]/60 transition-colors ${
-                        session.status === 'terminated' ? 'opacity-60 bg-gray-50/50' : ''
-                      }`}
+                      className="hover:bg-[#FAF9F7]/60 transition-colors"
                     >
                       {/* User Account */}
                       <td className="py-3 px-4">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-7 h-7 rounded-full bg-[#2D8B5C]/10 text-[#2D8B5C] flex items-center justify-center font-bold text-xs uppercase">
-                            {session.displayName?.charAt(0) || 'U'}
+                        <div className="flex items-center space-x-2.5">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                            session.role === 'admin' 
+                              ? 'bg-purple-100 text-purple-800'
+                              : session.role === 'supervisor'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {session.role === 'admin' ? 'A' : (session.displayName?.charAt(0) || 'U')}
                           </div>
                           <div>
-                            <span className="font-bold text-[#161F1A] block flex items-center gap-1.5">
-                              {session.displayName || 'User'}
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-[#161F1A]">
+                                {session.displayName || session.email}
+                              </span>
                               {isCurrentUser && (
-                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-100 text-blue-800">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
                                   You
                                 </span>
                               )}
-                            </span>
-                            <span className="text-[11px] text-[#5A6B61]">{session.email}</span>
+                            </div>
+                            <span className="text-[11px] text-[#5A6B61] block">{session.email}</span>
                           </div>
                         </div>
                       </td>
 
-                      {/* Role */}
+                      {/* Role & Operational Identifier */}
                       <td className="py-3 px-4">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${
-                            session.role === 'admin'
-                              ? 'bg-purple-100 text-purple-900 border border-purple-200'
-                              : session.role === 'tutor'
-                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                              : session.role === 'supervisor'
-                              ? 'bg-blue-100 text-blue-900 border border-blue-200'
-                              : session.role === 'parent'
-                              ? 'bg-amber-100 text-amber-900 border border-amber-200'
-                              : 'bg-gray-100 text-gray-800 border border-gray-200'
-                          }`}
-                        >
-                          {session.role}
-                        </span>
+                        <div className="space-y-1">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize inline-block ${
+                              session.role === 'admin'
+                                ? 'bg-purple-100 text-purple-900 border border-purple-200'
+                                : session.role === 'tutor'
+                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                : session.role === 'supervisor'
+                                ? 'bg-blue-100 text-blue-900 border border-blue-200'
+                                : session.role === 'student'
+                                ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                : 'bg-gray-100 text-gray-800 border border-gray-200'
+                            }`}
+                          >
+                            {session.role}
+                          </span>
+                          {(session.tutorId || session.studentId) && (
+                            <span className="text-[11px] font-bold text-[#161F1A] block">
+                              {session.tutorId || session.studentId}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
-                      {/* Status */}
+                      {/* Status & Heartbeat */}
                       <td className="py-3 px-4">
                         {session.status === 'active' ? (
                           <div className="space-y-0.5">
@@ -369,10 +424,10 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                               Active Online
                             </span>
                             <span className="text-[10px] text-gray-500 block">
-                              Last active: {lastActiveTimeStr}
+                              Heartbeat: {lastActiveTimeStr}
                             </span>
                           </div>
-                        ) : session.status === 'idle' ? (
+                        ) : (
                           <div className="space-y-0.5">
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
@@ -382,25 +437,29 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                               Last active: {lastActiveTimeStr}
                             </span>
                           </div>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
-                            Terminated / Revoked
-                          </span>
                         )}
                       </td>
 
                       {/* Login Time */}
                       <td className="py-3 px-4 font-mono text-[#5A6B61] text-[11px]">
-                        {loginTimeStr}
+                        <div className="flex items-center space-x-1">
+                          <Clock className="w-3 h-3 text-gray-400" />
+                          <span>{loginTimeStr}</span>
+                        </div>
                       </td>
 
                       {/* Device / Browser */}
                       <td className="py-3 px-4 text-[#5A6B61]">
                         <div className="flex items-center space-x-1.5">
-                          <Laptop className="w-3.5 h-3.5 text-gray-400" />
-                          <span className="truncate max-w-[140px]" title={session.deviceInfo || session.browser}>
-                            {session.deviceInfo || session.browser || 'Web Browser'}
-                          </span>
+                          <DeviceIcon className="w-3.5 h-3.5 text-gray-500" />
+                          <div className="truncate max-w-[150px]">
+                            <span className="font-semibold text-gray-700 block text-[11px]">
+                              {session.browser || 'Web Browser'}
+                            </span>
+                            <span className="text-[10px] text-gray-400">
+                              {session.operatingSystem || 'Device'} • {session.deviceType || 'Desktop'}
+                            </span>
+                          </div>
                         </div>
                       </td>
 
@@ -408,28 +467,26 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                       <td className="py-3 px-4 font-mono text-[#5A6B61] text-[11px]">
                         <div className="flex items-center space-x-1">
                           <Globe className="w-3 h-3 text-gray-400" />
-                          <span>{session.ipAddress || '192.168.1.1 (LAN)'}</span>
+                          <span>{session.ipAddress || '127.0.0.1 (Direct TLS)'}</span>
                         </div>
                       </td>
 
                       {/* Access Actions */}
-                      <td className="py-3 px-4 text-right space-x-1.5">
-                        {session.status !== 'terminated' && (
-                          <button
-                            type="button"
-                            disabled={isTerminating || isCurrentUser}
-                            onClick={() => handleTerminateSession(session.id, session.displayName || session.email)}
-                            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1 cursor-pointer ${
-                              isCurrentUser
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
-                            }`}
-                            title={isCurrentUser ? 'Cannot terminate your own current session' : 'Force sign-out and terminate this session'}
-                          >
-                            <LogOut className="w-3 h-3" />
-                            <span>{isTerminating ? 'Revoking...' : 'Terminate'}</span>
-                          </button>
-                        )}
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          type="button"
+                          disabled={isCurrentUser}
+                          onClick={() => setSessionToTerminate(session)}
+                          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+                            isCurrentUser
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                              : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+                          }`}
+                          title={isCurrentUser ? 'Cannot terminate your own current session' : 'Force sign-out and terminate this session'}
+                        >
+                          <LogOut className="w-3 h-3 text-rose-600" />
+                          <span>Terminate</span>
+                        </button>
                       </td>
                     </tr>
                   );
@@ -439,6 +496,99 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Confirmation Modal for Session Termination */}
+      {sessionToTerminate && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-[#E3DFD7] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-rose-50 border-b border-rose-200 p-5 flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-rose-900">Confirm Force Session Termination</h3>
+                  <p className="text-xs text-rose-700">Immediate remote logout</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSessionToTerminate(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 text-xs text-[#3E4D43]">
+              <p className="leading-relaxed">
+                Are you sure you want to terminate and revoke the active session for:
+              </p>
+
+              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 font-medium">User Name:</span>
+                  <span className="font-bold text-[#161F1A]">
+                    {sessionToTerminate.displayName || sessionToTerminate.email}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 font-medium">Role & ID:</span>
+                  <span className="font-bold text-[#2D8B5C]">
+                    {sessionToTerminate.role.toUpperCase()} {sessionToTerminate.tutorId ? `(${sessionToTerminate.tutorId})` : ''}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 font-medium">Email Address:</span>
+                  <span className="font-mono text-gray-700">{sessionToTerminate.email}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 font-medium">Device & Browser:</span>
+                  <span className="font-medium text-gray-700">
+                    {sessionToTerminate.browser || 'Browser'} on {sessionToTerminate.operatingSystem || 'Device'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 font-medium">Login Timestamp:</span>
+                  <span className="font-medium text-gray-700">
+                    {formatDateTime(sessionToTerminate.loginTimestamp)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] leading-tight">
+                  The user will be immediately logged out on their device and required to re-authenticate with their credentials to access the academy portal again.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="p-4 bg-[#FAF9F7] border-t border-[#E3DFD7] flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setSessionToTerminate(null)}
+                disabled={isTerminating}
+                className="px-4 py-2 border border-[#D5D0C6] hover:bg-gray-100 text-gray-700 font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmTerminate}
+                disabled={isTerminating}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>{isTerminating ? 'Terminating...' : 'Confirm Force Logout'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Security Policies & Quick Actions Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -509,7 +659,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
           </div>
 
           <p className="text-xs text-[#5A6B61]">
-            Send an official Firebase Authentication password reset email directly to any faculty member, student, or parent experiencing login issues.
+            Send an official Firebase Authentication password reset email directly to any faculty member or user experiencing login issues.
           </p>
 
           <form
@@ -527,7 +677,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                 type="email"
                 value={passwordResetEmail}
                 onChange={(e) => setPasswordResetEmail(e.target.value)}
-                placeholder="e.g. tutor@islamictuition.us or parent@gmail.com"
+                placeholder="e.g. tutor1@islamictuition.us or admin@islamictuition.us"
                 className="w-full px-3 py-2 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A] focus:ring-1 focus:ring-[#2D8B5C]"
                 required
               />

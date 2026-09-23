@@ -509,6 +509,8 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         finalCovered = `Juz ${quranDetails.juz}, Surah ${quranDetails.surahName} (Ayahs ${quranDetails.ayahStart}-${quranDetails.ayahEnd})${pageLabel}`;
       } else if (qaidaDetails) {
         finalCovered = `Qaida Page ${qaidaDetails.pageNumber}: ${qaidaDetails.lessonName} - ${qaidaDetails.lessonSection} (${qaidaDetails.exerciseLine})`;
+      } else if (lessonType === 'Islamic Studies') {
+        finalCovered = `Short Session: Duas, Kalima & Islamic Studies Covered (No Qaida/Quran Read)`;
       } else {
         finalCovered = `${lessonType} lesson covered`;
       }
@@ -635,9 +637,10 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                 onChange={(e) => setLessonType(e.target.value as CourseType)}
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
               >
-                <option value="Noorani Qaida">Qaida</option>
                 <option value="Quran Reading / Nazra">Quran Reading</option>
-                <option value="Hifz">Quran Memorization</option>
+                <option value="Noorani Qaida">Qaida</option>
+                <option value="Hifz">Quran Memorization (Hifz)</option>
+                <option value="Islamic Studies">Islamic Studies / Duas Only (No Qaida/Quran Read Today)</option>
               </select>
             </div>
           </div>
@@ -1011,41 +1014,74 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                 </div>
               )}
 
-              {/* MEMORIZATION SECTION: Required Compact Input */}
-              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5">
+              {/* Islamic Studies / Short Session Banner (When No Qaida/Quran is selected) */}
+              {lessonType === 'Islamic Studies' && (
+                <div className="p-3.5 bg-[#F0FDF4] border border-[#BBF7D0] rounded-xl flex items-start space-x-2.5 text-xs text-[#166534]">
+                  <Info className="w-4 h-4 text-[#16A34A] shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block text-[#14532D]">Short Session / Islamic Studies Only Selected</span>
+                    <span className="text-[11px] text-[#15803D]">
+                      Quran & Qaida recitation portion is skipped for this session. Please log the Duas, Kalima, or Manners taught below.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* MEMORIZATION SECTION: Required Compact Input with Quick 'Not Applicable' Helper */}
+              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-[#161F1A] flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-[#E8A93E]" />
                     <span>Memorization / Kalima / Duas / Ahadith <span className="text-red-500">*</span></span>
                   </label>
-                  <span className="text-[10px] font-semibold text-red-600">Required</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setMemorization('Not Applicable')}
+                      className="px-2 py-0.5 bg-white hover:bg-gray-100 text-[10px] font-semibold text-gray-600 rounded border border-[#D5D0C6] transition-colors cursor-pointer"
+                      title="Set to Not Applicable"
+                    >
+                      + Not Applicable
+                    </button>
+                    <span className="text-[10px] font-semibold text-red-600">Required</span>
+                  </div>
                 </div>
 
                 <input
                   type="text"
                   value={memorization}
                   onChange={(e) => setMemorization(e.target.value)}
-                  placeholder="e.g. 4th Kalma, Dua e Qunoot, Salah steps, 40 Rabbana duas..."
+                  placeholder="e.g. 4th Kalma, Dua e Qunoot, Salah steps (or type 'Not Applicable')..."
                   className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
                   required
                 />
               </div>
 
-              {/* ADAAB & AKHLAAQ / ISLAMIC MANNERS: Required Compact Input */}
-              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5">
+              {/* ADAAB & AKHLAAQ / ISLAMIC MANNERS: Required Compact Input with Quick 'Not Applicable' Helper */}
+              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-[#161F1A] flex items-center gap-1.5">
                     <HeartHandshake className="w-3.5 h-3.5 text-[#2D8B5C]" />
                     <span>Adaab, Akhlaaq & Manners <span className="text-red-500">*</span></span>
                   </label>
-                  <span className="text-[10px] font-semibold text-red-600">Required</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAdaabManners('Not Applicable')}
+                      className="px-2 py-0.5 bg-white hover:bg-gray-100 text-[10px] font-semibold text-gray-600 rounded border border-[#D5D0C6] transition-colors cursor-pointer"
+                      title="Set to Not Applicable"
+                    >
+                      + Not Applicable
+                    </button>
+                    <span className="text-[10px] font-semibold text-red-600">Required</span>
+                  </div>
                 </div>
 
                 <input
                   type="text"
                   value={adaabManners}
                   onChange={(e) => setAdaabManners(e.target.value)}
-                  placeholder="e.g. Manners of drinking, respect to parents, steps of wudu..."
+                  placeholder="e.g. Manners of drinking, respect to parents, steps of wudu (or type 'Not Applicable')..."
                   className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
                   required
                 />

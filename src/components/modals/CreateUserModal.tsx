@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, UserPlus, Shield, CheckCircle, Copy, AlertCircle } from 'lucide-react';
-import { UserRole, Tutor } from '../../types';
-import { registerFirebaseUserWithProfile } from '../../services/dataService';
+import { UserRole, Tutor, Student } from '../../types';
+import { registerFirebaseUserWithProfile, getNextSequentialStudentId } from '../../services/dataService';
 import { SUPPORTED_COUNTRIES, COMMON_TIMEZONES, detectUserLocation } from '../../utils/timezone';
 
 interface CreateUserModalProps {
@@ -9,13 +9,15 @@ interface CreateUserModalProps {
   onClose: () => void;
   onSuccess: () => Promise<void>;
   availableTutors: Tutor[];
+  students?: Student[];
 }
 
 export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  availableTutors
+  availableTutors,
+  students = []
 }) => {
   const detected = detectUserLocation();
   const [role, setRole] = useState<UserRole>('student');
@@ -24,7 +26,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   const [password, setPassword] = useState('student123');
 
   // Student specific
-  const [studentId, setStudentId] = useState(`STU-${Math.floor(100 + Math.random() * 900)}`);
+  const [studentId, setStudentId] = useState(() => getNextSequentialStudentId(students));
   const [country, setCountry] = useState(detected.country);
   const [timezone, setTimezone] = useState(detected.timezone);
   const [courseType, setCourseType] = useState('Nazra with Tajweed');
@@ -52,6 +54,15 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    if (isOpen) {
+      setStudentId(getNextSequentialStudentId(students));
+      if (availableTutors.length > 0 && !assignedTutorId) {
+        setAssignedTutorId(availableTutors[0]?.tutorId || 'Tutor 1');
+      }
+    }
+  }, [isOpen, students, availableTutors]);
+
   if (!isOpen) return null;
 
   const handleRoleChange = (newRole: UserRole) => {
@@ -59,7 +70,10 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     if (newRole === 'admin') setPassword('admin123');
     else if (newRole === 'supervisor') setPassword('supervisor123');
     else if (newRole === 'tutor') setPassword('tutor123');
-    else if (newRole === 'student') setPassword('student123');
+    else if (newRole === 'student') {
+      setPassword('student123');
+      setStudentId(getNextSequentialStudentId(students));
+    }
     else if (newRole === 'parent') setPassword('parent123');
     setErrorMsg(null);
   };
