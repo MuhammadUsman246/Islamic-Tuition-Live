@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, CheckCircle, BookOpen, AlertCircle, Info, Clock, UserX, UserCheck, Sparkles, HeartHandshake, Bookmark, Camera, Paperclip, UploadCloud, Trash2, Image as ImageIcon, FileSpreadsheet } from 'lucide-react';
 import { Lesson, Student, CourseType, AttendanceStatus } from '../../types';
+import { SearchableSelect } from '../common/SearchableSelect';
 import { JUZ_MAPPINGS, getSurahsForJuz, getAyahRangeForSurahInJuz, validateQuranSelection } from '../../data/quranData';
 import {
   NORANI_QAIDA_STRUCTURE,
@@ -8,13 +9,22 @@ import {
   getSectionsForLesson,
   getLinesForSection
 } from '../../data/qaidaData';
-import { loadCachedCollection } from '../../services/dataService';
+import { loadCachedCollection, updateLesson, isSameTutor } from '../../services/dataService';
 import { compressAndConvertToWebP } from '../../utils/chatMediaUtils';
+import { getCurrentOperationalDate } from '../../utils/timezone';
+
+// Helper to get current operational date aligned with Academy shift
+// (e.g. before 12:00 PM PKT corresponds to previous calendar date, matching student US working day)
+export const getTodayPKT = (): string => {
+  return getCurrentOperationalDate();
+};
 
 interface LessonModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (lessonData: Omit<Lesson, 'id'>) => Promise<void>;
+  onUpdate?: (id: string, updates: Partial<Lesson>) => Promise<void>;
+  editingLesson?: Lesson | null;
   students: Student[];
   currentTutorId?: string;
   initialStudentId?: string;
@@ -24,12 +34,15 @@ export const LessonModal: React.FC<LessonModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onUpdate,
+  editingLesson = null,
   students,
   currentTutorId,
   initialStudentId
 }) => {
+  const [activeEditingLesson, setActiveEditingLesson] = useState<Lesson | null>(editingLesson);
   const [selectedStudentId, setSelectedStudentId] = useState<string>(initialStudentId || '');
-  const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState<string>(getTodayPKT());
   const [lessonType, setLessonType] = useState<CourseType>('Quran Reading / Nazra');
 
   // Attendance Status State
@@ -77,41 +90,146 @@ export const LessonModal: React.FC<LessonModalProps> = ({
     return students.find(s => s.studentId === selectedStudentId) || null;
   }, [students, selectedStudentId]);
 
-  // Reset all text fields whenever modal opens or student changes to keep form completely clean
+  const studentOptions = useMemo(() => {
+    return [...students]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      .map(s => ({
+        value: s.studentId,
+        label: `${s.name} (${s.studentId})`,
+        subLabel: `${s.courseType || 'Quran'} • Tutor: ${s.assignedTutorId || 'Unassigned'}`,
+        badge: s.status === 'Trial' ? 'Trial' : s.status,
+        badgeColor:
+          s.status === 'Trial'
+            ? 'bg-amber-100 text-amber-800'
+            : s.status === 'Active'
+            ? 'bg-emerald-100 text-emerald-800'
+            : 'bg-gray-100 text-gray-700',
+      }));
+  }, [students]);
+
+  // Sync activeEditingLesson with props
+  useEffect(() => {
+    setActiveEditingLesson(editingLesson);
+  }, [editingLesson, isOpen]);
+
+  // Grace Period Calculator for 10-Hour Window
+  const graceInfo = useMemo(() => {
+    if (!activeEditingLesson) return null;
+    const nowMs = Date.now();
+    const createdMs = activeEditingLesson.createdAt
+      ? new Date(activeEditingLesson.createdAt).getTime()
+      : (activeEditingLesson.date ? new Date(activeEditingLesson.date).getTime() : 0);
+    if (!createdMs || isNaN(createdMs)) {
+      return { isValid: false, remainingMinutes: 0, remHours: 0, remMins: 0, hoursAgo: 999 };
+    }
+    const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+    const isValid = hoursAgo >= 0 && hoursAgo <= 10;
+    const remainingMinsTotal = isValid ? Math.max(0, Math.floor((10 * 60) - (hoursAgo * 60))) : 0;
+    const remHours = Math.floor(remainingMinsTotal / 60);
+    const remMins = remainingMinsTotal % 60;
+    return { isValid, remainingMinutes: remainingMinsTotal, remHours, remMins, hoursAgo };
+  }, [activeEditingLesson]);
+
+  // Populate form fields from a lesson object
+  const populateFormFromLesson = (l: Lesson) => {
+    setSelectedStudentId(l.studentId);
+    setDate(l.date);
+    setLessonType(l.lessonType || 'Quran Reading / Nazra');
+    setAttendanceStatus(l.attendanceStatus || 'Present');
+    setLateMinutes(l.lateMinutes || 10);
+    setAbsentReason(l.absentReason || '');
+    setLessonCovered(l.lessonCovered || '');
+    setRevision(l.revision || '');
+    setMemorization(l.memorization || '');
+    setAdaabManners(l.adaabManners || '');
+    setMushafPage(l.mushafPage ? String(l.mushafPage) : '');
+    setScreenshots(l.screenshots ? l.screenshots.map(s => ({ url: s.url, name: s.name, size: s.size })) : []);
+    if (l.quranDetails) {
+      setJuz(l.quranDetails.juz);
+      setSurahNumber(l.quranDetails.surahNumber);
+      setAyahStart(l.quranDetails.ayahStart);
+      setAyahEnd(l.quranDetails.ayahEnd);
+      if (l.quranDetails.mushafPage) {
+        setMushafPage(String(l.quranDetails.mushafPage));
+      }
+    }
+    if (l.qaidaDetails) {
+      setQaidaPage(l.qaidaDetails.pageNumber || 2);
+      if (l.qaidaDetails.lessonName) setQaidaLessonName(l.qaidaDetails.lessonName);
+      if (l.qaidaDetails.lessonSection) setQaidaSection(l.qaidaDetails.lessonSection);
+      if (l.qaidaDetails.exerciseLine) setQaidaLine(l.qaidaDetails.exerciseLine);
+    }
+  };
+
+  // Populate or reset whenever modal opens or activeEditingLesson changes
   useEffect(() => {
     if (isOpen) {
-      setLessonCovered('');
-      setRevision('');
-      setMemorization('');
-      setAdaabManners('');
-      setAbsentReason('');
-      setScreenshots([]);
-      setMushafPage('');
-      setJuz('');
-      setSurahNumber('');
-      setAyahStart('');
-      setAyahEnd('');
-      setAutoFilledNotice(null);
+      if (activeEditingLesson) {
+        populateFormFromLesson(activeEditingLesson);
+      } else {
+        if (initialStudentId) {
+          setSelectedStudentId(initialStudentId);
+        }
+        setDate(getTodayPKT());
+        setLessonCovered('');
+        setRevision('');
+        setMemorization('');
+        setAdaabManners('');
+        setAbsentReason('');
+        setScreenshots([]);
+        setMushafPage('');
+        setJuz('');
+        setSurahNumber('');
+        setAyahStart('');
+        setAyahEnd('');
+        setAutoFilledNotice(null);
+      }
     }
-  }, [isOpen, selectedStudentId]);
+  }, [isOpen, activeEditingLesson, initialStudentId]);
 
-  // Check if a lesson for selected student and date has already been recorded within 10 hours
-  const existingTodayLesson = useMemo(() => {
-    if (!selectedStudentId || !date || !allLessons || allLessons.length === 0) return null;
+  // Check if a lesson for selected student has been recorded by this tutor within the last 10 hours (excluding current editing lesson)
+  const existingRecentLesson = useMemo(() => {
+    if (!selectedStudentId || !allLessons || allLessons.length === 0) return null;
+    const currentEditingId = activeEditingLesson?.id;
     const nowMs = Date.now();
+
     return allLessons.find(l => {
+      if (currentEditingId && l.id === currentEditingId) return false;
       if (l.studentId !== selectedStudentId) return false;
-      if (l.date === date) return true;
+      // Only match lessons saved by the same tutor if known
+      if (currentTutorId && l.tutorId && !isSameTutor(l.tutorId, currentTutorId)) return false;
+      // STRICT 10-HOUR CHECK: Must be within 10 hours based on createdAt
       if (l.createdAt) {
         const createdMs = new Date(l.createdAt).getTime();
-        const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
-        if (hoursAgo >= 0 && hoursAgo < 10 && l.date === date) {
-          return true;
+        if (!isNaN(createdMs) && createdMs > 0) {
+          const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+          return hoursAgo >= 0 && hoursAgo < 10;
         }
       }
       return false;
     }) || null;
-  }, [selectedStudentId, date, allLessons]);
+  }, [selectedStudentId, allLessons, activeEditingLesson, currentTutorId]);
+
+  const existingRecentGrace = useMemo(() => {
+    if (!existingRecentLesson?.createdAt) return null;
+    const nowMs = Date.now();
+    const createdMs = new Date(existingRecentLesson.createdAt).getTime();
+    if (isNaN(createdMs) || createdMs <= 0) return null;
+    const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+    if (hoursAgo < 0 || hoursAgo >= 10) return null;
+    const remainingMinsTotal = Math.max(0, Math.floor((10 * 60) - (hoursAgo * 60)));
+    const remHours = Math.floor(remainingMinsTotal / 60);
+    const remMins = remainingMinsTotal % 60;
+    const formattedAgo = hoursAgo < 1
+      ? `${Math.max(1, Math.round(hoursAgo * 60))}m ago`
+      : `${Math.floor(hoursAgo)}h ${Math.round((hoursAgo % 1) * 60)}m ago`;
+    return {
+      hoursAgo,
+      formattedAgo,
+      remHours,
+      remMins
+    };
+  }, [existingRecentLesson]);
 
   // Prepopulate or update student & find last lesson
   useEffect(() => {
@@ -413,8 +531,178 @@ export const LessonModal: React.FC<LessonModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // 10-Hour / Same-Day Cooldown Throttle Validation
-    // Prevents submitting duplicate lesson entries for the same student on the same date within 10 hours
+    // IF EDITING AN EXISTING LESSON: Check 10-Hour Grace Window
+    if (activeEditingLesson) {
+      if (graceInfo && !graceInfo.isValid) {
+        alert("The 10-hour grace period for editing this lesson has expired. Please contact your Supervisor or Admin to request changes.");
+        return;
+      }
+
+      // Auto calculate month label
+      const dateObj = new Date(date);
+      const month = dateObj.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+      // IF ABSENT in edit mode
+      if (attendanceStatus === 'Absent') {
+        setSaving(true);
+        try {
+          const absentSummary = absentReason.trim() ? `Absent (${absentReason.trim()})` : 'Absent';
+          const updates: Partial<Lesson> = {
+            studentId: selectedStudentId,
+            studentName: currentStudent?.name || activeEditingLesson.studentName,
+            date,
+            month,
+            lessonType,
+            attendanceStatus: 'Absent',
+            absentReason: absentReason.trim() || undefined,
+            lessonCovered: absentSummary,
+            revision: undefined,
+            mushafPage: undefined,
+            memorization: undefined,
+            adaabManners: undefined,
+            quranDetails: undefined,
+            qaidaDetails: undefined,
+            isEdited: true,
+            updatedAt: new Date().toISOString(),
+            editedByRole: 'tutor'
+          };
+          if (onUpdate) {
+            await onUpdate(activeEditingLesson.id, updates);
+          } else {
+            await updateLesson(activeEditingLesson.id, updates);
+          }
+          onClose();
+        } catch (err: any) {
+          alert("Failed to update absence: " + err.message);
+        } finally {
+          setSaving(false);
+        }
+        return;
+      }
+
+      // IF LATE in edit mode
+      if (attendanceStatus === 'Late') {
+        if (lateMinutes === '' || typeof lateMinutes !== 'number' || isNaN(lateMinutes) || lateMinutes < 1) {
+          alert("Please enter the number of minutes the student was late (e.g. 5, 10, 15 minutes).");
+          return;
+        }
+      }
+
+      if (!memorization.trim()) {
+        alert("Please fill in the 'Memorization / Kalima / Duas / Ahadith' field (Required).");
+        return;
+      }
+
+      if (!adaabManners.trim()) {
+        alert("Please fill in the 'Adaab, Akhlaaq & Manners' field (Required).");
+        return;
+      }
+
+      // Quran / Qaida details
+      let quranDetails = undefined;
+      if (lessonType === 'Quran Reading / Nazra' || lessonType === 'Hifz') {
+        if (typeof juz !== 'number') {
+          setQuranError('Please select the Juz (Para) *');
+          alert('Please select the Juz (Para) *');
+          return;
+        }
+        if (typeof surahNumber !== 'number') {
+          setQuranError('Please select the Surah *');
+          alert('Please select the Surah *');
+          return;
+        }
+        if (typeof ayahStart !== 'number' || typeof ayahEnd !== 'number' || isNaN(ayahStart) || isNaN(ayahEnd)) {
+          const rangeNote = currentAyahRange ? ` (Valid range in Juz ${juz}: Ayah ${currentAyahRange.min} to ${currentAyahRange.max})` : '';
+          setQuranError(`Please enter both From Ayah and To Ayah${rangeNote}`);
+          alert(`Please enter both From Ayah and To Ayah${rangeNote}`);
+          return;
+        }
+        const val = validateQuranSelection(juz, surahNumber, ayahStart, ayahEnd);
+        if (!val.valid) {
+          setQuranError(val.error || 'Please correct the Quran selection before saving');
+          alert(val.error || 'Please correct the Quran selection before saving');
+          return;
+        }
+        const surahMeta = availableSurahs.find(s => s.number === surahNumber);
+        quranDetails = {
+          juz,
+          surahNumber,
+          surahName: surahMeta ? surahMeta.englishName : `Surah ${surahNumber}`,
+          ayahStart,
+          ayahEnd,
+          mushafPage: mushafPage.trim() || undefined
+        };
+      }
+
+      let qaidaDetails = undefined;
+      if (lessonType === 'Noorani Qaida') {
+        qaidaDetails = {
+          qaidaName,
+          pageNumber: qaidaPage,
+          lessonName: qaidaLessonName,
+          lessonSection: qaidaSection,
+          exerciseLine: qaidaLine
+        };
+      }
+
+      let finalCovered = lessonCovered.trim();
+      if (!finalCovered) {
+        if (quranDetails) {
+          const pageLabel = mushafPage.trim() ? ` (Page ${mushafPage.trim()})` : '';
+          finalCovered = `Juz ${quranDetails.juz}, Surah ${quranDetails.surahName} (Ayahs ${quranDetails.ayahStart}-${quranDetails.ayahEnd})${pageLabel}`;
+        } else if (qaidaDetails) {
+          finalCovered = `Qaida Page ${qaidaDetails.pageNumber}: ${qaidaDetails.lessonName} - ${qaidaDetails.lessonSection} (${qaidaDetails.exerciseLine})`;
+        } else if (lessonType === 'Islamic Studies') {
+          finalCovered = `Short Session: Duas, Kalima & Islamic Studies Covered (No Qaida/Quran Read)`;
+        } else {
+          finalCovered = `${lessonType} lesson covered`;
+        }
+      }
+
+      setSaving(true);
+      try {
+        const updates: Partial<Lesson> = {
+          studentId: selectedStudentId,
+          studentName: currentStudent?.name || activeEditingLesson.studentName,
+          date,
+          month,
+          lessonType,
+          attendanceStatus,
+          lateMinutes: attendanceStatus === 'Late' ? (Number(lateMinutes) || 10) : undefined,
+          absentReason: undefined,
+          mushafPage: mushafPage.trim() || undefined,
+          memorization: memorization.trim(),
+          adaabManners: adaabManners.trim(),
+          quranDetails,
+          qaidaDetails,
+          lessonCovered: finalCovered,
+          revision: revision.trim() || undefined,
+          screenshots: screenshots.map(s => ({
+            url: s.url,
+            name: s.name,
+            size: s.size,
+            uploadedAt: new Date().toISOString(),
+            expired: false
+          })),
+          isEdited: true,
+          updatedAt: new Date().toISOString(),
+          editedByRole: 'tutor'
+        };
+        if (onUpdate) {
+          await onUpdate(activeEditingLesson.id, updates);
+        } else {
+          await updateLesson(activeEditingLesson.id, updates);
+        }
+        onClose();
+      } catch (err: any) {
+        alert("Failed to update lesson: " + err.message);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // CREATE NEW LESSON MODE: Check if a duplicate report was saved within the 10-hour window
     if (selectedStudentId) {
       try {
         const latestLessons = loadCachedCollection<Lesson[]>('lessons') || [];
@@ -422,23 +710,29 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         const nowMs = Date.now();
 
         const duplicateOrRecent = studentLessons.find(l => {
-          // Check if a report was already submitted for the exact same date
-          if (l.date === date) return true;
-
-          // Check if a report was created within the last 10 hours for the same date
+          if (currentTutorId && l.tutorId && !isSameTutor(l.tutorId, currentTutorId)) return false;
           if (l.createdAt) {
             const createdMs = new Date(l.createdAt).getTime();
-            const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
-            if (hoursAgo >= 0 && hoursAgo < 10 && l.date === date) {
-              return true;
+            if (!isNaN(createdMs) && createdMs > 0) {
+              const hoursAgo = (nowMs - createdMs) / (1000 * 60 * 60);
+              return hoursAgo >= 0 && hoursAgo < 10 && l.date === date;
             }
           }
           return false;
         });
 
         if (duplicateOrRecent) {
-          alert(`Today's lesson report for ${currentStudent?.name || 'this student'} has already been saved for ${date}.\n\nTo prevent duplicate reports, tutors cannot log multiple reports for the same student on the same day within 10 hours.\n\nIf you are logging a lesson for a different date or makeup session, please select a different 'Date' above.`);
-          return;
+          const createdMs = new Date(duplicateOrRecent.createdAt!).getTime();
+          const hoursAgo = Math.round(((nowMs - createdMs) / (1000 * 60 * 60)) * 10) / 10;
+          // Prompt user confirmation to avoid accidental duplicates while allowing deliberate separate sessions
+          const proceed = window.confirm(
+            `Notice: A lesson report for ${currentStudent?.name || 'this student'} was already recorded ${hoursAgo} hours ago for ${date}.\n\n• Click 'OK' to proceed and save this as an additional session.\n• Click 'Cancel' if you wanted to edit your earlier report instead.`
+          );
+          if (!proceed) {
+            setActiveEditingLesson(duplicateOrRecent);
+            populateFormFromLesson(duplicateOrRecent);
+            return;
+          }
         }
       } catch (err) {
         console.warn('Cooldown check failed:', err);
@@ -600,7 +894,19 @@ export const LessonModal: React.FC<LessonModalProps> = ({
         <div className="px-6 py-4 bg-[#2D8B5C] text-white flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <BookOpen className="w-5 h-5 text-[#E8A93E]" />
-            <h3 className="font-bold text-base">Record Lesson & Attendance Report</h3>
+            <div>
+              <h3 className="font-bold text-base">
+                {activeEditingLesson ? 'Edit Lesson & Attendance Report' : 'Record Lesson & Attendance Report'}
+              </h3>
+              {activeEditingLesson && graceInfo && (
+                <span className="text-[11px] text-emerald-100 flex items-center gap-1 mt-0.5 font-medium">
+                  <Clock className="w-3 h-3 text-[#E8A93E]" />
+                  {graceInfo.isValid
+                    ? `10-Hour Grace Window Active (${graceInfo.remHours}h ${graceInfo.remMins}m left to edit)`
+                    : '10-Hour Grace Period Expired'}
+                </span>
+              )}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -612,47 +918,83 @@ export const LessonModal: React.FC<LessonModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-          {existingTodayLesson && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex items-start space-x-3 text-red-800 text-xs">
-              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Today's Lesson Already Saved!</p>
-                <p className="text-red-700 mt-0.5">
-                  A lesson report for <strong>{currentStudent?.name || 'this student'}</strong> has already been saved for <strong>{date}</strong>. Tutors cannot log multiple reports for the same student on the same day within 10 hours.
+          {/* Active Edit Mode Banner */}
+          {activeEditingLesson && graceInfo && (
+            <div className={`rounded-xl p-3.5 flex items-start space-x-3 text-xs border ${
+              graceInfo.isValid
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}>
+              <Info className={`w-5 h-5 shrink-0 mt-0.5 ${graceInfo.isValid ? 'text-[#2D8B5C]' : 'text-amber-600'}`} />
+              <div className="flex-1">
+                <p className="font-bold">
+                  {graceInfo.isValid ? 'Editing Lesson Report (10-Hour Grace Period)' : 'Grace Period Expired'}
                 </p>
-                <p className="text-[11px] text-red-600 mt-1 font-medium">
-                  If you are logging a lesson for a different date or a makeup session, please select a different date in the <strong>Date</strong> field below.
+                <p className="mt-0.5 text-[11px]">
+                  {graceInfo.isValid
+                    ? `You can make corrections to this report for another ${graceInfo.remHours} hours and ${graceInfo.remMins} minutes. Once 10 hours pass, changes can only be made by a supervisor or administrator.`
+                    : 'The 10-hour grace period for tutor self-editing has expired. Please contact your supervisor or administrator to request edits.'}
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* Recent Lesson Saved Notification Banner (in create mode) */}
+          {!activeEditingLesson && existingRecentLesson && existingRecentGrace && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 flex items-start space-x-3 text-amber-900 text-xs shadow-xs">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-bold">Recent Lesson Report Found for {currentStudent?.name || 'this student'}</p>
+                <p className="text-amber-800 mt-0.5 text-[11px]">
+                  A report was logged <strong>{existingRecentGrace.formattedAgo}</strong> (dated {existingRecentLesson.date}). You still have <strong>{existingRecentGrace.remHours}h {existingRecentGrace.remMins}m remaining</strong> in the 10-hour grace period if you want to update it.
+                </p>
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveEditingLesson(existingRecentLesson);
+                      populateFormFromLesson(existingRecentLesson);
+                    }}
+                    className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-semibold text-xs rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+                  >
+                    <span>✏️ Edit Earlier Saved Report ({existingRecentGrace.remHours}h {existingRecentGrace.remMins}m left)</span>
+                  </button>
+                  <span className="text-[11px] text-amber-700 italic">
+                    Or complete the form below to record an additional / separate session.
+                  </span>
+                </div>
               </div>
             </div>
           )}
           {/* Top Row: Student, Date & Lesson Type */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Student Searchable Selection */}
             <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">
-                Student <span className="text-red-500">*</span>
-              </label>
-              <select
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-[#161F1A]">
+                  Student <span className="text-red-500">*</span>
+                </label>
+                <span className="text-[10px] text-gray-500 font-medium">
+                  {studentOptions.length} students
+                </span>
+              </div>
+
+              <SearchableSelect
                 id="lesson_student_select"
                 value={selectedStudentId}
-                onChange={(e) => {
-                  setSelectedStudentId(e.target.value);
-                  const st = students.find(s => s.studentId === e.target.value);
+                onChange={(val) => {
+                  setSelectedStudentId(val);
+                  const st = students.find(s => s.studentId === val);
                   if (st) {
                     if (st.courseType === 'Noorani Qaida') setLessonType('Noorani Qaida');
                     else if (st.courseType === 'Hifz') setLessonType('Hifz');
                     else setLessonType('Quran Reading / Nazra');
                   }
                 }}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
-                required
-              >
-                {students.map(st => (
-                  <option key={st.studentId} value={st.studentId}>
-                    {st.name} ({st.studentId}) {st.status === 'Trial' ? '• Trial' : ''}
-                  </option>
-                ))}
-              </select>
+                options={studentOptions}
+                placeholder="Select student..."
+                searchPlaceholder="Search student (e.g. Zaid, STU-101)..."
+              />
             </div>
 
             <div>
@@ -1350,13 +1692,21 @@ export const LessonModal: React.FC<LessonModalProps> = ({
             <button
               id="save_lesson_submit_button"
               type="submit"
-              disabled={saving || !!existingTodayLesson || (attendanceStatus !== 'Absent' && !!quranError)}
+              disabled={
+                saving ||
+                (activeEditingLesson ? (graceInfo && !graceInfo.isValid) : false) ||
+                (attendanceStatus !== 'Absent' && !!quranError)
+              }
               className={`px-5 py-2.5 text-xs font-bold text-white rounded-lg shadow-xs flex items-center space-x-2 transition-all ${
-                existingTodayLesson
-                  ? 'bg-gray-400 cursor-not-allowed opacity-80'
+                saving
+                  ? 'bg-gray-400 cursor-not-allowed opacity-75'
+                  : activeEditingLesson
+                  ? graceInfo && !graceInfo.isValid
+                    ? 'bg-gray-400 cursor-not-allowed opacity-80'
+                    : 'bg-[#2D8B5C] hover:bg-[#1E5C3D] cursor-pointer'
                   : attendanceStatus === 'Absent'
                   ? 'bg-[#E02424] hover:bg-[#C81E1E] cursor-pointer'
-                  : quranError || saving
+                  : quranError
                   ? 'bg-gray-400 cursor-not-allowed opacity-75'
                   : 'bg-[#2D8B5C] hover:bg-[#1E5C3D] cursor-pointer'
               }`}
@@ -1365,8 +1715,10 @@ export const LessonModal: React.FC<LessonModalProps> = ({
               <span>
                 {saving
                   ? 'Saving...'
-                  : existingTodayLesson
-                  ? 'Today\'s Lesson Already Saved'
+                  : activeEditingLesson
+                  ? graceInfo && !graceInfo.isValid
+                    ? '10h Grace Period Expired'
+                    : `Update Lesson Report (${graceInfo?.remHours ?? 0}h ${graceInfo?.remMins ?? 0}m left)`
                   : attendanceStatus === 'Absent'
                   ? 'Save Absent Report'
                   : 'Save Lesson Report'}

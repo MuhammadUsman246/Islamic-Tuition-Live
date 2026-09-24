@@ -274,6 +274,19 @@ export const INITIAL_REGISTERED_TUTORS: RegisteredTutorConfig[] = [
     status: 'Active',
     role: 'tutor',
     zoomLink: 'https://us05web.zoom.us/j/2533071345?pwd=azhQi99M8VhPHQSqAvNl2xt60g7knJ.1'
+  },
+  {
+    tutorNumber: 21,
+    tutorId: 'Tutor 21',
+    displayName: 'Tutor 21',
+    email: 'tutor21islamictuition@gmail.com',
+    password: 'bRasuais@21',
+    salaryPKR: 23000,
+    realName: '',
+    phone: '',
+    status: 'Active',
+    role: 'tutor',
+    zoomLink: 'https://us05web.zoom.us/j/9128374650?pwd=tuition_secret_21'
   }
 ];
 
@@ -289,7 +302,7 @@ export const INITIAL_TUTOR_ENTITIES: Tutor[] = INITIAL_REGISTERED_TUTORS.map((t)
   monthlySalaryPKR: t.salaryPKR,
   hourlyRatePKR: Math.round(t.salaryPKR / 40),
   assignedStudentIds: t.tutorId === 'Tutor 2' 
-    ? ['STU-131', 'STU-132', 'STU-133', 'STU-134', 'STU-135', 'STU-136', 'STU-137', 'STU-138', 'STU-139']
+    ? ['STU-133', 'STU-134', 'STU-135', 'STU-136', 'STU-137', 'STU-138', 'STU-139']
     : t.tutorId === 'Tutor 3'
     ? ['STU-140', 'STU-141', 'STU-142', 'STU-143', 'STU-144', 'STU-145', 'STU-146', 'STU-147', 'STU-148', 'STU-149']
     : t.tutorId === 'Tutor 4'
@@ -297,7 +310,7 @@ export const INITIAL_TUTOR_ENTITIES: Tutor[] = INITIAL_REGISTERED_TUTORS.map((t)
     : t.tutorId === 'Tutor 5'
     ? ['STU-158', 'STU-159', 'STU-160', 'STU-161', 'STU-162', 'STU-163', 'STU-164', 'STU-165', 'STU-166']
     : t.tutorId === 'Tutor 6'
-    ? ['STU-167', 'STU-168', 'STU-169', 'STU-170', 'STU-171', 'STU-172', 'STU-173', 'STU-174', 'STU-175', 'STU-176']
+    ? ['STU-167', 'STU-168', 'STU-169', 'STU-170', 'STU-171', 'STU-172', 'STU-173', 'STU-174', 'STU-175', 'STU-176', 'STU-276']
     : t.tutorId === 'Tutor 7'
     ? ['STU-177', 'STU-178', 'STU-179', 'STU-180', 'STU-181', 'STU-182', 'STU-183', 'STU-184', 'STU-185']
     : t.tutorId === 'Tutor 8'

@@ -245,7 +245,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    * Robust multi-strategy profile resolution with generous network timeouts,
    * case-insensitive email normalization, and automatic student/tutor ID linking.
    */
-  const resolveUserProfileMultiStrategy = async (uid: string, rawEmail: string, userDisplayName?: string): Promise<UserProfile> => {
+  const resolveUserProfileMultiStrategy = async (uid: string, rawEmail: string, userDisplayName?: string): Promise<UserProfile | null> => {
     const cleanEmail = rawEmail ? rawEmail.trim().toLowerCase() : '';
     const isOwnerAdmin = isAcademicOwner(cleanEmail);
 
@@ -537,27 +537,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loadedProf.status = 'active';
     }
 
-    // 9. Construct fresh fallback profile if still not found
     if (!loadedProf) {
-      const defaultRole: UserRole = isOwnerAdmin
-        ? 'admin'
-        : cleanEmail.includes('tutor')
-          ? 'tutor'
-          : cleanEmail.includes('supervisor')
-            ? 'supervisor'
-            : cleanEmail.includes('parent')
-              ? 'parent'
-              : 'student';
-
-      loadedProf = {
-        uid: uid,
-        email: cleanEmail || rawEmail || '',
-        displayName: isOwnerAdmin ? 'Muhammad Usman' : (userDisplayName || cleanEmail.split('@')[0] || 'User'),
-        role: defaultRole,
-        status: 'active',
-        createdAt: new Date().toISOString()
-      };
-      authLog('ProfileFetch', `Constructed fresh fallback profile for: ${loadedProf.email} (${defaultRole})`);
+      if (isOwnerAdmin) {
+        return {
+          uid,
+          email: cleanEmail,
+          displayName: 'Muhammad Usman',
+          role: 'admin',
+          status: 'active',
+          createdAt: new Date().toISOString()
+        };
+      }
+      authWarn('ProfileFetch', `No registered profile found for: ${cleanEmail}`);
+      return null;
     }
 
     if (isOwnerAdmin) {
@@ -600,6 +592,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (!isMounted) return;
 
+          if (!loadedProf) {
+            authWarn('AuthStateChanged', 'No authorized profile found for session user. Enforcing sign-out.');
+            localStorage.removeItem('it_cached_user_profile');
+            setUserProfile(null);
+            setLoading(false);
+            fbSignOut(auth).catch(() => {});
+            return;
+          }
+
+          if (loadedProf.status === 'inactive' || loadedProf.status === 'suspended') {
+            authWarn('AuthStateChanged', 'User account is inactive/suspended. Enforcing sign-out.');
+            localStorage.removeItem('it_cached_user_profile');
+            setUserProfile(null);
+            setLoading(false);
+            fbSignOut(auth).catch(() => {});
+            return;
+          }
+
           // Cache and apply immediately to React state
           localStorage.setItem('it_cached_user_profile', JSON.stringify(loadedProf));
           setUserProfile(loadedProf);
@@ -616,29 +626,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(() => {});
         } catch (err) {
           authWarn('ProfileFetch', 'Error resolving user profile in onAuthStateChanged:', err);
-          setLoading(false);
+          if (isMounted) {
+            setUserProfile(null);
+            setLoading(false);
+          }
         }
       } else {
-        // No Firebase Auth user - check if we have a cached testing profile session
-        authLog('NoAuthUser', 'No Firebase Auth user detected. Inspecting local cache...');
-        const cached = localStorage.getItem('it_cached_user_profile');
-        if (cached) {
-          try {
-            const parsed = JSON.parse(cached) as UserProfile;
-            authLog('NoAuthUser', 'Restored offline/cached profile from localStorage:', parsed.email);
-            setUserProfile(parsed);
-          } catch {
-            setUserProfile(null);
-            setAdminViewingRoleState(null);
-            setAdminViewingTargetId(null);
-          }
-        } else {
-          setUserProfile(null);
-          setAdminViewingRoleState(null);
-          setAdminViewingTargetId(null);
-        }
+        // No Firebase Auth user - clear session
+        authLog('NoAuthUser', 'No active Firebase Auth session.');
+        localStorage.removeItem('it_cached_user_profile');
+        setUserProfile(null);
+        setAdminViewingRoleState(null);
+        setAdminViewingTargetId(null);
         setLoading(false);
-        authLog('Ready', `Auth state resolution complete in ${Date.now() - startTime}ms (loading = false)`);
       }
     });
 
@@ -757,38 +757,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (authErr: any) {
       authWarn('loginWithEmail', `signInWithEmailAndPassword failed (${authErr.code}):`, authErr.message);
 
-      // If user account is not yet created in this Firebase project, auto-register with this password
       if (
         authErr.code === 'auth/user-not-found' ||
         authErr.code === 'auth/invalid-credential' ||
-        authErr.code === 'auth/invalid-login-credentials'
+        authErr.code === 'auth/invalid-login-credentials' ||
+        authErr.code === 'auth/wrong-password'
       ) {
-        try {
-          authLog('loginWithEmail', 'Attempting auto-provisioning via createUserWithEmailAndPassword...');
-          cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
-          authLog('loginWithEmail', `createUserWithEmailAndPassword succeeded for UID: ${cred?.user?.uid}`);
-        } catch (createErr: any) {
-          authWarn('loginWithEmail', 'createUserWithEmailAndPassword result:', createErr.code);
-          if (createErr.code === 'auth/email-already-in-use') {
-            throw new Error(
-              `The password entered is incorrect for ${cleanEmail}. If you forgot your password or previously signed in with Google, please click "Forgot password?" or "Continue with Google".`
-            );
-          } else if (createErr.code === 'auth/weak-password') {
-            throw new Error('Password must be at least 6 characters.');
-          } else {
-            throw authErr;
-          }
-        }
-      } else if (authErr.code === 'auth/wrong-password') {
-        throw new Error(
-          `Incorrect password for ${cleanEmail}. If you forgot your password, please click "Forgot password?".`
-        );
+        throw new Error('Invalid email or password. Please verify your credentials or contact the Academy Administrator.');
       } else if (authErr.code === 'auth/too-many-requests') {
-        throw new Error(
-          'Too many failed attempts. Please wait a moment or reset your password.'
-        );
+        throw new Error('Too many failed attempts. Please wait a moment or reset your password.');
       } else {
-        throw authErr;
+        throw new Error(authErr.message || 'Failed to sign in. Please verify your credentials.');
       }
     }
 
@@ -798,18 +777,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       const prof = await resolveUserProfileMultiStrategy(user.uid, cleanEmail, user.displayName || undefined);
 
+      if (!prof) {
+        await fbSignOut(auth);
+        throw new Error('No authorized academy profile found for this email. If you are a tutor or staff member, please ask the Administrator to register your account. If you are a student or parent, please complete the registration form.');
+      }
+
+      if (prof.status === 'inactive' || prof.status === 'suspended') {
+        await fbSignOut(auth);
+        throw new Error('Your account is currently inactive. Please contact the Academy Administrator.');
+      }
+
       // Save to localStorage and update state immediately (synchronous transition)
       localStorage.setItem('it_cached_user_profile', JSON.stringify(prof));
       setUserProfile(prof);
       setLoading(false);
-      authLog('loginWithEmail', `✅ Login complete in ${Date.now() - loginStart}ms: ${prof.email} (${prof.role}, studentId: ${prof.studentId || 'none'})`);
+      authLog('loginWithEmail', `✅ Login complete in ${Date.now() - loginStart}ms: ${prof.email} (${prof.role})`);
 
       // Save to Firestore in background without blocking UI
-      const emailDocId = prof.email.replace(/[@.]/g, '_');
       setDoc(doc(db, 'users', user.uid), prof, { merge: true }).catch(() => {});
-      if (emailDocId !== user.uid) {
-        setDoc(doc(db, 'users', emailDocId), prof, { merge: true }).catch(() => {});
-      }
     }
   };
 
@@ -824,6 +809,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (user && user.email) {
         const profile = await resolveUserProfileMultiStrategy(user.uid, user.email, user.displayName || undefined);
 
+        if (!profile) {
+          await fbSignOut(auth);
+          throw new Error('No authorized academy profile found for this Google email account. Please register first via the Student/Parent Registration page or contact the Administrator.');
+        }
+
+        if (profile.status === 'inactive' || profile.status === 'suspended') {
+          await fbSignOut(auth);
+          throw new Error('Your account is currently inactive. Please contact the Academy Administrator.');
+        }
+
         // Apply immediately and transition loading
         localStorage.setItem('it_cached_user_profile', JSON.stringify(profile));
         setUserProfile(profile);
@@ -831,11 +826,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authLog('loginWithGoogle', `✅ Google sign-in complete in ${Date.now() - googleStart}ms: ${profile.email}`);
 
         // Sync to Firestore in background
-        const emailDocId = profile.email.replace(/[@.]/g, '_');
         setDoc(doc(db, 'users', user.uid), profile, { merge: true }).catch(() => {});
-        if (emailDocId !== user.uid) {
-          setDoc(doc(db, 'users', emailDocId), profile, { merge: true }).catch(() => {});
-        }
       }
     } catch (err: any) {
       authWarn('loginWithGoogle', 'Google sign-in error:', err);

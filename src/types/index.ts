@@ -263,6 +263,9 @@ export interface Lesson {
   // Material / Screenshot Quality Review
   materialQualityStatus?: '100% Verified' | 'Needs Correction' | 'Replaced by Admin' | 'Replaced by Supervisor';
   materialNotes?: string;
+  isEdited?: boolean;
+  updatedAt?: string;
+  editedByRole?: string;
   createdAt: string;
 }
 
@@ -317,6 +320,7 @@ export interface StudentFee {
   parentEmail?: string;
   parentPhone?: string;
   amount: number;
+  paidAmount?: number;
   currency: Currency;
   billingPeriod: string; // e.g. "September 2026"
   dueDate: string; // YYYY-MM-DD

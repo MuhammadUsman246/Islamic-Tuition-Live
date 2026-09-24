@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Calendar, AlertCircle, CheckCircle, Clock, Trash2 } from 'lucide-react';
 import { TimetableClass, Tutor, Student, DayOfWeek, ClassDuration, PKT_TIME_SLOTS } from '../../types';
+import { SearchableSelect } from '../common/SearchableSelect';
 
 interface ClassModalProps {
   isOpen: boolean;
@@ -83,12 +84,21 @@ export const ClassModal: React.FC<ClassModalProps> = ({
       const isStd = PKT_TIME_SLOTS.includes(initialClass.startTimePKT as any);
       setIsCustomTime(!isStd);
     } else {
-      if (defaultTutorId) {
-        setTutorId(defaultTutorId);
-      } else if (tutors.length > 0) {
-        setTutorId(tutors[0].tutorId);
+      let initialTutor = defaultTutorId;
+      if (!initialTutor && students.length > 0 && students[0].assignedTutorId) {
+        initialTutor = students[0].assignedTutorId;
+      } else if (!initialTutor && tutors.length > 0) {
+        initialTutor = tutors[0].tutorId;
       }
-      if (students.length > 0) setStudentId(students[0].studentId);
+      if (initialTutor) {
+        setTutorId(initialTutor);
+      }
+      if (students.length > 0) {
+        setStudentId(students[0].studentId);
+        if (!defaultTutorId && students[0].assignedTutorId) {
+          setTutorId(students[0].assignedTutorId);
+        }
+      }
       if (initialSlot) {
         setSelectedDays([initialSlot.day]);
         setStartTimePKT(initialSlot.time);
@@ -101,6 +111,45 @@ export const ClassModal: React.FC<ClassModalProps> = ({
       }
     }
   }, [initialClass, initialSlot, tutors, students, isOpen, defaultTutorId]);
+
+  const handleStudentSelect = (newStudentId: string) => {
+    setStudentId(newStudentId);
+    if (!initialClass) {
+      const match = students.find(s => s.studentId === newStudentId);
+      if (match?.assignedTutorId) {
+        setTutorId(match.assignedTutorId);
+      }
+    }
+  };
+
+  // Naturally sorted tutor options for SearchableSelect
+  const tutorOptions = useMemo(() => {
+    return [...tutors]
+      .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+      .map(t => ({
+        value: t.tutorId,
+        label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
+        subLabel: t.email || undefined,
+      }));
+  }, [tutors]);
+
+  // Student options for SearchableSelect
+  const studentOptions = useMemo(() => {
+    return [...students]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      .map(s => ({
+        value: s.studentId,
+        label: `${s.name} (${s.studentId})`,
+        subLabel: `${s.courseType || 'Quran'} • Assigned: ${s.assignedTutorId || 'None'}`,
+        badge: s.status,
+        badgeColor:
+          s.status === 'Active'
+            ? 'bg-emerald-50 text-emerald-700'
+            : s.status === 'Trial'
+            ? 'bg-amber-50 text-amber-700'
+            : 'bg-gray-100 text-gray-600',
+      }));
+  }, [students]);
 
   if (!isOpen) return null;
 
@@ -215,42 +264,68 @@ export const ClassModal: React.FC<ClassModalProps> = ({
               </div>
             )}
 
-          {/* Tutor & Student */}
+          {/* Tutor & Student Dropdowns (with built-in search when clicked) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Tutor Selection */}
             <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">
-                Assigned Tutor ID
-              </label>
-              <select
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-[#161F1A]">
+                  Assigned Tutor <span className="text-red-500">*</span>
+                </label>
+                <span className="text-[10px] text-gray-500 font-medium">
+                  {tutorOptions.length} tutors
+                </span>
+              </div>
+              <SearchableSelect
                 id="modal_tutor_select"
                 value={tutorId}
-                onChange={(e) => setTutorId(e.target.value)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
-              >
-                {tutors.map((t, idx) => (
-                  <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
-                    {t.tutorId} ({t.realName})
-                  </option>
-                ))}
-              </select>
+                onChange={setTutorId}
+                options={tutorOptions}
+                placeholder="Select tutor..."
+                searchPlaceholder="Search tutor (e.g. Tutor 1, Usman)..."
+              />
+              {(() => {
+                const currentStudent = students.find(s => s.studentId === studentId);
+                if (currentStudent?.assignedTutorId) {
+                  const isMatching = currentStudent.assignedTutorId === tutorId;
+                  return (
+                    <p className={`mt-1.5 text-[11px] font-medium flex items-center gap-1 ${isMatching ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      <span>{isMatching ? '✓ Auto-matched to assigned tutor:' : '⚠️ Student officially assigned to:'}</span>
+                      <span className="font-bold underline">{currentStudent.assignedTutorId}</span>
+                      {!isMatching && (
+                        <button
+                          type="button"
+                          onClick={() => setTutorId(currentStudent.assignedTutorId)}
+                          className="ml-1 text-[10px] px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-bold cursor-pointer"
+                        >
+                          Use Assigned
+                        </button>
+                      )}
+                    </p>
+                  );
+                }
+                return null;
+              })()}
             </div>
 
+            {/* Student Selection */}
             <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">
-                Student
-              </label>
-              <select
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-[#161F1A]">
+                  Student <span className="text-red-500">*</span>
+                </label>
+                <span className="text-[10px] text-gray-500 font-medium">
+                  {studentOptions.length} students
+                </span>
+              </div>
+              <SearchableSelect
                 id="modal_student_select"
                 value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
-              >
-                {students.map(s => (
-                  <option key={s.id} value={s.studentId}>
-                    {s.name} ({s.studentId}) • {s.status}
-                  </option>
-                ))}
-              </select>
+                onChange={handleStudentSelect}
+                options={studentOptions}
+                placeholder="Select student..."
+                searchPlaceholder="Search student (e.g. STU-101, Zaid)..."
+              />
             </div>
           </div>
 

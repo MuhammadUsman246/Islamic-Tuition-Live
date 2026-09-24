@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   Calendar,
@@ -86,6 +86,7 @@ import { WeeklyProgressReportModal } from '../modals/WeeklyProgressReportModal';
 import { MultiDayClassDeleteModal } from '../modals/MultiDayClassDeleteModal';
 import { StudentLeaveModal } from '../modals/StudentLeaveModal';
 import { ShiftTutorModal } from '../modals/ShiftTutorModal';
+import { StudentFolderModal } from '../modals/StudentFolderModal';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
@@ -183,6 +184,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState<boolean>(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
+  // 360° All-in-One Student Dossier Profile Modal State
+  const [isDossierOpen, setIsDossierOpen] = useState<boolean>(false);
+  const [dossierStudent, setDossierStudent] = useState<Student | null>(null);
+
+  const openStudent360 = (studentOrId: Student | string) => {
+    if (typeof studentOrId === 'string') {
+      const found = students.find(s => s.studentId === studentOrId || s.id === studentOrId || s.name === studentOrId);
+      if (found) {
+        setDossierStudent(found);
+        setIsDossierOpen(true);
+      }
+    } else if (studentOrId) {
+      setDossierStudent(studentOrId);
+      setIsDossierOpen(true);
+    }
+  };
+
   const [isFeeModalOpen, setIsFeeModalOpen] = useState<boolean>(false);
   const [selectedFee, setSelectedFee] = useState<StudentFee | null>(null);
   const [viewingReceiptFee, setViewingReceiptFee] = useState<StudentFee | null>(null);
@@ -209,6 +227,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Filters
   const [tutorFilter, setTutorFilter] = useState<string>('all');
+
+  // Naturally sorted tutors (Tutor 1, Tutor 2, Tutor 3, ..., Tutor 10)
+  const sortedTutors = useMemo(() => {
+    return [...tutors].sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }));
+  }, [tutors]);
   const [studentSearch, setStudentSearch] = useState<string>('');
   const [adminStudentSearchQuery, setAdminStudentSearchQuery] = useState<string>('');
   const [studentStatusFilter, setStudentStatusFilter] = useState<string>('all');
@@ -581,8 +604,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleApprovePendingUser = async (user: UserProfile) => {
     setApprovingUid(user.uid);
     try {
-      const selectedTutor = assignTutorMap[user.uid] || 'Tutor 1';
-      const selectedCourse = assignCourseMap[user.uid] || user.courseType || 'Quran Reading / Nazra';
+      const studentMatch = students.find(s =>
+        (user.studentId && s.studentId === user.studentId) ||
+        (user.email && s.email && s.email.toLowerCase().trim() === user.email.toLowerCase().trim())
+      );
+      const selectedTutor = assignTutorMap[user.uid] || user.tutorId || studentMatch?.assignedTutorId || (tutors.length > 0 ? tutors[0].tutorId : 'Tutor 6');
+      const selectedCourse = assignCourseMap[user.uid] || user.courseType || studentMatch?.courseType || 'Quran Reading / Nazra';
       const selectedStatus = assignStatusMap[user.uid] || 'Active';
 
       await approveUserAccount(user.uid, 'Director / Admin', {
@@ -1282,13 +1309,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <button
                       type="button"
                       id={`open_student_view_${st.studentId}`}
-                      onClick={() => {
-                        setSelectedStudent(st);
-                        setIsStudentModalOpen(true);
-                      }}
-                      className="px-3 py-1.5 bg-[#2D8B5C] text-white hover:bg-[#1E5C3D] font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer text-xs flex items-center space-x-1"
+                      onClick={() => openStudent360(st)}
+                      className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold rounded-lg shadow-2xs transition-colors cursor-pointer text-xs flex items-center space-x-1.5"
                     >
-                      <span>Open Student View</span>
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>Student File</span>
                     </button>
                   </div>
                 ))}
@@ -1399,7 +1424,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onChange={(e) => setAssignTutorMap(prev => ({ ...prev, [user.uid]: e.target.value }))}
                             className="w-full bg-white border border-[#D5D0C6] rounded px-2 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
                           >
-                            {tutors.map(t => (
+                            {sortedTutors.map(t => (
                               <option key={t.id} value={t.tutorId}>
                                 {t.tutorId} - {t.realName || t.tutorId}
                               </option>
@@ -2917,9 +2942,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       })
                       .map(st => (
                         <tr key={st.id} className="hover:bg-[#FAF9F7]/60 transition-colors">
-                          <td className="py-3 px-4 font-mono font-bold text-[#161F1A]">{st.studentId}</td>
+                          <td className="py-3 px-4 font-mono font-bold text-[#161F1A]">
+                            <button
+                              onClick={() => openStudent360(st)}
+                              className="font-mono font-bold text-[#2D8B5C] hover:underline cursor-pointer text-xs"
+                              title="Click to view Student File & Record"
+                            >
+                              {st.studentId}
+                            </button>
+                          </td>
                           <td className="py-3 px-4">
-                            <span className="font-semibold text-[#161F1A] block">{st.name}</span>
+                            <button
+                              onClick={() => openStudent360(st)}
+                              className="font-bold text-[#161F1A] hover:text-[#2D8B5C] text-left block cursor-pointer"
+                              title="Click to view Student File & Record"
+                            >
+                              {st.name}
+                            </button>
                             <span className="text-[11px] text-[#5A6B61]">{st.email}</span>
                           </td>
                           <td className="py-3 px-4">
@@ -2997,12 +3036,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <span>{st.isOnLeave ? 'On Leave' : 'Leave'}</span>
                               </button>
                               <button
-                                onClick={() => setInspectedStudent(st)}
-                                className="px-2.5 py-1 text-xs text-white bg-[#2D8B5C] font-semibold hover:bg-[#1E5C3D] rounded flex items-center space-x-1 shadow-xs cursor-pointer"
-                                title="Open full academic summary and lesson history card"
+                                onClick={() => openStudent360(st)}
+                                className="px-2.5 py-1 text-xs text-white bg-[#2D8B5C] font-bold hover:bg-[#1E5C3D] rounded flex items-center space-x-1 shadow-2xs cursor-pointer"
+                                title="Open Student File & Record"
                               >
                                 <FolderOpen className="w-3.5 h-3.5" />
-                                <span>Folder</span>
+                                <span>Student File</span>
                               </button>
                               <button
                                 onClick={() => {
@@ -3055,7 +3094,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {tutors.map((tutor, idx) => {
+            {sortedTutors.map((tutor, idx) => {
               const tutorClasses = classes.filter(c => c.tutorId === tutor.tutorId);
               const tutorStudents = students.filter(s => s.assignedTutorId === tutor.tutorId);
               return (
@@ -4218,10 +4257,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </div>
                           </td>
                           <td className="py-3 px-4">
-                            <span className="font-semibold text-[#161F1A] block">
+                            <button
+                              type="button"
+                              onClick={() => openStudent360(f.studentId || f.studentName)}
+                              className="font-bold text-[#161F1A] hover:text-[#2D8B5C] text-left block cursor-pointer"
+                              title="Click to view Student File & Record"
+                            >
                               {f.isFamilyInvoice ? (f.familyGroupName || f.studentName) : f.studentName}
-                            </span>
-                            <span className="text-[10px] font-mono text-[#5A6B61] block">{f.studentId}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openStudent360(f.studentId || f.studentName)}
+                              className="text-[10px] font-mono text-[#2D8B5C] hover:underline block cursor-pointer"
+                              title="Click to view Student File & Record"
+                            >
+                              {f.studentId}
+                            </button>
                             {f.isFamilyInvoice && f.siblingBreakdown && f.siblingBreakdown.length > 0 && (
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {f.siblingBreakdown.map((s, idx) => (
@@ -5301,7 +5352,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   onChange={(e) => setAssignTutorMap(prev => ({ ...prev, [user.uid]: e.target.value }))}
                                   className="w-full bg-white border border-[#D5D0C6] rounded px-1.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-[#2D8B5C]"
                                 >
-                                  {tutors.map(t => (
+                                  {sortedTutors.map(t => (
                                     <option key={t.id} value={t.tutorId}>
                                       {t.tutorId} - {t.realName || t.tutorId}
                                     </option>
@@ -5427,7 +5478,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {tutors.map(t => (
+                      {sortedTutors.map(t => (
                         <div key={t.id} className="p-2.5 bg-white border border-[#E3DFD7] rounded-md flex items-center justify-between">
                           <div>
                             <div className="flex items-center space-x-1.5 flex-wrap">
@@ -5816,6 +5867,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         tutors={tutors}
         classes={classes}
         onConfirmShift={handleShiftStudentTutor}
+      />
+
+      {/* Master Student File & Academic Record Modal */}
+      <StudentFolderModal
+        isOpen={isDossierOpen}
+        onClose={() => {
+          setIsDossierOpen(false);
+          setDossierStudent(null);
+        }}
+        student={dossierStudent}
+        tutors={tutors}
+        classes={classes}
+        lessons={lessons}
+        fees={fees}
+        students={students}
+        onEditStudent={(st) => {
+          setIsDossierOpen(false);
+          setSelectedStudent(st);
+          setIsStudentModalOpen(true);
+        }}
+        onOpenFeeModal={(studentId) => {
+          const stFee = fees.find(f => f.studentId === studentId) || null;
+          setSelectedFee(stFee);
+          setIsFeeModalOpen(true);
+        }}
+        onOpenLessonModal={(studentId) => {
+          setSelectedStudentForLesson(studentId);
+          setIsLessonModalOpen(true);
+        }}
+        onOpenShiftTutorModal={(st) => {
+          setStudentForShift(st);
+          setIsShiftTutorModalOpen(true);
+        }}
+        onRefreshData={onRefreshData}
       />
 
       {/* Strict Capitalized "DELETE" Confirmation Modal */}

@@ -282,3 +282,29 @@ export function getCurrentTeachingDay(): DayOfWeek {
   return pktDayName;
 }
 
+/**
+ * Returns the active operational/working calendar date (YYYY-MM-DD).
+ * Aligned with the academy's shift: if it is early morning in Pakistan (e.g. 1:00 AM - 11:59 AM PKT on Sept 24),
+ * it corresponds to the US/working shift of Sept 23.
+ */
+export function getCurrentOperationalDate(): string {
+  try {
+    const now = new Date();
+    const pktString = now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' });
+    const pktDate = new Date(pktString);
+    const pktHour = pktDate.getHours();
+
+    // If before 12:00 PM PKT, the working session is the previous calendar day
+    if (pktHour < 12) {
+      pktDate.setDate(pktDate.getDate() - 1);
+    }
+
+    const yr = pktDate.getFullYear();
+    const mo = (pktDate.getMonth() + 1).toString().padStart(2, '0');
+    const dy = pktDate.getDate().toString().padStart(2, '0');
+    return `${yr}-${mo}-${dy}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+

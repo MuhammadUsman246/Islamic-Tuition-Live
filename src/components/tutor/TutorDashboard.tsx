@@ -16,7 +16,10 @@ import {
   FileText,
   FileSpreadsheet,
   Filter,
-  Palmtree
+  Palmtree,
+  Edit3,
+  Lock,
+  Clock
 } from 'lucide-react';
 import {
   Tutor,
@@ -31,7 +34,7 @@ import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
-import { sanitizeStudentForTutor, addLesson, addAttendanceRecord, updateClass } from '../../services/dataService';
+import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { useAuth } from '../../context/AuthContext';
@@ -62,6 +65,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   onRefreshData
 }) => {
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
+  const [editingLessonForTutor, setEditingLessonForTutor] = useState<Lesson | null>(null);
   const [selectedStudentForLesson, setSelectedStudentForLesson] = useState<string>('');
   const [selectedStudentForMonthReport, setSelectedStudentForMonthReport] = useState<Student | null>(null);
   const [isMonthReportModalOpen, setIsMonthReportModalOpen] = useState<boolean>(false);
@@ -71,27 +75,72 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   // Identify current tutor with role/persona safety
   const tutor = React.useMemo(() => {
     if (adminViewingRole === 'tutor' && adminViewingTargetId) {
-      const match = tutors.find(t => t.tutorId === adminViewingTargetId);
+      const match = tutors.find(t => isSameTutor(t.tutorId, adminViewingTargetId));
       if (match) return match;
     }
-    return tutors.find(t =>
-      (currentTutorId && t.tutorId === currentTutorId) ||
-      (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
+    const directMatch = tutors.find(t =>
+      (currentTutorId && isSameTutor(t.tutorId, currentTutorId)) ||
+      (userProfile?.tutorId && isSameTutor(t.tutorId, userProfile.tutorId)) ||
       (userProfile?.email && t.email && t.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
-    ) || tutors[0];
+    );
+    if (directMatch) return directMatch;
+
+    const activeTutorId = currentTutorId || userProfile?.tutorId;
+    if (activeTutorId) {
+      const norm = normalizeTutorId(activeTutorId);
+      return {
+        id: getCanonicalTutorDocId(norm),
+        tutorId: norm,
+        realName: userProfile?.displayName || norm,
+        displayName: userProfile?.displayName || norm,
+        email: userProfile?.email || '',
+        phone: userProfile?.phone || '',
+        zoomLink: (userProfile as any)?.zoomLink || 'https://zoom.us',
+        status: 'Active',
+        availabilityStatus: 'Available',
+        monthlySalaryPKR: 23000,
+        hourlyRatePKR: 575,
+        assignedStudentIds: [],
+        createdAt: new Date().toISOString()
+      } as Tutor;
+    }
+
+    return tutors[0];
   }, [tutors, currentTutorId, userProfile, adminViewingRole, adminViewingTargetId]);
 
   // Filter classes for this tutor
-  const myClasses = classes.filter(c => c.tutorId === tutor?.tutorId);
+  const myClasses = classes.filter(c => isSameTutor(c.tutorId, tutor?.tutorId));
 
-  // STRICT ALLOW-LIST PRIVACY: Filter and sanitize students assigned to this tutor (or who have scheduled classes with them)
+  // STRICT ALLOW-LIST PRIVACY: Filter and sanitize active students currently assigned to or scheduled with this tutor
   const classStudentIds = new Set(myClasses.map(c => c.studentId));
   const myAssignedStudents: TutorStudentView[] = students
-    .filter(s => s.assignedTutorId === tutor?.tutorId || classStudentIds.has(s.studentId))
+    .filter(s => {
+      // Exclude inactive / left / discontinued students
+      if (s.status === 'Inactive' || s.status === 'Left' || s.status === 'Discontinued' || s.status === 'Withdrawn') {
+        return false;
+      }
+
+      const isAssignedToMe = isSameTutor(s.assignedTutorId, tutor?.tutorId);
+      const hasClassWithMe = classStudentIds.has(s.studentId);
+
+      // If student has active class(es) on this tutor's schedule, include them
+      if (hasClassWithMe) return true;
+
+      // If student has classes with ANOTHER tutor, they were transferred/scheduled elsewhere
+      const hasClassesWithOthers = classes.some(c => c.studentId === s.studentId && !isSameTutor(c.tutorId, tutor?.tutorId));
+      if (hasClassesWithOthers) return false;
+
+      // If student is assigned to this tutor AND has NO classes anywhere yet, keep them as a new assignment
+      // (Unless assignedTutorId is 'Unassigned' or empty)
+      return isAssignedToMe && !!s.assignedTutorId && s.assignedTutorId !== 'Unassigned';
+    })
     .map(sanitizeStudentForTutor);
 
-  // Filter lessons for this tutor
-  const myLessons = lessons.filter(l => l.tutorId === tutor?.tutorId || myAssignedStudents.some(s => s.studentId === l.studentId));
+  // Filter lessons ONLY for currently active assigned students on this tutor's schedule
+  const activeStudentIds = new Set(myAssignedStudents.map(s => s.studentId));
+  const myLessons = lessons.filter(l => 
+    isSameTutor(l.tutorId, tutor?.tutorId) && activeStudentIds.has(l.studentId)
+  );
 
   // Time Period & Student Filter state for Tutor Lesson Reports
   const [reportTimeMode, setReportTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('monthly');
@@ -186,7 +235,16 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   const handleSaveLesson = async (lessonData: Omit<Lesson, 'id'>) => {
     await addLesson({
       ...lessonData,
-      tutorId: tutor?.tutorId || 'Tutor 1'
+      tutorId: tutor?.tutorId || 'Tutor 6'
+    });
+    await onRefreshData();
+  };
+
+  const handleUpdateLesson = async (id: string, updates: Partial<Lesson>) => {
+    await updateLesson(id, {
+      ...updates,
+      isEdited: true,
+      updatedAt: new Date().toISOString()
     });
     await onRefreshData();
   };
@@ -196,7 +254,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       classId: 'tutor_quick',
       studentId,
       studentName,
-      tutorId: tutor?.tutorId || 'Tutor 1',
+      tutorId: tutor?.tutorId || 'Tutor 6',
       date: new Date().toISOString().slice(0, 10),
       status,
       markedBy: tutor?.tutorId || 'Tutor',
@@ -248,10 +306,11 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
           <button
             id="tutor_log_lesson_button"
             onClick={() => {
+              setEditingLessonForTutor(null);
               setSelectedStudentForLesson(myAssignedStudents[0]?.studentId || '');
               setIsLessonModalOpen(true);
             }}
-            className="px-5 py-2.5 rounded-xl bg-white hover:bg-gray-100 text-[#1E5C3D] font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs"
+            className="px-5 py-2.5 rounded-xl bg-white hover:bg-gray-100 text-[#1E5C3D] font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs cursor-pointer"
           >
             <BookOpen className="w-4 h-4 text-[#2D8B5C]" />
             <span>Record Lesson Report</span>
@@ -350,6 +409,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
               await onRefreshData();
             }}
             onLogLesson={(studentId) => {
+              setEditingLessonForTutor(null);
               setSelectedStudentForLesson(studentId);
               setIsLessonModalOpen(true);
             }}
@@ -404,6 +464,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                 <div className="pt-2 border-t border-[#EAE6DE] grid grid-cols-2 gap-2">
                   <button
                     onClick={() => {
+                      setEditingLessonForTutor(null);
                       setSelectedStudentForLesson(st.studentId);
                       setIsLessonModalOpen(true);
                     }}
@@ -569,42 +630,84 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                 No completed lesson reports found matching your selected student and date filters.
               </div>
             ) : (
-              filteredTutorLessons.map(lesson => (
-              <div key={lesson.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <h4 className="text-xs font-bold text-[#161F1A]">
-                        {lesson.studentName} ({lesson.studentId}) — {lesson.lessonType}
-                      </h4>
-                      {lesson.attendanceStatus === 'Absent' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">
-                          Absent
-                        </span>
-                      )}
-                      {lesson.attendanceStatus === 'Late' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                          Late ({lesson.lateMinutes || 10} min)
-                        </span>
-                      )}
-                      {lesson.attendanceStatus === 'Present' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                          Present
-                        </span>
-                      )}
+              filteredTutorLessons.map(lesson => {
+                const nowMs = Date.now();
+                const createdMs = lesson.createdAt
+                  ? new Date(lesson.createdAt).getTime()
+                  : (lesson.date ? new Date(lesson.date).getTime() : 0);
+                const hoursAgo = createdMs > 0 ? (nowMs - createdMs) / (1000 * 60 * 60) : 999;
+                const isWithinGrace = createdMs > 0 && hoursAgo >= 0 && hoursAgo <= 10;
+                const remainingMinsTotal = isWithinGrace ? Math.max(0, Math.floor((10 * 60) - (hoursAgo * 60))) : 0;
+                const remHours = Math.floor(remainingMinsTotal / 60);
+                const remMins = remainingMinsTotal % 60;
+
+                return (
+                <div key={lesson.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <h4 className="text-xs font-bold text-[#161F1A]">
+                          {lesson.studentName} ({lesson.studentId}) — {lesson.lessonType}
+                        </h4>
+                        {lesson.attendanceStatus === 'Absent' && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">
+                            Absent
+                          </span>
+                        )}
+                        {lesson.attendanceStatus === 'Late' && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            Late ({lesson.lateMinutes || 10} min)
+                          </span>
+                        )}
+                        {lesson.attendanceStatus === 'Present' && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            Present
+                          </span>
+                        )}
+                        {lesson.isEdited && (
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200"
+                            title={`Edited on ${lesson.updatedAt ? new Date(lesson.updatedAt).toLocaleString() : 'recently'}`}
+                          >
+                            Edited
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#5A6B61]">{lesson.date} ({lesson.month})</p>
                     </div>
-                    <p className="text-[11px] text-[#5A6B61]">{lesson.date} ({lesson.month})</p>
+                    <div className="flex items-center space-x-2">
+                      {isWithinGrace ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingLessonForTutor(lesson);
+                            setSelectedStudentForLesson(lesson.studentId);
+                            setIsLessonModalOpen(true);
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors flex items-center space-x-1.5 border border-emerald-200 cursor-pointer shadow-2xs"
+                          title={`Editable for another ${remHours}h ${remMins}m`}
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                          <span>Edit ({remHours}h {remMins}m left)</span>
+                        </button>
+                      ) : (
+                        <span
+                          className="px-2 py-0.5 text-[10px] font-medium text-gray-400 bg-gray-50 rounded border border-gray-200 flex items-center space-x-1"
+                          title="10-hour tutor grace period expired. Contact supervisor or admin to make changes."
+                        >
+                          <Lock className="w-3 h-3 text-gray-400" />
+                          <span>Locked (10h expired)</span>
+                        </span>
+                      )}
+                      <button
+                        onClick={() => generateLessonReportPDF(lesson)}
+                        className="p-1 text-[#2D8B5C] hover:bg-gray-100 rounded cursor-pointer"
+                        title="Download PDF"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => generateLessonReportPDF(lesson)}
-                      className="p-1 text-[#2D8B5C] hover:bg-gray-100 rounded"
-                      title="Download PDF"
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
 
                 {lesson.attendanceStatus === 'Absent' ? (
                   <div className="bg-red-50/70 p-3 rounded-lg border border-red-200 text-xs text-red-700">
@@ -663,8 +766,9 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                     </div>
                   </div>
                 )}
-              </div>
-            )))}
+                </div>
+                );
+              }))}
           </div>
         </div>
       )}
@@ -714,9 +818,14 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       {/* Lesson Modal */}
       <LessonModal
         isOpen={isLessonModalOpen}
-        onClose={() => setIsLessonModalOpen(false)}
+        onClose={() => {
+          setIsLessonModalOpen(false);
+          setEditingLessonForTutor(null);
+        }}
         onSave={handleSaveLesson}
-        students={students.filter(s => s.assignedTutorId === tutor?.tutorId)}
+        onUpdate={handleUpdateLesson}
+        editingLesson={editingLessonForTutor}
+        students={students.filter(s => isSameTutor(s.assignedTutorId, tutor?.tutorId) || classStudentIds.has(s.studentId))}
         currentTutorId={tutor?.tutorId}
         initialStudentId={selectedStudentForLesson}
       />
@@ -728,6 +837,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         student={selectedStudentForMonthReport}
         lessons={lessons}
         onOpenLogLesson={(studentId) => {
+          setEditingLessonForTutor(null);
           setSelectedStudentForLesson(studentId);
           setIsLessonModalOpen(true);
         }}

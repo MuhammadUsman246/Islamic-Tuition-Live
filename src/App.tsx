@@ -373,10 +373,20 @@ const MainPortal: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
-    const tutorFilter = role === 'tutor' ? (userProfile?.tutorId || currentUserId) : undefined;
+    const tutorFilter = role === 'tutor' ? (userProfile?.tutorId || (currentUserId.startsWith('tutor') ? currentUserId : undefined)) : undefined;
     const unsub = subscribeToClasses((updatedClasses) => {
-      if (updatedClasses && updatedClasses.length > 0) {
-        setClasses(updatedClasses);
+      if (updatedClasses) {
+        setClasses(prevClasses => {
+          if (role === 'tutor' && tutorFilter) {
+            const cleanFilter = tutorFilter.trim();
+            const others = prevClasses.filter(c =>
+              c.tutorId !== cleanFilter &&
+              (c.tutorId && c.tutorId.replace(/\s+/g, '').toLowerCase() !== cleanFilter.replace(/\s+/g, '').toLowerCase())
+            );
+            return [...updatedClasses, ...others];
+          }
+          return updatedClasses;
+        });
       }
     }, tutorFilter);
     return () => unsub();

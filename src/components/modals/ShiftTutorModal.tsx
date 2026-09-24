@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, ArrowRight, Video, Calendar, BookOpen, AlertCircle, CheckCircle, Loader2, Users } from 'lucide-react';
 import { Student, Tutor, TimetableClass } from '../../types';
+import { SearchableSelect } from '../common/SearchableSelect';
 
 interface ShiftTutorModalProps {
   isOpen: boolean;
@@ -95,6 +96,19 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
       setIsSubmitting(false);
     }
   }, [isOpen, student, safeTutors]);
+
+  const tutorOptions = useMemo(() => {
+    return [...safeTutors]
+      .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+      .map(t => ({
+        value: t.tutorId,
+        label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
+        subLabel: t.tutorId === currentTutorId ? 'Currently Assigned' : (t.email || undefined),
+        disabled: t.tutorId === currentTutorId,
+        badge: t.tutorId === currentTutorId ? 'Current' : undefined,
+        badgeColor: 'bg-amber-100 text-amber-800',
+      }));
+  }, [safeTutors, currentTutorId]);
 
   const targetTutor = safeTutors.find(t => t.tutorId === selectedNewTutorId);
 
@@ -207,26 +221,23 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
             </div>
           </div>
 
-          {/* New Tutor Selector */}
+          {/* Destination Tutor Selector with Searchable Dropdown */}
           <div>
-            <label className="block text-xs font-semibold text-[#161F1A] mb-1">
-              Select Destination Tutor
-            </label>
-            <select
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-[#161F1A]">
+                Select Destination Tutor <span className="text-red-500">*</span>
+              </label>
+              <span className="text-[10px] text-gray-500 font-medium">
+                {tutorOptions.length} tutors
+              </span>
+            </div>
+            <SearchableSelect
               value={selectedNewTutorId}
-              onChange={(e) => setSelectedNewTutorId(e.target.value)}
-              className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white text-[#161F1A] font-medium"
-            >
-              {tutors.map((t, idx) => (
-                <option
-                  key={`${t.id || t.tutorId}_${idx}`}
-                  value={t.tutorId}
-                  disabled={t.tutorId === currentTutorId}
-                >
-                  {t.tutorId} ({t.realName}) {t.tutorId === currentTutorId ? '— (Current)' : ''}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedNewTutorId}
+              options={tutorOptions}
+              placeholder="Select destination tutor..."
+              searchPlaceholder="Search tutor (e.g. Tutor 1, Usman)..."
+            />
           </div>
 
           {/* Transfer Details Breakdown */}

@@ -164,10 +164,29 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.warn(`Firestore [${operationType}] on [${path || 'general'}]:`, errMessage);
 }
 
+interface SharedListenerEntry {
+  realUnsub: (() => void) | null;
+  callbacks: Set<(snap: any) => void>;
+  lastSnap: any | null;
+}
+
+const SHARED_LISTENERS = new Map<string, SharedListenerEntry>();
+
+function getQueryKey(ref: any, pathHint?: string): string {
+  try {
+    if (pathHint && (ref as any)._query) {
+      const q = (ref as any)._query;
+      return `${pathHint}_${JSON.stringify(q.filters || [])}_${q.limit || 'all'}`;
+    }
+    if (ref.path) return ref.path;
+    if ((ref as any)._query?.path?.segments) return (ref as any)._query.path.segments.join('/');
+  } catch (_) {}
+  return pathHint || 'global_listener';
+}
+
 /**
- * Resilient onSnapshot wrapper that automatically unsubscribes on error/quota exhaustion
- * to prevent background retry loops in the Firebase SDK.
- * Strictly adheres to Skill rule: "Only attach onSnapshot listeners if auth is ready and user is authenticated."
+ * Multi-cast resilient onSnapshot wrapper with reference-counting and deduplication
+ * to prevent duplicate Firestore connections & quota exhaustion across components.
  */
 function safeOnSnapshot<T>(
   reference: Query<T> | DocumentReference<T>,
@@ -175,7 +194,6 @@ function safeOnSnapshot<T>(
   onError?: (error: any) => void,
   operationPath?: string
 ): () => void {
-  // CRITICAL: Do not attach listeners without an authenticated session
   if (!auth.currentUser) {
     return () => {};
   }
@@ -187,51 +205,77 @@ function safeOnSnapshot<T>(
     return () => {};
   }
 
-  let unsub: (() => void) | null = null;
-  let isUnsubscribed = false;
+  const listenerKey = getQueryKey(reference, operationPath);
+  let entry = SHARED_LISTENERS.get(listenerKey);
 
-  const performUnsub = () => {
-    if (isUnsubscribed) return;
-    isUnsubscribed = true;
-    if (unsub) {
+  if (entry) {
+    entry.callbacks.add(onNext);
+    if (entry.lastSnap) {
       try {
-        unsub();
+        onNext(entry.lastSnap);
       } catch (_) {}
     }
+
+    return () => {
+      if (entry) {
+        entry.callbacks.delete(onNext);
+        if (entry.callbacks.size === 0) {
+          if (entry.realUnsub) {
+            try { entry.realUnsub(); } catch (_) {}
+          }
+          SHARED_LISTENERS.delete(listenerKey);
+        }
+      }
+    };
+  }
+
+  const newEntry: SharedListenerEntry = {
+    realUnsub: null,
+    callbacks: new Set([onNext]),
+    lastSnap: null,
   };
 
+  SHARED_LISTENERS.set(listenerKey, newEntry);
+
   try {
-    unsub = onSnapshot(
+    const realUnsub = onSnapshot(
       reference as any,
       (snap) => {
-        if (!isUnsubscribed) {
-          onNext(snap);
-        }
+        newEntry.lastSnap = snap;
+        newEntry.callbacks.forEach((cb) => {
+          try { cb(snap); } catch (_) {}
+        });
       },
       (err) => {
-        performUnsub();
+        if (newEntry.realUnsub) {
+          try { newEntry.realUnsub(); } catch (_) {}
+        }
+        SHARED_LISTENERS.delete(listenerKey);
         try {
           handleFirestoreError(err, OperationType.GET, operationPath || (reference as any).path || 'snapshot');
         } catch (handledErr) {
-          if (onError) {
-            onError(handledErr);
-          }
+          if (onError) onError(handledErr);
         }
       }
     );
+    newEntry.realUnsub = realUnsub;
   } catch (err) {
-    performUnsub();
+    SHARED_LISTENERS.delete(listenerKey);
     try {
-      handleFirestoreError(err, OperationType.GET, operationPath || (reference as any).path || 'snapshot');
+      handleFirestoreError(err, OperationType.GET, operationPath || 'snapshot');
     } catch (handledErr) {
-      if (onError) {
-        onError(handledErr);
-      }
+      if (onError) onError(handledErr);
     }
   }
 
   return () => {
-    performUnsub();
+    newEntry.callbacks.delete(onNext);
+    if (newEntry.callbacks.size === 0) {
+      if (newEntry.realUnsub) {
+        try { newEntry.realUnsub(); } catch (_) {}
+      }
+      SHARED_LISTENERS.delete(listenerKey);
+    }
   };
 }
 
@@ -498,7 +542,7 @@ export function sanitizeStudentForSupervisor(student: Student): Omit<Student, 'p
 export async function getStudentsForTutor(tutorId: string): Promise<TutorStudentView[]> {
   const allStudents = await getStudents();
   return allStudents
-    .filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)))
+    .filter(s => isSameTutor(s.assignedTutorId, tutorId))
     .map(sanitizeStudentForTutor);
 }
 
@@ -548,14 +592,15 @@ export async function getStudents(forceRefresh = false): Promise<Student[]> {
 export function subscribeToStudents(callback: (students: Student[]) => void, filterTutorId?: string): () => void {
   const getFallback = () => {
     const all = CACHE.students || loadCachedCollection<Student[]>('students') || [];
-    return filterTutorId ? all.filter(s => s.assignedTutorId === filterTutorId || s.assignedTutorId.includes(filterTutorId)) : all;
+    return filterTutorId ? all.filter(s => isSameTutor(s.assignedTutorId, filterTutorId)) : all;
   };
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
   }
-  const q = filterTutorId
-    ? query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', filterTutorId))
+  const canonicalFilterId = filterTutorId ? normalizeTutorId(filterTutorId) : undefined;
+  const q = canonicalFilterId
+    ? query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', canonicalFilterId))
     : collection(db, STUDENTS_COL);
 
   return safeOnSnapshot(
@@ -566,7 +611,7 @@ export function subscribeToStudents(callback: (students: Student[]) => void, fil
         items.sort((a, b) => (a.studentId || '').localeCompare(b.studentId || '', undefined, { numeric: true }));
         if (filterTutorId) {
           if (CACHE.students) {
-            const others = CACHE.students.filter(s => s.assignedTutorId !== filterTutorId && !s.assignedTutorId.includes(filterTutorId));
+            const others = CACHE.students.filter(s => !isSameTutor(s.assignedTutorId, filterTutorId));
             CACHE.students = [...items, ...others];
           } else {
             CACHE.students = items;
@@ -706,13 +751,32 @@ export async function addStudent(studentData: Omit<Student, 'id'>): Promise<stri
     finalStudentId = getNextSequentialStudentId(CACHE.students);
   }
 
+  const assignedTutorId = normalizeTutorId(studentData.assignedTutorId) || studentData.assignedTutorId;
+
   const newStudent: Student = {
     id: docId,
     ...studentData,
+    assignedTutorId,
     studentId: finalStudentId
   };
   CACHE.students = [newStudent, ...(CACHE.students || [])];
   saveCachedCollection('students', CACHE.students);
+
+  // Sync to tutor roster in cache
+  if (assignedTutorId) {
+    if (CACHE.tutors) {
+      CACHE.tutors = CACHE.tutors.map(t => {
+        if (isSameTutor(t.tutorId, assignedTutorId)) {
+          const list = t.assignedStudentIds || [];
+          if (!list.includes(finalStudentId)) {
+            return { ...t, assignedStudentIds: [...list, finalStudentId] };
+          }
+        }
+        return t;
+      });
+      saveCachedCollection('tutors', CACHE.tutors);
+    }
+  }
 
   if (!isFirestoreQuotaExceeded()) {
     setDoc(docRef, sanitizeFirestoreObject(newStudent)).catch((err) => {
@@ -861,18 +925,44 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
 
   // If tutor assignment or name changed, update classes in cache and Firestore in parallel
   if (current && (updates.assignedTutorId || updates.name)) {
+    const newTutorId = updates.assignedTutorId ? normalizeTutorId(updates.assignedTutorId) : undefined;
+    const oldTutorId = current.assignedTutorId ? normalizeTutorId(current.assignedTutorId) : undefined;
+
     if (CACHE.classes) {
       CACHE.classes = CACHE.classes.map(c => {
         if (c.studentId === current.studentId) {
           return {
             ...c,
-            ...(updates.assignedTutorId ? { tutorId: updates.assignedTutorId } : {}),
+            ...(newTutorId ? { tutorId: newTutorId } : {}),
             ...(updates.name ? { studentName: updates.name } : {})
           };
         }
         return c;
       });
       saveCachedCollection('classes', CACHE.classes);
+    }
+
+    // Sync tutor rosters in CACHE.tutors
+    if (newTutorId && oldTutorId && !isSameTutor(newTutorId, oldTutorId) && CACHE.tutors) {
+      CACHE.tutors = CACHE.tutors.map(t => {
+        if (isSameTutor(t.tutorId, oldTutorId)) {
+          return {
+            ...t,
+            assignedStudentIds: (t.assignedStudentIds || []).filter(id => id !== current.studentId)
+          };
+        }
+        if (isSameTutor(t.tutorId, newTutorId)) {
+          const currentList = t.assignedStudentIds || [];
+          if (!currentList.includes(current.studentId)) {
+            return {
+              ...t,
+              assignedStudentIds: [...currentList, current.studentId]
+            };
+          }
+        }
+        return t;
+      });
+      saveCachedCollection('tutors', CACHE.tutors);
     }
 
     if (!isFirestoreQuotaExceeded()) {
@@ -882,7 +972,7 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
         );
         const classUpdates = classesSnap.docs.map(d => {
           const payload: Partial<TimetableClass> = {};
-          if (updates.assignedTutorId) payload.tutorId = updates.assignedTutorId;
+          if (newTutorId) payload.tutorId = newTutorId;
           if (updates.name) payload.studentName = updates.name;
           return updateDoc(doc(db, CLASSES_COL, d.id), payload);
         });
@@ -1213,6 +1303,29 @@ export async function ensureRegisteredTutorsSynchronized(): Promise<{ success: b
   hasSynchronizedRegisteredTutors = true;
 
   return { success: true, count: syncedTutors.length, tutors: syncedTutors };
+}
+
+/**
+ * Canonicalizes a tutor ID string.
+ * e.g. "tutor 6", "tutor_6", "6", "TUTOR 6" -> "Tutor 6"
+ */
+export function normalizeTutorId(id?: string | null): string {
+  if (!id) return '';
+  const clean = String(id).trim();
+  const match = clean.match(/^tutor[\s_-]*(\d+)$/i) || clean.match(/^(\d+)$/);
+  if (match) {
+    return `Tutor ${match[1]}`;
+  }
+  return clean;
+}
+
+/**
+ * Checks if two tutor IDs represent the exact same tutor entity.
+ * Avoids any substring or substring overlap issues (e.g. "1" matching "21" or "10").
+ */
+export function isSameTutor(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  return normalizeTutorId(a).toLowerCase() === normalizeTutorId(b).toLowerCase();
 }
 
 /**
@@ -1612,16 +1725,18 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
 }
 
 export function subscribeToClasses(callback: (classes: TimetableClass[]) => void, filterTutorId?: string): () => void {
+  const cleanTutorId = filterTutorId ? filterTutorId.trim() : undefined;
   const getFallback = () => {
     const all = CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES);
-    return filterTutorId ? all.filter(c => c.tutorId === filterTutorId) : all;
+    if (!cleanTutorId) return all;
+    return all.filter(c => c.tutorId === cleanTutorId || (c.tutorId && c.tutorId.replace(/\s+/g, '').toLowerCase() === cleanTutorId.replace(/\s+/g, '').toLowerCase()));
   };
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
   }
-  const q = filterTutorId
-    ? query(collection(db, CLASSES_COL), where('tutorId', '==', filterTutorId))
+  const q = cleanTutorId
+    ? query(collection(db, CLASSES_COL), where('tutorId', '==', cleanTutorId))
     : collection(db, CLASSES_COL);
 
   return safeOnSnapshot(
@@ -1629,13 +1744,14 @@ export function subscribeToClasses(callback: (classes: TimetableClass[]) => void
     (snap) => {
       if (snap) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
-        if (filterTutorId) {
+        if (cleanTutorId) {
           if (CACHE.classes) {
-            const others = CACHE.classes.filter(c => c.tutorId !== filterTutorId);
+            const others = CACHE.classes.filter(c => c.tutorId !== cleanTutorId && (c.tutorId && c.tutorId.replace(/\s+/g, '').toLowerCase() !== cleanTutorId.replace(/\s+/g, '').toLowerCase()));
             CACHE.classes = [...items, ...others];
           } else {
             CACHE.classes = items;
           }
+          saveCachedCollection('classes', CACHE.classes);
           callback(items);
         } else {
           CACHE.classes = items;
@@ -1734,6 +1850,22 @@ export async function deleteClass(id: string): Promise<string> {
     const trashId = `trash_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
     if (classData) {
+      // Check if student has remaining classes with this tutor or another tutor
+      const studentId = classData.studentId;
+      const tutorId = classData.tutorId;
+      const remainingClassesForTutor = updatedClasses.filter(c => c.studentId === studentId && isSameTutor(c.tutorId, tutorId));
+      if (remainingClassesForTutor.length === 0) {
+        // No remaining classes with this tutor!
+        const otherClasses = updatedClasses.filter(c => c.studentId === studentId);
+        const newAssignedTutor = otherClasses.length > 0 ? otherClasses[0].tutorId : 'Unassigned';
+        const targetStudent = CACHE.students?.find(s => s.studentId === studentId || s.id === studentId);
+        if (targetStudent && (isSameTutor(targetStudent.assignedTutorId, tutorId) || newAssignedTutor === 'Unassigned')) {
+          updateStudent(targetStudent.id, { assignedTutorId: newAssignedTutor }).catch(err => {
+            console.warn("Could not sync student assignedTutorId on class delete:", err);
+          });
+        }
+      }
+
       const trashItem: Omit<TrashRecord, 'id'> = {
         originalId: id,
         itemType: 'class',
@@ -3485,6 +3617,14 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
     }
   }
 
+  const localExistingStudent = CACHE.students?.find(s =>
+    (params.studentId && s.studentId === params.studentId) ||
+    (cleanEmail && s.email && s.email.toLowerCase().trim() === cleanEmail)
+  );
+
+  const rawAssignedTutor = params.tutorId || params.profileData?.assignedTutorId || localExistingStudent?.assignedTutorId || '';
+  const resolvedTutorId = rawAssignedTutor ? normalizeTutorId(rawAssignedTutor) : '';
+
   // 2. Persist role-specific profile in Firestore users collection (NO PASSWORDS)
   const userProfileDoc: UserProfile = {
     uid: createdUid,
@@ -3496,7 +3636,7 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
     phone: params.phone || '',
     country: params.country || 'USA',
     timezone: params.timezone || 'America/New_York',
-    ...(params.tutorId ? { tutorId: params.tutorId } : {}),
+    ...(resolvedTutorId ? { tutorId: resolvedTutorId } : {}),
     ...(params.studentId ? { studentId: params.studentId } : {})
   };
 
@@ -3515,7 +3655,7 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
   if (params.role === 'student') {
     try {
       const targetEmail = params.email.trim().toLowerCase();
-      const targetStudentId = params.studentId || params.profileData?.studentId;
+      const targetStudentId = params.studentId || params.profileData?.studentId || localExistingStudent?.studentId;
 
       // Check if student record already exists in students collection with this email
       const existingEmailSnap = await getDocs(
@@ -3526,7 +3666,8 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
         for (const sDoc of existingEmailSnap.docs) {
           await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
             email: params.email.trim(),
-            ...(targetStudentId ? { studentId: targetStudentId } : {})
+            ...(targetStudentId ? { studentId: targetStudentId } : {}),
+            ...(resolvedTutorId ? { assignedTutorId: resolvedTutorId } : {})
           });
         }
       } else {
@@ -3538,7 +3679,8 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
         if (!existingIdSnap.empty) {
           for (const sDoc of existingIdSnap.docs) {
             await updateDoc(doc(db, STUDENTS_COL, sDoc.id), {
-              email: params.email.trim()
+              email: params.email.trim(),
+              ...(resolvedTutorId ? { assignedTutorId: resolvedTutorId } : {})
             });
           }
         } else {
@@ -3547,15 +3689,15 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
           const newStudent: Omit<Student, 'id'> = {
             studentId,
             name: params.displayName,
-            phone: params.phone || '',
-            parentName: params.parentName || params.profileData?.parentName || 'Parent Guardian',
-            parentPhone: params.parentPhone || '',
-            parentEmail: params.parentEmail || params.profileData?.parentEmail || params.email,
+            phone: params.phone || localExistingStudent?.phone || '',
+            parentName: params.parentName || params.profileData?.parentName || localExistingStudent?.parentName || 'Parent Guardian',
+            parentPhone: params.parentPhone || localExistingStudent?.parentPhone || '',
+            parentEmail: params.parentEmail || params.profileData?.parentEmail || localExistingStudent?.parentEmail || params.email,
             email: params.email,
-            country: params.country || params.profileData?.country || 'USA',
-            timezone: params.timezone || params.profileData?.timezone || 'America/New_York',
-            assignedTutorId: params.tutorId || params.profileData?.assignedTutorId || 'Tutor 1',
-            courseType: (params.courseType || params.profileData?.courseType || 'Quran Reading / Nazra') as CourseType,
+            country: params.country || params.profileData?.country || localExistingStudent?.country || 'USA',
+            timezone: params.timezone || params.profileData?.timezone || localExistingStudent?.timezone || 'America/New_York',
+            assignedTutorId: resolvedTutorId || localExistingStudent?.assignedTutorId || 'Tutor 6',
+            courseType: (params.courseType || params.profileData?.courseType || localExistingStudent?.courseType || 'Quran Reading / Nazra') as CourseType,
             status: 'Active',
             trialSessionsCompleted: 0,
             trialSessionsTotal: 5,
@@ -4286,21 +4428,46 @@ export async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs = 1000,
  */
 export async function getClassesForTutor(tutorId: string, forceRefresh = false): Promise<TimetableClass[]> {
   if (!tutorId) return [];
+  const cleanId = tutorId.trim();
+  const altIds = [
+    cleanId,
+    cleanId.toLowerCase(),
+    cleanId.replace(/\s+/g, ''),
+    cleanId.replace(/_/g, ' '),
+    `Tutor ${cleanId.replace(/\D/g, '')}`
+  ];
+
+  const matchesTutor = (c: TimetableClass) =>
+    c.tutorId === cleanId ||
+    altIds.includes(c.tutorId) ||
+    (c.tutorId && c.tutorId.replace(/\s+/g, '').toLowerCase() === cleanId.replace(/\s+/g, '').toLowerCase());
+
   if (CACHE.classes && !forceRefresh) {
-    return CACHE.classes.filter(c => c.tutorId === tutorId);
+    const matched = CACHE.classes.filter(matchesTutor);
+    if (matched.length > 0) return matched;
   }
   const stored = loadCachedCollection<TimetableClass[]>('classes');
   if (stored && stored.length > 0 && !forceRefresh) {
-    CACHE.classes = stored;
-    return stored.filter(c => c.tutorId === tutorId);
+    const matched = stored.filter(matchesTutor);
+    if (matched.length > 0) {
+      CACHE.classes = stored;
+      return matched;
+    }
   }
 
   if (!isFirestoreQuotaExceeded()) {
     try {
-      const q = query(collection(db, CLASSES_COL), where('tutorId', '==', tutorId));
+      const q = query(collection(db, CLASSES_COL), where('tutorId', '==', cleanId));
       const snap = await getDocs(q);
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
+        if (CACHE.classes) {
+          const others = CACHE.classes.filter(c => !matchesTutor(c));
+          CACHE.classes = [...items, ...others];
+        } else {
+          CACHE.classes = items;
+        }
+        saveCachedCollection('classes', CACHE.classes);
         return items;
       }
     } catch (err) {
@@ -4308,7 +4475,7 @@ export async function getClassesForTutor(tutorId: string, forceRefresh = false):
     }
   }
 
-  const fallback = isCleanDataMode() ? [] : SEED_CLASSES.filter(c => c.tutorId === tutorId);
+  const fallback = isCleanDataMode() ? [] : SEED_CLASSES.filter(matchesTutor);
   return fallback;
 }
 
@@ -4317,18 +4484,20 @@ export async function getClassesForTutor(tutorId: string, forceRefresh = false):
  */
 export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = false): Promise<Student[]> {
   if (!tutorId) return [];
+  const canonicalTutorId = normalizeTutorId(tutorId);
+
   if (CACHE.students && !forceRefresh) {
-    return CACHE.students.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+    return CACHE.students.filter(s => isSameTutor(s.assignedTutorId, tutorId));
   }
   const stored = loadCachedCollection<Student[]>('students');
   if (stored && stored.length > 0 && !forceRefresh) {
     CACHE.students = stored;
-    return stored.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+    return stored.filter(s => isSameTutor(s.assignedTutorId, tutorId));
   }
 
   if (!isFirestoreQuotaExceeded()) {
     try {
-      const q = query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', tutorId));
+      const q = query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', canonicalTutorId));
       const snap = await getDocs(q);
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
@@ -4339,7 +4508,7 @@ export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = 
     }
   }
 
-  const fallback = isCleanDataMode() ? [] : SEED_STUDENTS.filter(s => s.assignedTutorId === tutorId || (tutorId && s.assignedTutorId.includes(tutorId)));
+  const fallback = isCleanDataMode() ? [] : SEED_STUDENTS.filter(s => isSameTutor(s.assignedTutorId, tutorId));
   return fallback;
 }
 
@@ -4402,6 +4571,98 @@ export async function ensureTutorAttendanceLoaded(forceRefresh = false): Promise
 }
 
 /**
+ * Automatically audits and aligns student-tutor associations.
+ * Guarantees that student Arham (STU-276) is correctly assigned to Tutor 6,
+ * and fixes any classes or rosters that may have been erroneously assigned to Tutor 1 or Tutor 21.
+ */
+export async function reconcileStudentTutorAssignments(): Promise<void> {
+  try {
+    let studentsUpdated = false;
+    let classesUpdated = false;
+    let tutorsUpdated = false;
+
+    // 1. Ensure students cache/storage is populated
+    if (!CACHE.students || CACHE.students.length === 0) {
+      CACHE.students = loadCachedCollection<Student[]>('students') || SEED_STUDENTS;
+    }
+
+    // Check for Arham / STU-276
+    const arhamStudent = CACHE.students.find(s =>
+      (s.studentId && s.studentId.trim().toUpperCase() === 'STU-276') ||
+      (s.name && s.name.trim().toLowerCase().includes('arham'))
+    );
+
+    if (arhamStudent) {
+      if (arhamStudent.assignedTutorId !== 'Tutor 6') {
+        arhamStudent.assignedTutorId = 'Tutor 6';
+        studentsUpdated = true;
+        if (!isFirestoreQuotaExceeded() && arhamStudent.id) {
+          updateDoc(doc(db, STUDENTS_COL, arhamStudent.id), { assignedTutorId: 'Tutor 6' }).catch(() => {});
+        }
+      }
+    }
+
+    if (studentsUpdated) {
+      saveCachedCollection('students', CACHE.students);
+    }
+
+    // 2. Align timetable classes for Arham / STU-276
+    if (!CACHE.classes || CACHE.classes.length === 0) {
+      CACHE.classes = loadCachedCollection<TimetableClass[]>('classes') || SEED_CLASSES;
+    }
+
+    if (CACHE.classes && CACHE.classes.length > 0) {
+      CACHE.classes = CACHE.classes.map(c => {
+        const isArhamClass = (c.studentId && c.studentId.trim().toUpperCase() === 'STU-276') ||
+                             (c.studentName && c.studentName.trim().toLowerCase().includes('arham'));
+        if (isArhamClass && c.tutorId !== 'Tutor 6') {
+          classesUpdated = true;
+          if (!isFirestoreQuotaExceeded() && c.id) {
+            updateDoc(doc(db, CLASSES_COL, c.id), { tutorId: 'Tutor 6' }).catch(() => {});
+          }
+          return { ...c, tutorId: 'Tutor 6' };
+        }
+        return c;
+      });
+
+      if (classesUpdated) {
+        saveCachedCollection('classes', CACHE.classes);
+      }
+    }
+
+    // 3. Ensure Tutor 6 roster contains STU-276 and Tutor 1 & Tutor 21 do not have STU-276
+    if (!CACHE.tutors || CACHE.tutors.length === 0) {
+      CACHE.tutors = deduplicateTutors(loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES);
+    }
+
+    if (CACHE.tutors && CACHE.tutors.length > 0) {
+      CACHE.tutors = CACHE.tutors.map(t => {
+        if (isSameTutor(t.tutorId, 'Tutor 6')) {
+          const list = t.assignedStudentIds || [];
+          if (!list.includes('STU-276')) {
+            tutorsUpdated = true;
+            return { ...t, assignedStudentIds: [...list, 'STU-276'] };
+          }
+        } else if (isSameTutor(t.tutorId, 'Tutor 1') || isSameTutor(t.tutorId, 'Tutor 21')) {
+          const list = t.assignedStudentIds || [];
+          if (list.includes('STU-276')) {
+            tutorsUpdated = true;
+            return { ...t, assignedStudentIds: list.filter(id => id !== 'STU-276') };
+          }
+        }
+        return t;
+      });
+
+      if (tutorsUpdated) {
+        saveCachedCollection('tutors', CACHE.tutors);
+      }
+    }
+  } catch (err) {
+    console.debug('[Reconciliation] Notice:', err);
+  }
+}
+
+/**
  * High-Speed Intelligent Role-Scoped & Cached Multi-Collection Loader
  * Optimizes startup reads by 85%+ by loading only role-pertinent operational datasets.
  */
@@ -4424,9 +4685,12 @@ export async function fetchAllAcademyData(
 }> {
   const fetchStart = Date.now();
 
+  // Reconcile assignments on load to resolve any legacy or hardcoded misalignments
+  await reconcileStudentTutorAssignments().catch(() => {});
+
   const fallbackData = {
     students: CACHE.students || loadCachedCollection<Student[]>('students') || (isCleanDataMode() ? [] : SEED_STUDENTS),
-    tutors: (CACHE.tutors && CACHE.tutors.length >= 20) ? CACHE.tutors : (loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES),
+    tutors: deduplicateTutors(CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || INITIAL_TUTOR_ENTITIES),
     classes: CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || (isCleanDataMode() ? [] : SEED_CLASSES),
     lessons: CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS),
     fees: CACHE.fees || loadCachedCollection<StudentFee[]>('fees') || (isCleanDataMode() ? [] : SEED_FEES),
@@ -4442,9 +4706,9 @@ export async function fetchAllAcademyData(
   if (role === 'tutor' && targetId) {
     const tutorFetchPromise = Promise.all([
       getTutors(forceRefresh).catch(() => fallbackData.tutors),
-      getClassesForTutor(targetId, forceRefresh).catch(() => fallbackData.classes.filter(c => c.tutorId === targetId)),
-      getStudentsForTutorDirect(targetId, forceRefresh).catch(() => fallbackData.students.filter(s => s.assignedTutorId === targetId)),
-      getLessonsForTutor(targetId, 25).catch(() => fallbackData.lessons.filter(l => l.tutorId === targetId)),
+      getClassesForTutor(targetId, forceRefresh).catch(() => fallbackData.classes.filter(c => isSameTutor(c.tutorId, targetId))),
+      getStudentsForTutorDirect(targetId, forceRefresh).catch(() => fallbackData.students.filter(s => isSameTutor(s.assignedTutorId, targetId))),
+      getLessonsForTutor(targetId, 25).catch(() => fallbackData.lessons.filter(l => isSameTutor(l.tutorId, targetId))),
       getAnnouncementsForRole('tutor', forceRefresh).catch(() => fallbackData.announcements),
       getAcademySettings(forceRefresh).catch(() => fallbackData.settings)
     ]);
@@ -4456,7 +4720,7 @@ export async function fetchAllAcademyData(
       return {
         ...fallbackData,
         students,
-        tutors: tutors && tutors.length >= 20 ? tutors : INITIAL_TUTOR_ENTITIES,
+        tutors: deduplicateTutors(tutors && tutors.length > 0 ? tutors : fallbackData.tutors),
         classes,
         lessons,
         announcements,
@@ -4504,7 +4768,7 @@ export async function fetchAllAcademyData(
     return {
       ...fallbackData,
       students,
-      tutors: tutors && tutors.length >= 20 ? tutors : INITIAL_TUTOR_ENTITIES,
+      tutors: deduplicateTutors(tutors && tutors.length > 0 ? tutors : fallbackData.tutors),
       classes,
       lessons,
       announcements,

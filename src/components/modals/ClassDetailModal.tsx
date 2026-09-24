@@ -100,9 +100,16 @@ export const ClassDetailModal: React.FC<ClassDetailModalProps> = ({
                 <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">
                   Academy Time (PKT)
                 </span>
-                <p className="font-bold text-sm text-[#161F1A] mt-0.5 font-mono">
-                  {classItem.startTimePKT} PKT
-                </p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <p className="font-bold text-sm text-[#161F1A] font-mono">
+                    {classItem.startTimePKT} PKT
+                  </p>
+                  {classItem.durationMinutes && classItem.durationMinutes > 30 && (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded">
+                      {classItem.durationMinutes}m Session
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-[#5A6B61]">{classItem.dayOfWeek}</p>
               </div>
             )}
@@ -123,62 +130,68 @@ export const ClassDetailModal: React.FC<ClassDetailModalProps> = ({
             )}
           </div>
 
-          {/* Tutor & Duration Info */}
-          <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
-              <span className="text-[#5A6B61] flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-[#2D8B5C]" /> Assigned Faculty:
-              </span>
-              <span className="font-semibold text-[#161F1A]">
-                {classItem.tutorId} {tutor?.realName ? `(${tutor.realName})` : ''}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
-              <span className="text-[#5A6B61] flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-[#2D8B5C]" /> Session Duration:
-              </span>
-              <span className="font-semibold text-[#161F1A]">
-                {classItem.durationMinutes} Minutes (Standard 30m)
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
-              <span className="text-[#5A6B61] flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#2D8B5C]" /> Schedule Type:
-              </span>
-              <span className="font-semibold text-[#161F1A]">
-                {classItem.isRecurring ? 'Weekly Recurring' : 'Single Session'} {classItem.isWeekend ? '(Weekend)' : '(Weekday)'}
-              </span>
-            </div>
-
-            {tutor?.zoomLink && role !== 'tutor' && (
+          {/* Session Details Info - Hidden for tutors to keep view simple, focused, and uncluttered */}
+          {role !== 'tutor' && (
+            <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
                 <span className="text-[#5A6B61] flex items-center gap-1.5">
-                  <Video className="w-3.5 h-3.5 text-[#2D8B5C]" /> Classroom Link:
+                  <User className="w-3.5 h-3.5 text-[#2D8B5C]" /> Assigned Faculty:
                 </span>
-                <a
-                  href={tutor.zoomLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-semibold text-[#2D8B5C] hover:underline truncate max-w-[200px]"
-                >
-                  {tutor.zoomLink}
-                </a>
+                <span className="font-semibold text-[#161F1A]">
+                  {classItem.tutorId} {tutor?.realName ? `(${tutor.realName})` : ''}
+                </span>
               </div>
-            )}
 
-            {classItem.notes && (
-              <div className="pt-1">
-                <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">
-                  Session Notes
-                </span>
-                <p className="text-xs text-[#161F1A] mt-0.5 bg-[#FAF9F7] p-2 rounded-md border border-[#EAE6DE]">
-                  {classItem.notes}
-                </p>
-              </div>
-            )}
-          </div>
+              {role === 'admin' && (
+                <>
+                  <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
+                    <span className="text-[#5A6B61] flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#2D8B5C]" /> Session Duration:
+                    </span>
+                    <span className="font-semibold text-[#161F1A]">
+                      {classItem.durationMinutes} Minutes (Standard 30m)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
+                    <span className="text-[#5A6B61] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#2D8B5C]" /> Schedule Type:
+                    </span>
+                    <span className="font-semibold text-[#161F1A]">
+                      {classItem.isRecurring ? 'Weekly Recurring' : 'Single Session'} {classItem.isWeekend ? '(Weekend)' : '(Weekday)'}
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {tutor?.zoomLink && (
+                <div className="flex items-center justify-between py-1 border-b border-[#F0ECE1]">
+                  <span className="text-[#5A6B61] flex items-center gap-1.5">
+                    <Video className="w-3.5 h-3.5 text-[#2D8B5C]" /> Classroom Link:
+                  </span>
+                  <a
+                    href={tutor.zoomLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-[#2D8B5C] hover:underline truncate max-w-[200px]"
+                  >
+                    {tutor.zoomLink}
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {classItem.notes && (
+            <div className="pt-1">
+              <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">
+                Session Notes
+              </span>
+              <p className="text-xs text-[#161F1A] mt-0.5 bg-[#FAF9F7] p-2 rounded-md border border-[#EAE6DE]">
+                {classItem.notes}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Actions Footer */}

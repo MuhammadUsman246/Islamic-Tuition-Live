@@ -449,8 +449,10 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
     return matchTutor && matchSearch;
   });
 
-  // Unique tutors list for filter dropdown
-  const uniqueTutors: string[] = Array.from(new Set<string>(classes.map(c => c.tutorId).filter(Boolean) as string[])).sort();
+  // Unique tutors list for filter dropdown and faculty colors bar (natural numeric sequence: Tutor 1, Tutor 2, ..., Tutor 10)
+  const uniqueTutors: string[] = Array.from(new Set<string>(classes.map(c => c.tutorId).filter(Boolean) as string[])).sort(
+    (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  );
 
   // Selected detail class student & tutor references
   const detailStudent = selectedDetailClass ? students.find(s => s.studentId === selectedDetailClass.studentId) : null;
@@ -540,9 +542,11 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
               >
                 <option value="all">All Faculty</option>
                 {tutors && tutors.length > 0 ? (
-                  tutors.map((t, idx) => (
-                    <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
-                  ))
+                  [...tutors]
+                    .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+                    .map((t, idx) => (
+                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
+                    ))
                 ) : (
                   uniqueTutors.map((tId, idx) => (
                     <option key={`${tId}_${idx}`} value={tId}>{tId}</option>
