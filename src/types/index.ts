@@ -529,3 +529,21 @@ export interface StudentInterventionLog {
   outcomeFeedback?: string;
 }
 
+export interface SummaryMetrics {
+  totalStudents: number;
+  activeStudents: number;
+  trialStudents: number;
+  inactiveStudents: number;
+  pendingStudents: number;
+  totalTutors: number;
+  activeTutors: number;
+  totalClasses: number;
+  weeklyScheduledClasses: number;
+  unpaidFeesCount: number;
+  unpaidFeesTotalUSD: number;
+  paidFeesCount: number;
+  overdueFeesCount: number;
+  totalSalariesPKR: number;
+  lastCalculatedAt: string;
+}
+

@@ -60,7 +60,8 @@ import {
   UserProfile,
   DeleteConfirmTarget,
   CourseType,
-  StudentStatus
+  StudentStatus,
+  SummaryMetrics
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
@@ -135,7 +136,9 @@ import {
   subscribeToAcademySettings,
   shiftStudentTutor,
   setStudentLeave,
-  deleteClassesBatch
+  deleteClassesBatch,
+  subscribeToSummaryMetrics,
+  updateFamilyGroupBatch
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -478,29 +481,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveFamilyGroup = async (groupName: string, selectedStudentIds: string[]) => {
     const groupId = 'fam_' + groupName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const updateOps: Promise<void>[] = [];
+    const removedStudentIds = students
+      .filter(s => (s.familyGroupId === groupId || s.familyGroupName === groupName) && !selectedStudentIds.includes(s.studentId))
+      .map(s => s.studentId);
 
-    for (const sid of selectedStudentIds) {
-      const student = students.find(s => s.studentId === sid);
-      if (student) {
-        updateOps.push(updateStudent(student.id, {
-          familyGroupId: groupId,
-          familyGroupName: groupName
-        }));
-      }
-    }
-
-    const removedStudents = students.filter(
-      s => (s.familyGroupId === groupId || s.familyGroupName === groupName) && !selectedStudentIds.includes(s.studentId)
-    );
-    for (const rem of removedStudents) {
-      updateOps.push(updateStudent(rem.id, {
-        familyGroupId: '',
-        familyGroupName: ''
-      }));
-    }
-
-    await Promise.all(updateOps);
+    await updateFamilyGroupBatch({
+      groupName,
+      groupId,
+      addedStudentIds: selectedStudentIds,
+      removedStudentIds
+    });
     await onRefreshData();
   };
 
@@ -592,13 +582,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [assignCourseMap, setAssignCourseMap] = useState<Record<string, CourseType>>({});
   const [assignStatusMap, setAssignStatusMap] = useState<Record<string, StudentStatus>>({});
 
+  // Pre-calculated Summary Metrics State (Pillar 4: 0-Read / 1-Read Dashboard KPIs)
+  const [summaryMetrics, setSummaryMetrics] = useState<SummaryMetrics | null>(null);
+
   useEffect(() => {
     loadSystemUsers();
     // Live subscription for new pending self-registrations
-    const unsub = subscribeToPendingUsers((pending) => {
+    const unsubPending = subscribeToPendingUsers((pending) => {
       setPendingUsers(pending);
     });
-    return () => unsub();
+    // Live subscription for summary KPI metrics
+    const unsubMetrics = subscribeToSummaryMetrics((metrics) => {
+      setSummaryMetrics(metrics);
+    });
+    return () => {
+      unsubPending();
+      unsubMetrics();
+    };
   }, []);
 
   const handleApprovePendingUser = async (user: UserProfile) => {
@@ -652,14 +652,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const currentTeachingDay = getCurrentTeachingDay();
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // KPI Calculations
-  const activeStudentsCount = students.filter(s => s.status === 'Active').length;
-  const trialStudentsCount = students.filter(s => s.status === 'Trial').length;
+  // KPI Calculations (Pillar 4: Pre-Calculated Summary Metrics for 0-Read / 1-Read Performance with Fallback)
+  const activeStudentsCount = summaryMetrics ? summaryMetrics.activeStudents : students.filter(s => s.status === 'Active' || s.status === 'Confirmed').length;
+  const trialStudentsCount = summaryMetrics ? summaryMetrics.trialStudents : students.filter(s => s.status === 'Trial').length;
   const decisionPendingTrials = students.filter(s => s.status === 'Trial' && (s.trialSessionsCompleted || 0) >= 5);
   const totalFeesPaid = fees
     .filter(f => f.status === 'Paid')
     .reduce((acc, f) => acc + f.amount, 0);
-  const pendingFeesCount = fees.filter(f => f.status === 'Pending' || f.status === 'Overdue').length;
+  const pendingFeesCount = summaryMetrics ? summaryMetrics.unpaidFeesCount : fees.filter(f => f.status === 'Pending' || f.status === 'Overdue' || f.status === 'Unpaid').length;
 
   // Overdue, Pending, and Submitted fee breakdowns for Overview
   const overdueFeesList = fees.filter(f => f.status === 'Overdue' || (f.status === 'Pending' && f.dueDate < todayStr));

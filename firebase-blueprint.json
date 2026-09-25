@@ -324,6 +324,10 @@
     "/deleted_records/{trashId}": {
       "schema": "trashRecord",
       "description": "Soft-deleted archive records for recovery and audit"
+    },
+    "/summary/{summaryId}": {
+      "schema": "metrics",
+      "description": "Pre-calculated summary metrics for zero-read KPI dashboards"
     }
   }
 }

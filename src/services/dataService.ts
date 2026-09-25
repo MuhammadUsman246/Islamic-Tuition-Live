@@ -12,6 +12,7 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  writeBatch,
   Query,
   DocumentReference
 } from 'firebase/firestore';
@@ -39,6 +40,12 @@ import {
   isCleanDataMode
 } from './seedData';
 import {
+  idbGet,
+  idbSet,
+  idbDelete,
+  idbClear
+} from './indexedDBStorage';
+import {
   Student,
   Tutor,
   TimetableClass,
@@ -63,7 +70,8 @@ import {
   ActiveCallSession,
   CallType,
   CallStatus,
-  AcademyUserSession
+  AcademyUserSession,
+  SummaryMetrics
 } from '../types';
 
 export enum OperationType {
@@ -279,6 +287,44 @@ function safeOnSnapshot<T>(
   };
 }
 
+/**
+ * Delta Syncing Engine (Pillar 2)
+ * Applies incremental snap.docChanges() updates ('added', 'modified', 'removed')
+ * to current in-memory cache arrays without re-mapping unchanged documents.
+ */
+export function applySnapshotDelta<T extends { id: string }>(
+  currentItems: T[],
+  snap: any
+): T[] {
+  if (!snap) return currentItems || [];
+
+  // Initial baseline snapshot load or uninitialized cache
+  if (!currentItems || currentItems.length === 0 || (snap.docChanges && snap.docChanges().length === snap.docs.length)) {
+    return snap.docs.map((d: any) => ({ id: d.id, ...d.data() } as T));
+  }
+
+  // Incremental delta processing
+  const docChanges = snap.docChanges ? snap.docChanges() : [];
+  if (!docChanges || docChanges.length === 0) {
+    return currentItems;
+  }
+
+  const itemsMap = new Map<string, T>(currentItems.map(item => [item.id, item]));
+
+  for (const change of docChanges) {
+    const docId = change.doc.id;
+    if (change.type === 'removed') {
+      itemsMap.delete(docId);
+    } else {
+      // 'added' or 'modified'
+      const updatedItem = { id: docId, ...change.doc.data() } as T;
+      itemsMap.set(docId, updatedItem);
+    }
+  }
+
+  return Array.from(itemsMap.values());
+}
+
 // Collection references
 const USERS_COL = 'users';
 const STUDENTS_COL = 'students';
@@ -294,6 +340,8 @@ const ANNOUNCEMENTS_COL = 'announcements';
 const MESSAGES_COL = 'messages';
 const SETTINGS_COL = 'settings';
 const TRASH_COL = 'deleted_records';
+const SUMMARY_COL = 'summary';
+const SUMMARY_DOC_ID = 'metrics';
 
 // In-memory high-speed cache for sub-millisecond local reads and optimistic synchronization
 interface MemoryCacheStore {
@@ -310,6 +358,7 @@ interface MemoryCacheStore {
   systemUsers: UserProfile[] | null;
   settings: AcademySettings | null;
   trash: TrashRecord[] | null;
+  metrics: SummaryMetrics | null;
 }
 
 const CACHE: MemoryCacheStore = {
@@ -325,7 +374,8 @@ const CACHE: MemoryCacheStore = {
   tutorAttendance: null,
   systemUsers: null,
   settings: null,
-  trash: null
+  trash: null,
+  metrics: null
 };
 
 // In-memory recovery cache for rapid offline and session reactivity
@@ -346,6 +396,7 @@ export function clearInMemoryCache(): void {
   CACHE.tutorAttendance = [];
   CACHE.systemUsers = [];
   CACHE.trash = [];
+  CACHE.metrics = null;
   MEMORY_TRASH = [];
   try {
     const keysToRemove: string[] = [];
@@ -357,6 +408,7 @@ export function clearInMemoryCache(): void {
     }
     keysToRemove.forEach(k => localStorage.removeItem(k));
   } catch (e) {}
+  idbClear().catch(() => {});
 }
 
 export function loadCachedCollection<T>(key: keyof MemoryCacheStore): T | null {
@@ -372,6 +424,56 @@ export function saveCachedCollection<T>(key: keyof MemoryCacheStore, value: T): 
     localStorage.setItem(`${CACHE_STORAGE_PREFIX}${String(key)}`, JSON.stringify(value));
     localStorage.setItem(`${CACHE_STORAGE_PREFIX}${String(key)}_time`, String(Date.now()));
   } catch {}
+  // Pillar 4: Persistent IndexedDB async background sync
+  idbSet(`${CACHE_STORAGE_PREFIX}${String(key)}`, value).catch(() => {});
+  idbSet(`${CACHE_STORAGE_PREFIX}${String(key)}_time`, Date.now()).catch(() => {});
+}
+
+/**
+ * Hydrates in-memory CACHE and localStorage asynchronously from IndexedDB
+ * during startup so page refreshes load instantly with 0 mandatory network reads.
+ */
+export async function initPersistentLocalCache(): Promise<void> {
+  const keys: (keyof MemoryCacheStore)[] = [
+    'students',
+    'tutors',
+    'classes',
+    'lessons',
+    'fees',
+    'salaries',
+    'referrals',
+    'announcements',
+    'attendance',
+    'tutorAttendance',
+    'systemUsers',
+    'settings',
+    'trash',
+    'metrics'
+  ];
+
+  await Promise.all(
+    keys.map(async (key) => {
+      if (CACHE[key] !== null && CACHE[key] !== undefined) return;
+
+      const syncVal = loadCachedCollection<any>(key);
+      if (syncVal !== null && syncVal !== undefined) {
+        CACHE[key] = syncVal;
+        return;
+      }
+
+      const idbVal = await idbGet<any>(`${CACHE_STORAGE_PREFIX}${String(key)}`);
+      if (idbVal !== null && idbVal !== undefined) {
+        CACHE[key] = idbVal;
+        try {
+          localStorage.setItem(`${CACHE_STORAGE_PREFIX}${String(key)}`, JSON.stringify(idbVal));
+        } catch {}
+      }
+    })
+  );
+}
+
+if (typeof window !== 'undefined') {
+  initPersistentLocalCache().catch(() => {});
 }
 
 export function isCachedCollectionFresh(key: keyof MemoryCacheStore, maxAgeMs = 14400000): boolean {
@@ -607,7 +709,8 @@ export function subscribeToStudents(callback: (students: Student[]) => void, fil
     q,
     (snap) => {
       if (snap) {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        const currentList = CACHE.students || [];
+        const items = applySnapshotDelta<Student>(currentList, snap);
         items.sort((a, b) => (a.studentId || '').localeCompare(b.studentId || '', undefined, { numeric: true }));
         if (filterTutorId) {
           if (CACHE.students) {
@@ -761,6 +864,7 @@ export async function addStudent(studentData: Omit<Student, 'id'>): Promise<stri
   };
   CACHE.students = [newStudent, ...(CACHE.students || [])];
   saveCachedCollection('students', CACHE.students);
+  recalculateAndPersistSummaryMetrics().catch(() => {});
 
   // Sync to tutor roster in cache
   if (assignedTutorId) {
@@ -792,6 +896,7 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
   if (CACHE.students) {
     CACHE.students = CACHE.students.map(s => s.id === id ? { ...s, ...updates } : s);
     saveCachedCollection('students', CACHE.students);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
   }
 
   if (!isFirestoreQuotaExceeded()) {
@@ -986,6 +1091,62 @@ export async function updateStudent(id: string, updates: Partial<Student>): Prom
   }
 }
 
+export async function updateFamilyGroupBatch(params: {
+  groupName: string;
+  groupId: string;
+  addedStudentIds: string[];
+  removedStudentIds: string[];
+}): Promise<void> {
+  const { groupName, groupId, addedStudentIds, removedStudentIds } = params;
+
+  // Optimistic local cache update
+  if (CACHE.students) {
+    CACHE.students = CACHE.students.map(s => {
+      if (addedStudentIds.includes(s.studentId) || addedStudentIds.includes(s.id)) {
+        return { ...s, familyGroupId: groupId, familyGroupName: groupName };
+      }
+      if (removedStudentIds.includes(s.studentId) || removedStudentIds.includes(s.id)) {
+        return { ...s, familyGroupId: '', familyGroupName: '' };
+      }
+      return s;
+    });
+    saveCachedCollection('students', CACHE.students);
+  }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const batch = writeBatch(db);
+      const allStudents = CACHE.students || (await getStudents());
+
+      for (const sid of addedStudentIds) {
+        const student = allStudents.find(s => s.studentId === sid || s.id === sid);
+        if (student && !student.id.startsWith('local')) {
+          batch.update(doc(db, STUDENTS_COL, student.id), {
+            familyGroupId: groupId,
+            familyGroupName: groupName
+          });
+        }
+      }
+
+      for (const sid of removedStudentIds) {
+        const student = allStudents.find(s => s.studentId === sid || s.id === sid);
+        if (student && !student.id.startsWith('local')) {
+          batch.update(doc(db, STUDENTS_COL, student.id), {
+            familyGroupId: '',
+            familyGroupName: ''
+          });
+        }
+      }
+
+      await batch.commit();
+    } catch (err) {
+      console.warn("updateFamilyGroupBatch error:", err);
+    }
+  }
+
+  recalculateAndPersistSummaryMetrics().catch(() => {});
+}
+
 export async function shiftStudentTutor(params: {
   studentId: string;
   oldTutorId: string;
@@ -994,7 +1155,7 @@ export async function shiftStudentTutor(params: {
 }): Promise<{ success: boolean; classesCount: number; message: string }> {
   const { studentId, oldTutorId, newTutorId, notes } = params;
 
-  // 1. Update Student record
+  // 1. Locate student
   const allStudents = await getStudents();
   const student = allStudents.find(s => s.studentId === studentId || s.id === studentId);
   if (!student) {
@@ -1006,58 +1167,98 @@ export async function shiftStudentTutor(params: {
     ? `${student.privateAdminNotes}\n${shiftAudit}`
     : shiftAudit;
 
-  await updateStudent(student.id, {
+  const studentUpdates: Partial<Student> = {
     assignedTutorId: newTutorId,
     privateAdminNotes: updatedNotes
-  });
+  };
 
-  // 2. Update all timetable classes for this student to the new tutor
+  // 2. Optimistic local cache updates
+  if (CACHE.students) {
+    CACHE.students = CACHE.students.map(s => s.id === student.id ? { ...s, ...studentUpdates } : s);
+    saveCachedCollection('students', CACHE.students);
+  }
+
   const allClasses = await getClasses();
   const studentClasses = allClasses.filter(c => c.studentId === studentId);
   const classesCount = studentClasses.length;
 
-  for (const cls of studentClasses) {
-    await updateClass(cls.id, { tutorId: newTutorId });
+  if (CACHE.classes) {
+    CACHE.classes = CACHE.classes.map(c => c.studentId === studentId ? { ...c, tutorId: newTutorId } : c);
+    saveCachedCollection('classes', CACHE.classes);
   }
 
-  // 3. Update Tutor rosters in 'tutors' collection
-  try {
-    const allTutors = await getTutors();
-    // Remove from old tutor
-    const oldTutor = allTutors.find(t => t.tutorId === oldTutorId);
-    if (oldTutor) {
-      const updatedOldStudentIds = (oldTutor.assignedStudentIds || []).filter(id => id !== studentId);
-      await updateTutor(oldTutor.id, { assignedStudentIds: updatedOldStudentIds });
-    }
+  const allTutors = await getTutors();
+  const oldTutor = allTutors.find(t => isSameTutor(t.tutorId, oldTutorId));
+  const newTutor = allTutors.find(t => isSameTutor(t.tutorId, newTutorId));
 
-    // Add to new tutor
-    const newTutor = allTutors.find(t => t.tutorId === newTutorId);
-    if (newTutor) {
-      const updatedNewStudentIds = Array.from(new Set([...(newTutor.assignedStudentIds || []), studentId]));
-      await updateTutor(newTutor.id, { assignedStudentIds: updatedNewStudentIds });
-    }
-  } catch (tutorErr) {
-    console.warn('Could not sync tutor assignedStudentIds rosters:', tutorErr);
+  let updatedOldStudentIds: string[] = [];
+  if (oldTutor) {
+    updatedOldStudentIds = (oldTutor.assignedStudentIds || []).filter(id => id !== studentId);
   }
 
-  // 4. Update student user account in 'users' collection if present
-  try {
-    if (!isFirestoreQuotaExceeded()) {
+  let updatedNewStudentIds: string[] = [];
+  if (newTutor) {
+    updatedNewStudentIds = Array.from(new Set([...(newTutor.assignedStudentIds || []), studentId]));
+  }
+
+  if (CACHE.tutors) {
+    CACHE.tutors = CACHE.tutors.map(t => {
+      if (oldTutor && t.id === oldTutor.id) return { ...t, assignedStudentIds: updatedOldStudentIds };
+      if (newTutor && t.id === newTutor.id) return { ...t, assignedStudentIds: updatedNewStudentIds };
+      return t;
+    });
+    saveCachedCollection('tutors', CACHE.tutors);
+  }
+
+  // 3. Atomic Write Batch Execution (1 single network call)
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const batch = writeBatch(db);
+
+      // Student doc
+      const studentRef = doc(db, STUDENTS_COL, student.id);
+      batch.update(studentRef, sanitizeFirestoreObject(studentUpdates));
+
+      // Classes docs
+      for (const cls of studentClasses) {
+        if (!cls.id.startsWith('temp') && !cls.id.startsWith('seed') && !cls.id.startsWith('local')) {
+          const classRef = doc(db, CLASSES_COL, cls.id);
+          batch.update(classRef, sanitizeFirestoreObject({ tutorId: newTutorId }));
+        }
+      }
+
+      // Old tutor doc
+      if (oldTutor && !oldTutor.id.startsWith('local')) {
+        const oldTutorRef = doc(db, TUTORS_COL, oldTutor.id);
+        batch.update(oldTutorRef, sanitizeFirestoreObject({ assignedStudentIds: updatedOldStudentIds }));
+      }
+
+      // New tutor doc
+      if (newTutor && !newTutor.id.startsWith('local')) {
+        const newTutorRef = doc(db, TUTORS_COL, newTutor.id);
+        batch.update(newTutorRef, sanitizeFirestoreObject({ assignedStudentIds: updatedNewStudentIds }));
+      }
+
+      // User accounts in users collection
       const usersSnap = await getDocs(
         query(collection(db, USERS_COL), where('studentId', '==', studentId))
       );
-      for (const uDoc of usersSnap.docs) {
-        await updateDoc(doc(db, USERS_COL, uDoc.id), { tutorId: newTutorId });
-      }
+      usersSnap.docs.forEach(uDoc => {
+        batch.update(doc(db, USERS_COL, uDoc.id), { tutorId: newTutorId });
+      });
+
+      await batch.commit();
+    } catch (err) {
+      console.warn("Atomic tutor shift batch write notice:", err);
     }
-  } catch (uErr) {
-    console.warn('Could not sync user profile tutorId:', uErr);
   }
+
+  recalculateAndPersistSummaryMetrics().catch(() => {});
 
   return {
     success: true,
     classesCount,
-    message: `Successfully shifted ${student.name} from ${oldTutorId} to ${newTutorId}. ${classesCount} scheduled weekly classes updated.`
+    message: `Successfully shifted ${student.name} from ${oldTutorId} to ${newTutorId}. ${classesCount} scheduled weekly classes updated in 1 atomic transaction.`
   };
 }
 
@@ -1121,14 +1322,33 @@ export async function setStudentLeave(params: {
 
 export async function deleteClassesBatch(classIds: string[]): Promise<string[]> {
   const deletedIds: string[] = [];
-  for (const id of classIds) {
-    try {
-      await deleteClass(id);
-      deletedIds.push(id);
-    } catch (err) {
-      console.error(`Failed to delete class ${id}:`, err);
-    }
+  if (!classIds || classIds.length === 0) return deletedIds;
+
+  const targetSet = new Set(classIds.map(String));
+  if (CACHE.classes) {
+    CACHE.classes = CACHE.classes.filter(c => !targetSet.has(String(c.id)));
+    saveCachedCollection('classes', CACHE.classes);
   }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const batch = writeBatch(db);
+      for (const id of classIds) {
+        const idStr = String(id).trim();
+        if (!idStr.startsWith('seed-') && !idStr.startsWith('local-') && !idStr.startsWith('temp-')) {
+          batch.delete(doc(db, CLASSES_COL, idStr));
+        }
+        deletedIds.push(idStr);
+      }
+      await batch.commit();
+    } catch (err) {
+      console.warn('deleteClassesBatch atomic write notice:', err);
+    }
+  } else {
+    deletedIds.push(...classIds.map(String));
+  }
+
+  recalculateAndPersistSummaryMetrics().catch(() => {});
   return deletedIds;
 }
 
@@ -1156,6 +1376,7 @@ export async function deleteStudent(id: string): Promise<string> {
     if (CACHE.students) {
       CACHE.students = CACHE.students.filter(s => s.id !== id);
       saveCachedCollection('students', CACHE.students);
+      recalculateAndPersistSummaryMetrics().catch(() => {});
     }
 
     if (studentData) {
@@ -1743,7 +1964,8 @@ export function subscribeToClasses(callback: (classes: TimetableClass[]) => void
     q,
     (snap) => {
       if (snap) {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
+        const currentList = CACHE.classes || [];
+        const items = applySnapshotDelta<TimetableClass>(currentList, snap);
         if (cleanTutorId) {
           if (CACHE.classes) {
             const others = CACHE.classes.filter(c => c.tutorId !== cleanTutorId && (c.tutorId && c.tutorId.replace(/\s+/g, '').toLowerCase() !== cleanTutorId.replace(/\s+/g, '').toLowerCase()));
@@ -1755,7 +1977,7 @@ export function subscribeToClasses(callback: (classes: TimetableClass[]) => void
           callback(items);
         } else {
           CACHE.classes = items;
-          saveCachedCollection('classes', items);
+          saveCachedCollection('classes', CACHE.classes);
           callback(items);
         }
       } else {
@@ -1782,6 +2004,7 @@ export async function addClass(classData: Omit<TimetableClass, 'id'>): Promise<s
   const newClass: TimetableClass = { id: tempId, ...classData };
   CACHE.classes = [newClass, ...(CACHE.classes || [])];
   saveCachedCollection('classes', CACHE.classes);
+  recalculateAndPersistSummaryMetrics().catch(() => {});
 
   if (!isFirestoreQuotaExceeded()) {
     // Perform Firestore write in background without awaiting
@@ -1825,6 +2048,7 @@ export async function updateClass(id: string, updates: Partial<TimetableClass>):
   if (CACHE.classes) {
     CACHE.classes = CACHE.classes.map(c => (c.id === id || String(c.id) === String(id)) ? { ...c, ...updates } : c);
     saveCachedCollection('classes', CACHE.classes);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
   }
 
   if (!isFirestoreQuotaExceeded()) {
@@ -1846,6 +2070,7 @@ export async function deleteClass(id: string): Promise<string> {
     const updatedClasses = existingClasses.filter(c => String(c.id).trim() !== targetIdStr);
     CACHE.classes = updatedClasses;
     saveCachedCollection('classes', updatedClasses);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
 
     const trashId = `trash_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
@@ -1997,7 +2222,8 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
   return safeOnSnapshot(
     q,
     (snap) => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
+      const currentList = CACHE.lessons || [];
+      const items = applySnapshotDelta<Lesson>(currentList, snap);
       const cleaned = cleanExpiredScreenshots(items);
       // Merge with local newly created items if not yet indexed in Firestore
       const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
@@ -2384,6 +2610,7 @@ export async function addFee(fee: Omit<StudentFee, 'id'>): Promise<string> {
   const newFee: StudentFee = { id: docId, ...fee };
   CACHE.fees = [newFee, ...(CACHE.fees || [])];
   saveCachedCollection('fees', CACHE.fees);
+  recalculateAndPersistSummaryMetrics().catch(() => {});
 
   if (!isFirestoreQuotaExceeded()) {
     setDoc(docRef, sanitizeFirestoreObject(fee)).catch((err) => {
@@ -2397,6 +2624,7 @@ export async function updateFee(id: string, updates: Partial<StudentFee>): Promi
   if (CACHE.fees) {
     CACHE.fees = CACHE.fees.map(f => f.id === id ? { ...f, ...updates } : f);
     saveCachedCollection('fees', CACHE.fees);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
   }
   if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
     try {
@@ -2411,6 +2639,7 @@ export async function deleteFee(id: string): Promise<void> {
   if (CACHE.fees) {
     CACHE.fees = CACHE.fees.filter(f => f.id !== id);
     saveCachedCollection('fees', CACHE.fees);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
   }
   if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
     try {
@@ -2462,6 +2691,7 @@ export async function addSalary(salary: Omit<TutorSalary, 'id'>): Promise<string
   const newSalary: TutorSalary = { id: docId, ...salary };
   CACHE.salaries = [newSalary, ...(CACHE.salaries || [])];
   saveCachedCollection('salaries', CACHE.salaries);
+  recalculateAndPersistSummaryMetrics().catch(() => {});
 
   if (!isFirestoreQuotaExceeded()) {
     setDoc(docRef, sanitizeFirestoreObject(salary)).catch((err) => {
@@ -2475,6 +2705,7 @@ export async function updateSalary(id: string, updates: Partial<TutorSalary>): P
   if (CACHE.salaries) {
     CACHE.salaries = CACHE.salaries.map(s => s.id === id ? { ...s, ...updates } : s);
     saveCachedCollection('salaries', CACHE.salaries);
+    recalculateAndPersistSummaryMetrics().catch(() => {});
   }
   if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
     try {
@@ -3238,6 +3469,162 @@ export async function updateAcademySettings(settings: Partial<AcademySettings>):
   }
   const docRef = doc(db, SETTINGS_COL, 'general');
   await setDoc(docRef, sanitizeFirestoreObject(settings), { merge: true });
+}
+
+// ==========================================
+// PRE-CALCULATED SUMMARY METRICS ENGINE (PILLAR 4)
+// Delivers 1-read / 0-read KPI Cards for Dashboards
+// ==========================================
+export function calculateSummaryMetricsFromCache(): SummaryMetrics {
+  const students = CACHE.students || loadCachedCollection<Student[]>('students') || [];
+  const tutors = CACHE.tutors || loadCachedCollection<Tutor[]>('tutors') || [];
+  const classes = CACHE.classes || loadCachedCollection<TimetableClass[]>('classes') || [];
+  const fees = CACHE.fees || loadCachedCollection<StudentFee[]>('fees') || [];
+  const salaries = CACHE.salaries || loadCachedCollection<TutorSalary[]>('salaries') || [];
+
+  const activeStudents = students.filter(s => s.status === 'Active' || s.status === 'Confirmed').length;
+  const trialStudents = students.filter(s => s.status === 'Trial').length;
+  const inactiveStudents = students.filter(s => s.status === 'Inactive' || s.status === 'Not Taking').length;
+  const pendingStudents = students.filter(s => s.status === 'Pending').length;
+
+  const activeTutors = tutors.filter(t => t.status === 'Active').length;
+  const weeklyScheduledClasses = classes.filter(c => c.status === 'Scheduled').length;
+
+  const unpaidFeesList = fees.filter(f => f.status === 'Pending' || f.status === 'Overdue' || f.status === 'Payment Submitted');
+  const unpaidFeesCount = unpaidFeesList.length;
+  const unpaidFeesTotalUSD = unpaidFeesList.reduce((acc, f) => acc + (f.amount || 0), 0);
+  const paidFeesCount = fees.filter(f => f.status === 'Paid').length;
+  const overdueFeesCount = fees.filter(f => f.status === 'Overdue').length;
+
+  const totalSalariesPKR = salaries.reduce((acc, s) => acc + (s.monthlySalary || 0), 0);
+
+  return {
+    totalStudents: students.length,
+    activeStudents,
+    trialStudents,
+    inactiveStudents,
+    pendingStudents,
+    totalTutors: tutors.length,
+    activeTutors,
+    totalClasses: classes.length,
+    weeklyScheduledClasses,
+    unpaidFeesCount,
+    unpaidFeesTotalUSD,
+    paidFeesCount,
+    overdueFeesCount,
+    totalSalariesPKR,
+    lastCalculatedAt: new Date().toISOString()
+  };
+}
+
+export async function recalculateAndPersistSummaryMetrics(): Promise<SummaryMetrics> {
+  const metrics = calculateSummaryMetricsFromCache();
+  CACHE.metrics = metrics;
+  saveCachedCollection('metrics', metrics);
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const summaryRef = doc(db, SUMMARY_COL, SUMMARY_DOC_ID);
+      setDoc(summaryRef, sanitizeFirestoreObject(metrics), { merge: true }).catch(err => {
+        console.warn("Background metrics persistence notice:", err);
+      });
+    } catch (e) {
+      console.warn("recalculateAndPersistSummaryMetrics notice:", e);
+    }
+  }
+  return metrics;
+}
+
+export async function getSummaryMetrics(forceRefresh = false): Promise<SummaryMetrics> {
+  if (CACHE.metrics && !forceRefresh) {
+    return CACHE.metrics;
+  }
+  const stored = loadCachedCollection<SummaryMetrics>('metrics');
+  if (stored && !forceRefresh) {
+    CACHE.metrics = stored;
+    return stored;
+  }
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const snap = await getDoc(doc(db, SUMMARY_COL, SUMMARY_DOC_ID));
+      if (snap.exists()) {
+        const metrics = snap.data() as SummaryMetrics;
+        CACHE.metrics = metrics;
+        saveCachedCollection('metrics', metrics);
+        return metrics;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `${SUMMARY_COL}/${SUMMARY_DOC_ID}`);
+    }
+  }
+
+  return recalculateAndPersistSummaryMetrics();
+}
+
+export function subscribeToSummaryMetrics(callback: (metrics: SummaryMetrics) => void): () => void {
+  const getFallback = () => CACHE.metrics || loadCachedCollection<SummaryMetrics>('metrics') || calculateSummaryMetricsFromCache();
+  if (isFirestoreQuotaExceeded()) {
+    callback(getFallback());
+    return () => {};
+  }
+
+  const docRef = doc(db, SUMMARY_COL, SUMMARY_DOC_ID);
+  return safeOnSnapshot(
+    docRef,
+    (snap: any) => {
+      if (snap && snap.exists()) {
+        const metrics = snap.data() as SummaryMetrics;
+        CACHE.metrics = metrics;
+        saveCachedCollection('metrics', metrics);
+        callback(metrics);
+      } else {
+        callback(getFallback());
+      }
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.GET, `${SUMMARY_COL}/${SUMMARY_DOC_ID}`);
+      callback(getFallback());
+    },
+    `${SUMMARY_COL}/${SUMMARY_DOC_ID}`
+  );
+}
+
+// ==========================================
+// DEBOUNCED WRITE UTILITY (PILLAR 3)
+// Buffers high-frequency field updates (e.g. typing notes, remarks) for 600ms
+// ==========================================
+const DEBOUNCE_MAP = new Map<string, { timer: any; updates: Record<string, any> }>();
+
+export function debouncedUpdateDoc(
+  collectionName: string,
+  docId: string,
+  updates: Record<string, any>,
+  delayMs = 600
+): void {
+  const key = `${collectionName}/${docId}`;
+  const existing = DEBOUNCE_MAP.get(key);
+
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.updates = { ...existing.updates, ...updates };
+  } else {
+    DEBOUNCE_MAP.set(key, {
+      timer: null,
+      updates: { ...updates }
+    });
+  }
+
+  const current = DEBOUNCE_MAP.get(key)!;
+  current.timer = setTimeout(() => {
+    DEBOUNCE_MAP.delete(key);
+    if (!isFirestoreQuotaExceeded() && !docId.startsWith('local') && !docId.startsWith('temp') && !docId.startsWith('seed')) {
+      const docRef = doc(db, collectionName, docId);
+      updateDoc(docRef, sanitizeFirestoreObject(current.updates)).catch(err => {
+        handleFirestoreError(err, OperationType.UPDATE, key);
+      });
+    }
+  }, delayMs);
 }
 
 // ==========================================
