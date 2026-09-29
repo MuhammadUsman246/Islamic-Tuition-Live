@@ -176,14 +176,20 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   }, [myLessons, selectedStudentFilter, reportTimeMode, tutorStartDate, tutorEndDate]);
 
   // New Class Notifications tracking for Tutor (Item 8)
-  const [acknowledgedClassIds, setAcknowledgedClassIds] = useState<string[]>(() => {
+  const [acknowledgedClassIds, setAcknowledgedClassIds] = useState<string[]>([]);
+
+  // Sync acknowledged notifications from localStorage when tutor is resolved
+  React.useEffect(() => {
+    const activeTutorId = tutor?.tutorId || currentTutorId;
+    if (!activeTutorId) return;
     try {
-      const stored = localStorage.getItem(`tutor_ack_classes_${tutor?.tutorId}`);
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
+      const storedSpecific = localStorage.getItem(`tutor_ack_classes_${activeTutorId}`);
+      const storedGeneral = localStorage.getItem('tutor_ack_classes_all');
+      const specList = storedSpecific ? JSON.parse(storedSpecific) : [];
+      const genList = storedGeneral ? JSON.parse(storedGeneral) : [];
+      setAcknowledgedClassIds(Array.from(new Set([...specList, ...genList])));
+    } catch (_) {}
+  }, [tutor?.tutorId, currentTutorId]);
 
   // Group unacknowledged classes by student (1 notification per student regardless of days/week)
   const studentClassMap = new Map<string, TimetableClass[]>();
@@ -251,8 +257,12 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   const handleAcknowledgeStudentGroup = (classIds: string[]) => {
     const updated = Array.from(new Set([...acknowledgedClassIds, ...classIds]));
     setAcknowledgedClassIds(updated);
+    const activeTutorId = tutor?.tutorId || currentTutorId;
     try {
-      localStorage.setItem(`tutor_ack_classes_${tutor?.tutorId}`, JSON.stringify(updated));
+      if (activeTutorId) {
+        localStorage.setItem(`tutor_ack_classes_${activeTutorId}`, JSON.stringify(updated));
+      }
+      localStorage.setItem('tutor_ack_classes_all', JSON.stringify(updated));
     } catch {}
   };
 
@@ -261,9 +271,14 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       ...myClasses.map(c => c.id),
       ...myAssignedStudents.map(s => s.studentId)
     ];
-    setAcknowledgedClassIds(allIds);
+    const updated = Array.from(new Set([...acknowledgedClassIds, ...allIds]));
+    setAcknowledgedClassIds(updated);
+    const activeTutorId = tutor?.tutorId || currentTutorId;
     try {
-      localStorage.setItem(`tutor_ack_classes_${tutor?.tutorId}`, JSON.stringify(allIds));
+      if (activeTutorId) {
+        localStorage.setItem(`tutor_ack_classes_${activeTutorId}`, JSON.stringify(updated));
+      }
+      localStorage.setItem('tutor_ack_classes_all', JSON.stringify(updated));
     } catch {}
   };
 
@@ -352,6 +367,33 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Active Academy Announcements Banner */}
+      {announcements && announcements.length > 0 && (
+        <div className="space-y-3">
+          {announcements.map((ann) => (
+            <div
+              key={ann.id}
+              className="bg-[#FFF9EE] border border-[#E8A93E]/60 p-4 rounded-2xl shadow-xs space-y-2 border-l-4 border-l-[#E8A93E]"
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#E8A93E] animate-pulse" />
+                  <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
+                    📢 Academy Notice: {ann.title}
+                  </h4>
+                </div>
+                <span className="text-[10px] font-mono text-[#8C5D08] bg-white px-2 py-0.5 rounded font-bold border border-[#E8A93E]/30">
+                  By {ann.authorName} {ann.endDate ? `• Expires: ${ann.endDate}` : ''}
+                </span>
+              </div>
+              <p className="text-xs text-[#161F1A] leading-relaxed whitespace-pre-wrap font-medium pt-1">
+                {ann.content}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
 
 
       {/* Floating Modern Notification Tray for New Class Assignments */}

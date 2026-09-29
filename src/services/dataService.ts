@@ -2961,28 +2961,35 @@ export async function deleteReferral(id: string): Promise<string> {
 // ANNOUNCEMENTS API WITH ROLE-BASED ACCESS
 // ==========================================
 export function isAnnouncementTargetedForRole(ann: Announcement, role: UserRole): boolean {
-  // Check date range validity if specified
-  const today = new Date().toISOString().split('T')[0];
-  if (ann.startDate && ann.startDate > today) {
-    return false; // Not yet active
+  // Admin always sees ALL announcements (including future/expired) for management & auditing
+  if (role === 'admin') return true;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const localToday = `${year}-${month}-${day}`;
+
+  // Date validity check for non-admin roles
+  if (ann.startDate && ann.startDate > localToday) {
+    return false; // Scheduled for future
   }
-  if (ann.endDate && ann.endDate < today) {
+  if (ann.endDate && ann.endDate < localToday) {
     return false; // Expired
   }
 
-  if (role === 'admin') return true; // Administrator can view all announcements
+  const normRole = role.toLowerCase().replace(/s$/, ''); // e.g. 'tutor', 'supervisor', 'student', 'parent'
 
   // Check array of targetRoles
   if (Array.isArray(ann.targetRoles) && ann.targetRoles.length > 0) {
-    if (ann.targetRoles.includes(role)) return true;
-    if ((ann.targetRoles as string[]).includes('all')) return true;
+    const targets = ann.targetRoles.map(r => String(r).toLowerCase().replace(/s$/, ''));
+    if (targets.includes('all') || targets.includes(normRole) || targets.includes(role.toLowerCase())) return true;
   }
 
   // Fallback to legacy targetRole field
   if (ann.targetRole) {
-    if (ann.targetRole === 'all') return true;
-    if (ann.targetRole === (role + 's' as any)) return true;
-    if (ann.targetRole === (role as any)) return true;
+    const targetStr = String(ann.targetRole).toLowerCase();
+    if (targetStr === 'all' || targetStr.includes(normRole) || targetStr.includes(role.toLowerCase())) return true;
   }
 
   return false;

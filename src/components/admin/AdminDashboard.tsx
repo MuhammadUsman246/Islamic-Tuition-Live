@@ -43,7 +43,8 @@ import {
   FileSpreadsheet,
   Palmtree,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  UserX
 } from 'lucide-react';
 import {
   Student,
@@ -239,6 +240,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [adminStudentSearchQuery, setAdminStudentSearchQuery] = useState<string>('');
   const [studentStatusFilter, setStudentStatusFilter] = useState<string>('all');
   const [feeStatusFilter, setFeeStatusFilter] = useState<string>('all');
+
+  // Set of studentIds that have at least 1 active scheduled class in master timetable
+  const activeSheetStudentIds = useMemo(() => {
+    const set = new Set<string>();
+    (classes || []).forEach(c => {
+      if (c.status !== 'Cancelled' && c.studentId) {
+        set.add(c.studentId);
+      }
+    });
+    return set;
+  }, [classes]);
+
+  // Portal students who currently have 0 active scheduled classes in the master sheet
+  const unassignedStudentsList = useMemo(() => {
+    return (students || []).filter(s => !activeSheetStudentIds.has(s.studentId));
+  }, [students, activeSheetStudentIds]);
+
+  // Batch auto-sync unassigned students (0 master slots) to Inactive status
+  const handleAutoConvertUnassignedToInactive = async () => {
+    const candidates = students.filter(s => 
+      !activeSheetStudentIds.has(s.studentId) && 
+      (s.status === 'Active' || s.status === 'Confirmed' || s.status === 'Pending' || s.status === 'Trial')
+    );
+    if (candidates.length === 0) {
+      alert("All active/confirmed students are already assigned to master sheet slots!");
+      return;
+    }
+    if (confirm(`Convert ${candidates.length} unassigned student(s) with no master sheet slots to 'Inactive' status? (Their details and history remain 100% saved in the portal database)`)) {
+      for (const st of candidates) {
+        await updateStudent(st.id, { status: 'Inactive', isOnLeave: false });
+      }
+      await onRefreshData();
+      alert(`Successfully moved ${candidates.length} unassigned student(s) to Inactive status.`);
+    }
+  };
 
   // Student Folder & Lesson Editing states
   const [inspectedStudent, setInspectedStudent] = useState<Student | null>(null);
@@ -2908,7 +2944,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Complete directory of registered students, parents, timezones, and assigned tutors.
                   </p>
                 </div>
-                <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+                  {unassignedStudentsList.filter(s => s.status === 'Active' || s.status === 'Confirmed' || s.status === 'Pending' || s.status === 'Trial').length > 0 && (
+                    <button
+                      onClick={handleAutoConvertUnassignedToInactive}
+                      className="px-3.5 py-1.5 bg-amber-50 border border-amber-300 text-amber-900 hover:bg-amber-100 text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-2xs cursor-pointer transition-colors"
+                      title="Click to automatically convert portal students with 0 master sheet slots to Inactive status"
+                    >
+                      <UserX className="w-4 h-4 text-amber-700" />
+                      <span>Convert {unassignedStudentsList.filter(s => s.status === 'Active' || s.status === 'Confirmed' || s.status === 'Pending' || s.status === 'Trial').length} Unassigned to Inactive</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => setIsBulkImportModalOpen(true)}
                     className="px-4 py-1.5 bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold rounded-lg hover:bg-gray-50 flex items-center space-x-1.5 shadow-2xs cursor-pointer"
@@ -2950,12 +2996,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="border border-[#D5D0C6] rounded-md px-2.5 py-1 text-xs bg-white font-semibold text-[#161F1A]"
                   >
                     <option value="all">All Statuses ({students.length})</option>
-                    <option value="Active">Active ({students.filter(s => s.status === 'Active').length})</option>
+                    <option value="Active">Active Sheet ({students.filter(s => s.status === 'Active' && activeSheetStudentIds.has(s.studentId)).length})</option>
                     <option value="Trial">Trial ({students.filter(s => s.status === 'Trial').length})</option>
                     <option value="Confirmed">Confirmed ({students.filter(s => s.status === 'Confirmed').length})</option>
                     <option value="Pending">Pending ({students.filter(s => s.status === 'Pending').length})</option>
                     <option value="on_leave">🏖️ On Leave ({students.filter(s => s.isOnLeave).length})</option>
-                    <option value="discontinued">🛑 Stopped / Inactive Students ({students.filter(s => s.status === 'Not Taking' || s.status === 'Inactive').length})</option>
+                    <option value="discontinued">🛑 Inactive / Unassigned ({students.filter(s => s.status === 'Not Taking' || s.status === 'Inactive' || !activeSheetStudentIds.has(s.studentId)).length})</option>
+                    <option value="unassigned_slots">🚫 Unassigned / Not in Master Sheet ({unassignedStudentsList.length})</option>
                     <option value="Not Taking">🚫 Not Taking ({students.filter(s => s.status === 'Not Taking').length})</option>
                     <option value="Inactive">📁 Inactive ({students.filter(s => s.status === 'Inactive').length})</option>
                   </select>
@@ -2989,7 +3036,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           : studentStatusFilter === 'on_leave'
                           ? Boolean(s.isOnLeave)
                           : studentStatusFilter === 'discontinued'
-                          ? (s.status === 'Not Taking' || s.status === 'Inactive')
+                          ? (s.status === 'Not Taking' || s.status === 'Inactive' || !activeSheetStudentIds.has(s.studentId))
+                          : studentStatusFilter === 'unassigned_slots'
+                          ? !activeSheetStudentIds.has(s.studentId)
                           : s.status === studentStatusFilter;
                         return matchSearch && matchStatus;
                       })
@@ -3037,6 +3086,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
                                 }`}>
                                   {st.status}
+                                </span>
+                              )}
+                              {!activeSheetStudentIds.has(st.studentId) && st.status !== 'Inactive' && st.status !== 'Not Taking' && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center w-max gap-1" title="This student has 0 active scheduled class slots in the Master Sheet">
+                                  <UserX className="w-2.5 h-2.5 text-amber-700" />
+                                  Unassigned (No Slots)
                                 </span>
                               )}
                               {st.isOnLeave && (
@@ -4776,44 +4831,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </form>
           </div>
 
-          <div className="space-y-3">
-            {announcements.map(ann => (
-              <div key={ann.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-[#161F1A]">{ann.title}</h4>
-                  <div className="flex items-center space-x-2">
-                    <div className="flex items-center gap-1">
-                      {(ann.targetRoles && ann.targetRoles.length > 0 ? ann.targetRoles : [ann.targetRole || 'all']).map((r, idx) => (
-                        <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 capitalize">
-                          {r}
-                        </span>
-                      ))}
+          {announcements.length === 0 ? (
+            <div className="bg-white p-8 rounded-xl border border-[#E3DFD7] text-center text-xs text-[#5A6B61] italic">
+              No published announcements found. Use the form above to publish bulletins for tutors, supervisors, students, or parents.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {announcements.map(ann => (
+                <div key={ann.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="text-sm font-bold text-[#161F1A]">{ann.title}</h4>
+                    <div className="flex items-center space-x-2">
+                      <div className="flex items-center gap-1">
+                        {(ann.targetRoles && ann.targetRoles.length > 0 ? ann.targetRoles : [ann.targetRole || 'all']).map((r, idx) => (
+                          <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 capitalize">
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => handleDeleteAnnouncement(ann.id)}
+                        className="px-2.5 py-1 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer ml-2"
+                      >
+                        Delete
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleDeleteAnnouncement(ann.id)}
-                      className="text-xs text-rose-600 hover:text-rose-700 hover:underline font-medium cursor-pointer ml-2"
-                    >
-                      Delete
-                    </button>
+                  </div>
+                  <p className="text-xs text-[#161F1A] leading-relaxed whitespace-pre-wrap">{ann.content}</p>
+                  <div className="flex flex-wrap items-center justify-between text-[10px] text-[#5A6B61] pt-1">
+                    <div>
+                      Posted by {ann.authorName} on {new Date(ann.createdAt).toLocaleDateString()}
+                    </div>
+                    {(ann.startDate || ann.endDate) && (
+                      <div className="flex items-center gap-1.5 font-medium bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
+                        <span>⏱️ Active:</span>
+                        <span>{ann.startDate || 'Immediate'}</span>
+                        <span>→</span>
+                        <span>{ann.endDate || 'No Expiry'}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <p className="text-xs text-[#5A6B61] leading-relaxed">{ann.content}</p>
-                <div className="flex flex-wrap items-center justify-between text-[10px] text-[#5A6B61] pt-1">
-                  <div>
-                    Posted by {ann.authorName} on {new Date(ann.createdAt).toLocaleDateString()}
-                  </div>
-                  {(ann.startDate || ann.endDate) && (
-                    <div className="flex items-center gap-1.5 font-medium bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
-                      <span>⏱️ Active:</span>
-                      <span>{ann.startDate || 'Immediate'}</span>
-                      <span>→</span>
-                      <span>{ann.endDate || 'No Expiry'}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
