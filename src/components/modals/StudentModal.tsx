@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserPlus, CheckCircle, Key, Shield, CreditCard, Share2 } from 'lucide-react';
+import { X, UserPlus, CheckCircle, Key, Shield, CreditCard, Share2, Calendar } from 'lucide-react';
 import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency } from '../../types';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
@@ -24,6 +24,8 @@ export const StudentModal: React.FC<StudentModalProps> = ({
 }) => {
   const [studentId, setStudentId] = useState<string>(() => getNextSequentialStudentId(students));
   const [name, setName] = useState<string>('');
+  const [age, setAge] = useState<number | ''>('');
+  const [joiningDate, setJoiningDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [email, setEmail] = useState<string>('');
   const [phone, setPhone] = useState<string>('');
   const [parentName, setParentName] = useState<string>('');
@@ -55,6 +57,8 @@ export const StudentModal: React.FC<StudentModalProps> = ({
     if (initialStudent) {
       setStudentId(initialStudent.studentId);
       setName(initialStudent.name);
+      setAge(initialStudent.age !== undefined ? initialStudent.age : '');
+      setJoiningDate(initialStudent.joiningDate || initialStudent.trialStartDate || initialStudent.createdAt?.slice(0, 10) || new Date().toISOString().slice(0, 10));
       setEmail(initialStudent.email);
       setPhone(initialStudent.phone);
       setParentName(initialStudent.parentName);
@@ -79,6 +83,8 @@ export const StudentModal: React.FC<StudentModalProps> = ({
     } else {
       setStudentId(getNextSequentialStudentId(students));
       setName('');
+      setAge('');
+      setJoiningDate(new Date().toISOString().slice(0, 10));
       setEmail('');
       setPhone('');
       setParentName('');
@@ -108,15 +114,21 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    const finalStudentEmail = email.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}@academy.com`;
+    const finalParentEmail = parentEmail.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}.parent@academy.com`;
+
     try {
       await onSave(
         {
           studentId,
           name,
-          email,
+          age: age === '' ? undefined : Number(age),
+          joiningDate,
+          trialStartDate: initialStudent?.trialStartDate || joiningDate,
+          email: finalStudentEmail,
           phone,
           parentName,
-          parentEmail,
+          parentEmail: finalParentEmail,
           parentPhone,
           assignedTutorId,
           status,
@@ -156,9 +168,9 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       }
 
       // Register real student login account (Item 12)
-      if (createStudentUser && email) {
+      if (createStudentUser) {
         await registerUserAccount({
-          email: email.trim(),
+          email: finalStudentEmail,
           password: studentPassword.trim() || 'quran123',
           displayName: name.trim(),
           role: 'student',
@@ -168,11 +180,11 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       }
 
       // Register real parent login account (Item 12)
-      if (createParentUser && parentEmail) {
+      if (createParentUser) {
         await registerUserAccount({
-          email: parentEmail.trim(),
+          email: finalParentEmail,
           password: parentPassword.trim() || 'parent123',
-          displayName: parentName.trim(),
+          displayName: parentName.trim() || `${name.trim()}'s Parent`,
           role: 'parent',
           status: 'active',
           studentId: studentId
@@ -194,7 +206,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           <div className="flex items-center space-x-2">
             <UserPlus className="w-5 h-5 text-[#E8A93E]" />
             <h3 className="font-bold text-base">
-              {initialStudent ? 'Edit Student Profile' : 'Register New Student'}
+              {initialStudent ? 'Edit Student Profile' : 'Student Registration & Enrollment'}
             </h3>
           </div>
           <button onClick={onClose} className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/10">
@@ -204,7 +216,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           {/* Identity */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-semibold text-[#161F1A] mb-1">Student ID</label>
               <input
@@ -228,6 +240,37 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                 required
               />
             </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#161F1A] mb-1">Age (Years)</label>
+              <input
+                id="student_age_input"
+                type="number"
+                min="1"
+                max="100"
+                value={age}
+                onChange={(e) => setAge(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value, 10) || 0))}
+                placeholder="e.g. 10"
+                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs"
+              />
+            </div>
+          </div>
+
+          {/* Joining Date Card - Auto-selected but editable manually */}
+          <div className="bg-[#E8F5EE] border border-emerald-200 rounded-xl p-3 flex items-center justify-between text-xs text-[#1E5C3D]">
+            <div className="flex items-center space-x-2">
+              <Calendar className="w-4 h-4 text-[#2D8B5C]" />
+              <div>
+                <span className="font-bold block">Joining & Trial Start Date:</span>
+                <span className="text-[11px] text-emerald-800">Auto-selected (click date input to modify manually if needed)</span>
+              </div>
+            </div>
+            <input
+              type="date"
+              value={joiningDate}
+              onChange={(e) => setJoiningDate(e.target.value)}
+              className="font-mono font-bold bg-white px-2.5 py-1 rounded-md border border-emerald-300 text-xs text-[#1E5C3D] focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none cursor-pointer shadow-2xs"
+              title="Auto-selected — click to pick or change joining date"
+            />
           </div>
 
           {/* Contact Details */}

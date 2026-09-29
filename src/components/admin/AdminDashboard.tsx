@@ -688,17 +688,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (id) {
       await updateClass(id, classData);
     } else {
-      const ops = [addClass(classData)];
+      await addClass(classData);
       if (additionalDays && additionalDays.length > 0) {
-        for (const extraDay of additionalDays) {
-          ops.push(addClass({
+        const cleanExtraDays = Array.from(new Set(additionalDays)).filter(d => d !== classData.dayOfWeek);
+        for (const extraDay of cleanExtraDays) {
+          await addClass({
             ...classData,
             dayOfWeek: extraDay,
             isWeekend: extraDay === 'Saturday' || extraDay === 'Sunday'
-          }));
+          });
         }
       }
-      await Promise.all(ops);
     }
     await onRefreshData();
   };
@@ -766,7 +766,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
-  const handleConfirmMultiDayDelete = async (classIds: string[], summary: string) => {
+  const handleConfirmMultiDayDelete = async (
+    classIds: string[],
+    summary: string,
+    updateStudentStatus?: 'Not Taking' | 'Inactive' | 'On Leave' | 'keep'
+  ) => {
     try {
       for (const id of classIds) {
         const targetCls = classes.find(c => c.id === id);
@@ -783,10 +787,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }]);
         }
       }
+
+      // If admin selected to update student status (e.g. 'Not Taking', 'Inactive', 'On Leave')
+      if (updateStudentStatus && updateStudentStatus !== 'keep' && multiDeleteTargetClass?.studentId) {
+        const targetStudent = students.find(s => s.studentId === multiDeleteTargetClass.studentId);
+        if (targetStudent) {
+          if (updateStudentStatus === 'On Leave') {
+            await updateStudent(targetStudent.id, { isOnLeave: true, status: 'Active' });
+          } else {
+            await updateStudent(targetStudent.id, { status: updateStudentStatus as StudentStatus, isOnLeave: false });
+          }
+        }
+      }
+
       await onRefreshData();
       setUndoToast({
         trashId: 'batch',
-        title: `${classIds.length} slot(s) deleted: ${summary}`,
+        title: `${classIds.length} slot(s) removed: ${summary}`,
         itemType: 'class'
       });
     } catch (err) {
@@ -1270,7 +1287,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {matchedAdminStudents.map(st => (
+                {matchedAdminStudents.map(st => {
+                  const studentClasses = classes.filter(c => c.studentId === st.studentId && c.status !== 'Cancelled');
+                  const classDays = Array.from(new Set(studentClasses.map(c => c.dayOfWeek)));
+                  let daysLabel = classDays.join(', ');
+                  if (classDays.length === 5 && classDays.includes('Monday') && classDays.includes('Friday')) {
+                    daysLabel = 'Mon - Fri';
+                  } else if (classDays.length === 2 && classDays.includes('Saturday') && classDays.includes('Sunday')) {
+                    daysLabel = 'Weekends';
+                  }
+                  const classTimeStr = studentClasses.length > 0 
+                    ? `${studentClasses[0].startTimePKT} PKT (${daysLabel})`
+                    : 'No Schedule';
+
+                  const joinDateStr = st.joiningDate || st.trialStartDate || st.createdAt?.slice(0, 10);
+
+                  return (
                   <div
                     key={st.id}
                     className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-lg bg-[#FAF9F7] hover:bg-emerald-50/50 border border-[#E3DFD7] hover:border-[#2D8B5C]/30 transition-all text-xs"
@@ -1280,8 +1312,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {st.studentId}
                       </span>
                       <div>
-                        <div className="font-semibold text-[#161F1A] flex items-center gap-2">
+                        <div className="font-semibold text-[#161F1A] flex items-center gap-2 flex-wrap">
                           <span>{st.name}</span>
+                          {st.age !== undefined && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
+                              Age: {st.age}
+                            </span>
+                          )}
                           <span className={`px-1.5 py-0.2 rounded text-[10px] font-medium ${
                             st.status === 'Trial' ? 'bg-amber-100 text-amber-800' :
                             st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' :
@@ -1290,10 +1327,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             {st.status}
                           </span>
                         </div>
-                        <div className="text-[11px] text-[#5A6B61] flex items-center gap-2 mt-0.5">
+                        <div className="text-[11px] text-[#5A6B61] flex items-center gap-2 mt-1 flex-wrap">
                           <span>Course: {st.courseType}</span>
                           <span>•</span>
                           <span>Tutor: {st.assignedTutorId}</span>
+                          <span>•</span>
+                          <span className="font-bold text-[#1E5C3D] bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            Class Time: {classTimeStr}
+                          </span>
+                          {joinDateStr && (
+                            <>
+                              <span>•</span>
+                              <span>Joined: {joinDateStr}</span>
+                            </>
+                          )}
                           {st.timezone && (
                             <>
                               <span>•</span>
@@ -1316,7 +1363,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span>Student File</span>
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2899,14 +2947,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={studentStatusFilter}
                     onChange={(e) => setStudentStatusFilter(e.target.value)}
-                    className="border border-[#D5D0C6] rounded-md px-2.5 py-1 text-xs bg-white"
+                    className="border border-[#D5D0C6] rounded-md px-2.5 py-1 text-xs bg-white font-semibold text-[#161F1A]"
                   >
                     <option value="all">All Statuses ({students.length})</option>
+                    <option value="Active">Active ({students.filter(s => s.status === 'Active').length})</option>
+                    <option value="Trial">Trial ({students.filter(s => s.status === 'Trial').length})</option>
+                    <option value="Confirmed">Confirmed ({students.filter(s => s.status === 'Confirmed').length})</option>
+                    <option value="Pending">Pending ({students.filter(s => s.status === 'Pending').length})</option>
                     <option value="on_leave">🏖️ On Leave ({students.filter(s => s.isOnLeave).length})</option>
-                    <option value="Trial">Trial</option>
-                    <option value="Active">Active</option>
-                    <option value="Confirmed">Confirmed</option>
-                    <option value="Pending">Pending</option>
+                    <option value="discontinued">🛑 Stopped / Inactive Students ({students.filter(s => s.status === 'Not Taking' || s.status === 'Inactive').length})</option>
+                    <option value="Not Taking">🚫 Not Taking ({students.filter(s => s.status === 'Not Taking').length})</option>
+                    <option value="Inactive">📁 Inactive ({students.filter(s => s.status === 'Inactive').length})</option>
                   </select>
                 </div>
               </div>
@@ -2937,6 +2988,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ? true
                           : studentStatusFilter === 'on_leave'
                           ? Boolean(s.isOnLeave)
+                          : studentStatusFilter === 'discontinued'
+                          ? (s.status === 'Not Taking' || s.status === 'Inactive')
                           : s.status === studentStatusFilter;
                         return matchSearch && matchStatus;
                       })
@@ -2959,7 +3012,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               {st.name}
                             </button>
-                            <span className="text-[11px] text-[#5A6B61]">{st.email}</span>
+                            <div className="text-[11px] text-[#5A6B61] flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span>{st.email}</span>
+                              {st.age !== undefined && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
+                                  Age: {st.age}
+                                </span>
+                              )}
+                              {(st.joiningDate || st.createdAt) && (
+                                <span className="text-[10px] text-emerald-800 font-mono">
+                                  Joined: {st.joiningDate || st.createdAt?.slice(0,10)}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4">
                             <div className="space-y-1">

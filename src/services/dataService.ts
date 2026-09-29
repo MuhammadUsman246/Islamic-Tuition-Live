@@ -383,6 +383,21 @@ let MEMORY_TRASH: TrashRecord[] = [];
 
 const CACHE_STORAGE_PREFIX = 'it_academy_cache_';
 
+const CROSS_TAB_CHANNEL = typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('it_academy_cross_tab_channel')
+  : null;
+
+if (CROSS_TAB_CHANNEL) {
+  CROSS_TAB_CHANNEL.onmessage = (event) => {
+    if (event.data && event.data.type === 'CACHE_UPDATED' && event.data.key) {
+      const { key, value } = event.data;
+      if (key in CACHE) {
+        (CACHE as any)[key] = value;
+      }
+    }
+  };
+}
+
 export function clearInMemoryCache(): void {
   CACHE.students = [];
   CACHE.tutors = [];
@@ -427,6 +442,11 @@ export function saveCachedCollection<T>(key: keyof MemoryCacheStore, value: T): 
   // Pillar 4: Persistent IndexedDB async background sync
   idbSet(`${CACHE_STORAGE_PREFIX}${String(key)}`, value).catch(() => {});
   idbSet(`${CACHE_STORAGE_PREFIX}${String(key)}_time`, Date.now()).catch(() => {});
+  try {
+    if (CROSS_TAB_CHANNEL) {
+      CROSS_TAB_CHANNEL.postMessage({ type: 'CACHE_UPDATED', key, value });
+    }
+  } catch (_) {}
 }
 
 /**
@@ -622,6 +642,8 @@ export function sanitizeStudentForTutor(student: Student): TutorStudentView {
   return {
     studentId: student.studentId,
     name: student.name,
+    age: student.age,
+    joiningDate: student.joiningDate || student.trialStartDate || student.createdAt?.slice(0, 10),
     status: student.status,
     assignedTutorId: student.assignedTutorId,
     courseType: student.courseType,
@@ -855,10 +877,15 @@ export async function addStudent(studentData: Omit<Student, 'id'>): Promise<stri
   }
 
   const assignedTutorId = normalizeTutorId(studentData.assignedTutorId) || studentData.assignedTutorId;
+  const todayDateStr = new Date().toISOString().slice(0, 10);
+  const joiningDate = studentData.joiningDate || studentData.trialStartDate || todayDateStr;
+  const trialStartDate = studentData.trialStartDate || joiningDate;
 
   const newStudent: Student = {
     id: docId,
     ...studentData,
+    joiningDate,
+    trialStartDate,
     assignedTutorId,
     studentId: finalStudentId
   };
@@ -1999,29 +2026,39 @@ export async function addClass(classData: Omit<TimetableClass, 'id'>): Promise<s
     throw new Error(validation.error);
   }
 
-  // OPTIMISTIC: Generate a unique temporary ID and insert immediately
-  const tempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-  const newClass: TimetableClass = { id: tempId, ...classData };
-  CACHE.classes = [newClass, ...(CACHE.classes || [])];
+  // Pre-generate the exact Firestore document ID client-side to prevent optimistic duplicate key splits
+  const docRef = doc(collection(db, CLASSES_COL));
+  const classId = docRef.id;
+
+  // Deduplicate against any existing class matching same tutor, student, dayOfWeek, and startTimePKT
+  const existingList = CACHE.classes || [];
+  const duplicateIndex = existingList.findIndex(
+    c => c.tutorId === classData.tutorId &&
+         c.studentId === classData.studentId &&
+         c.dayOfWeek === classData.dayOfWeek &&
+         c.startTimePKT === classData.startTimePKT &&
+         c.status !== 'Cancelled'
+  );
+
+  const newClass: TimetableClass = { id: classId, ...classData };
+
+  if (duplicateIndex !== -1 && CACHE.classes) {
+    CACHE.classes[duplicateIndex] = newClass;
+  } else {
+    CACHE.classes = [newClass, ...(CACHE.classes || [])];
+  }
+
   saveCachedCollection('classes', CACHE.classes);
   recalculateAndPersistSummaryMetrics().catch(() => {});
 
   if (!isFirestoreQuotaExceeded()) {
-    // Perform Firestore write in background without awaiting
-    addDoc(collection(db, CLASSES_COL), sanitizeFirestoreObject(classData))
-      .then((docRef) => {
-        // Replace temporary ID with actual Firestore ID in-place
-        if (CACHE.classes) {
-          CACHE.classes = CACHE.classes.map(c => c.id === tempId ? { ...c, id: docRef.id } : c);
-          saveCachedCollection('classes', CACHE.classes);
-        }
-      })
+    setDoc(docRef, sanitizeFirestoreObject(classData), { merge: true })
       .catch((err) => {
         console.warn("Background class creation notice:", err);
       });
   }
 
-  return tempId;
+  return classId;
 }
 
 export async function updateClass(id: string, updates: Partial<TimetableClass>): Promise<void> {
@@ -2209,8 +2246,52 @@ function cleanExpiredScreenshots(lessons: Lesson[]): Lesson[] {
   });
 }
 
+export function deduplicateLessons(lessons: Lesson[]): Lesson[] {
+  if (!lessons || lessons.length === 0) return [];
+  const seenMap = new Map<string, Lesson>();
+  for (const lesson of lessons) {
+    if (!lesson || !lesson.studentId || !lesson.date) continue;
+    const key = `${lesson.studentId}_${lesson.date}`;
+    const existing = seenMap.get(key);
+    if (!existing) {
+      seenMap.set(key, lesson);
+    } else {
+      if (existing.attendanceStatus === 'Absent' && lesson.attendanceStatus !== 'Absent') {
+        seenMap.set(key, lesson);
+      } else if (lesson.createdAt && existing.createdAt && new Date(lesson.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+        seenMap.set(key, lesson);
+      }
+    }
+  }
+  return Array.from(seenMap.values()).sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0);
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0);
+    return timeB - timeA;
+  });
+}
+
+export function deduplicateAttendance(records: AttendanceRecord[]): AttendanceRecord[] {
+  if (!records || records.length === 0) return [];
+  const seenMap = new Map<string, AttendanceRecord>();
+  for (const rec of records) {
+    if (!rec || !rec.studentId || !rec.date) continue;
+    const key = `${rec.studentId}_${rec.date}`;
+    const existing = seenMap.get(key);
+    if (!existing) {
+      seenMap.set(key, rec);
+    } else {
+      if (rec.markedAt && existing.markedAt && new Date(rec.markedAt).getTime() > new Date(existing.markedAt).getTime()) {
+        seenMap.set(key, rec);
+      }
+    }
+  }
+  return Array.from(seenMap.values()).sort(
+    (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+  );
+}
+
 export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string): () => void {
-  const getFallback = () => CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS);
+  const getFallback = () => deduplicateLessons(CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS));
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
     return () => {};
@@ -2225,16 +2306,13 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
       const currentList = CACHE.lessons || [];
       const items = applySnapshotDelta<Lesson>(currentList, snap);
       const cleaned = cleanExpiredScreenshots(items);
-      // Merge with local newly created items if not yet indexed in Firestore
       const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
       const mergedMap = new Map<string, Lesson>();
       cleaned.forEach(l => mergedMap.set(l.id, l));
       localItems.forEach(l => {
         if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
       });
-      const merged = Array.from(mergedMap.values()).sort(
-        (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
-      );
+      const merged = deduplicateLessons(Array.from(mergedMap.values()));
       CACHE.lessons = merged;
       saveCachedCollection('lessons', merged);
       callback(merged);
@@ -2248,12 +2326,13 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
 
 export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
   if (CACHE.lessons && !forceRefresh) {
-    return CACHE.lessons;
+    return deduplicateLessons(CACHE.lessons);
   }
   const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
   if (localItems.length > 0 && !forceRefresh) {
-    CACHE.lessons = localItems;
-    return localItems;
+    const deduped = deduplicateLessons(localItems);
+    CACHE.lessons = deduped;
+    return deduped;
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
@@ -2266,7 +2345,7 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
         localItems.forEach(l => {
           if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
         });
-        const merged = Array.from(mergedMap.values());
+        const merged = deduplicateLessons(Array.from(mergedMap.values()));
         CACHE.lessons = merged;
         saveCachedCollection('lessons', merged);
         return merged;
@@ -2276,17 +2355,46 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
     handleFirestoreError(err, OperationType.LIST, LESSONS_COL);
   }
   const fallback = localItems.length > 0 ? localItems : (isCleanDataMode() ? [] : SEED_LESSONS);
-  const cleanedFallback = cleanExpiredScreenshots(fallback);
-  CACHE.lessons = cleanedFallback;
-  saveCachedCollection('lessons', cleanedFallback);
-  return cleanedFallback;
+  const dedupedFallback = deduplicateLessons(cleanExpiredScreenshots(fallback));
+  CACHE.lessons = dedupedFallback;
+  saveCachedCollection('lessons', dedupedFallback);
+  return dedupedFallback;
 }
 
 export async function addLesson(lessonData: Omit<Lesson, 'id'>): Promise<string> {
+  const existingLessons = CACHE.lessons || (await getLessons());
+  // Prevent duplicate absent or lesson entries for the same student on the same date
+  const duplicate = existingLessons.find(l => 
+    l.studentId === lessonData.studentId && 
+    l.date === lessonData.date
+  );
+
+  if (duplicate) {
+    await updateLesson(duplicate.id, lessonData);
+    if (lessonData.attendanceStatus) {
+      await addAttendanceRecord({
+        classId: 'lesson_session',
+        studentId: lessonData.studentId,
+        studentName: lessonData.studentName,
+        tutorId: lessonData.tutorId,
+        date: lessonData.date,
+        status: lessonData.attendanceStatus === 'Absent' ? 'Absent' : lessonData.attendanceStatus === 'Late' ? 'Late' : 'Present',
+        markedBy: lessonData.tutorId,
+        markedAt: new Date().toISOString(),
+        notes: lessonData.attendanceStatus === 'Late' && lessonData.lateMinutes
+          ? `Late by ${lessonData.lateMinutes} mins`
+          : lessonData.attendanceStatus === 'Absent' && lessonData.absentReason
+          ? `Absent: ${lessonData.absentReason}`
+          : undefined
+      });
+    }
+    return duplicate.id;
+  }
+
   const docRef = doc(collection(db, LESSONS_COL));
   const docId = docRef.id;
   const newLesson: Lesson = { id: docId, ...lessonData };
-  CACHE.lessons = [newLesson, ...(CACHE.lessons || [])];
+  CACHE.lessons = deduplicateLessons([newLesson, ...(CACHE.lessons || [])]);
   saveCachedCollection('lessons', CACHE.lessons);
 
   // Background non-blocking persistence & attendance/trial updates
@@ -2324,31 +2432,31 @@ export async function addLesson(lessonData: Omit<Lesson, 'id'>): Promise<string>
     }
 
     // Check if student is on Trial and update trial sessions (only if attended)
-    if (lessonData.attendanceStatus !== 'Absent') {
-      try {
-        const students = CACHE.students || (await getStudents());
-        const student = students.find(s => s.studentId === lessonData.studentId);
-        if (student && student.status === 'Trial') {
-          const nextCompleted = (student.trialSessionsCompleted || 0) + 1;
-          const newTrialStatus = nextCompleted >= 5 ? 'Decision Pending' : 'In Progress';
-          if (CACHE.students) {
-            CACHE.students = CACHE.students.map(s => s.id === student.id ? {
-              ...s,
-              trialSessionsCompleted: nextCompleted,
-              trialStatus: newTrialStatus
-            } : s);
-            saveCachedCollection('students', CACHE.students);
-          }
-          if (!isFirestoreQuotaExceeded() && !student.id.startsWith('local')) {
-            await updateDoc(doc(db, STUDENTS_COL, student.id), {
-              trialSessionsCompleted: nextCompleted,
-              trialStatus: newTrialStatus
-            });
-          }
+    try {
+      const students = CACHE.students || (await getStudents());
+      const student = students.find(s => s.studentId === lessonData.studentId);
+      if (student && student.status === 'Trial') {
+        const allStudentLessons = (CACHE.lessons || []).filter(l => l.studentId === lessonData.studentId);
+        const completedCount = allStudentLessons.filter(l => l.attendanceStatus !== 'Absent').length;
+        const nextCompleted = Math.max(completedCount, (student.trialSessionsCompleted || 0) + (lessonData.attendanceStatus !== 'Absent' ? 1 : 0));
+        const newTrialStatus = nextCompleted >= 5 ? 'Decision Pending' : 'In Progress';
+        if (CACHE.students) {
+          CACHE.students = CACHE.students.map(s => s.id === student.id ? {
+            ...s,
+            trialSessionsCompleted: nextCompleted,
+            trialStatus: newTrialStatus
+          } : s);
+          saveCachedCollection('students', CACHE.students);
         }
-      } catch (err) {
-        console.error("Error auto-updating trial session on lesson save:", err);
+        if (!isFirestoreQuotaExceeded() && !student.id.startsWith('local')) {
+          await updateDoc(doc(db, STUDENTS_COL, student.id), {
+            trialSessionsCompleted: nextCompleted,
+            trialStatus: newTrialStatus
+          });
+        }
       }
+    } catch (err) {
+      console.error("Error auto-updating trial session on lesson save:", err);
     }
   })();
 
@@ -2388,12 +2496,13 @@ export async function deleteLesson(id: string): Promise<void> {
 // ==========================================
 export async function getAttendanceRecords(forceRefresh = false): Promise<AttendanceRecord[]> {
   if (CACHE.attendance && !forceRefresh) {
-    return CACHE.attendance;
+    return deduplicateAttendance(CACHE.attendance);
   }
   const localItems = loadCachedCollection<AttendanceRecord[]>('attendance') || [];
   if (localItems.length > 0 && !forceRefresh) {
-    CACHE.attendance = localItems;
-    return localItems;
+    const deduped = deduplicateAttendance(localItems);
+    CACHE.attendance = deduped;
+    return deduped;
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
@@ -2403,7 +2512,7 @@ export async function getAttendanceRecords(forceRefresh = false): Promise<Attend
         const mergedMap = new Map<string, AttendanceRecord>();
         items.forEach(a => mergedMap.set(a.id, a));
         localItems.forEach(a => { if (!mergedMap.has(a.id)) mergedMap.set(a.id, a); });
-        const merged = Array.from(mergedMap.values());
+        const merged = deduplicateAttendance(Array.from(mergedMap.values()));
         CACHE.attendance = merged;
         saveCachedCollection('attendance', merged);
         return merged;
@@ -2413,24 +2522,41 @@ export async function getAttendanceRecords(forceRefresh = false): Promise<Attend
     handleFirestoreError(err, OperationType.LIST, ATTENDANCE_COL);
   }
   const fallback = localItems.length > 0 ? localItems : (isCleanDataMode() ? [] : SEED_ATTENDANCE);
-  CACHE.attendance = fallback;
-  saveCachedCollection('attendance', fallback);
-  return fallback;
+  const dedupedFallback = deduplicateAttendance(fallback);
+  CACHE.attendance = dedupedFallback;
+  saveCachedCollection('attendance', dedupedFallback);
+  return dedupedFallback;
 }
 
 export async function addAttendanceRecord(record: Omit<AttendanceRecord, 'id'>): Promise<string> {
-  let docId = 'local_att_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-  if (!isFirestoreQuotaExceeded()) {
-    try {
-      const docRef = await addDoc(collection(db, ATTENDANCE_COL), sanitizeFirestoreObject(record));
-      docId = docRef.id;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, ATTENDANCE_COL);
+  const existingRecords = CACHE.attendance || (await getAttendanceRecords());
+  const duplicate = existingRecords.find(a => 
+    a.studentId === record.studentId && 
+    a.date === record.date
+  );
+
+  if (duplicate) {
+    if (CACHE.attendance) {
+      CACHE.attendance = deduplicateAttendance(CACHE.attendance.map(a => a.id === duplicate.id ? { ...a, ...record } : a));
+      saveCachedCollection('attendance', CACHE.attendance);
     }
+    if (!isFirestoreQuotaExceeded() && !duplicate.id.startsWith('local')) {
+      updateDoc(doc(db, ATTENDANCE_COL, duplicate.id), sanitizeFirestoreObject(record)).catch(() => {});
+    }
+    return duplicate.id;
   }
+
+  const docRef = doc(collection(db, ATTENDANCE_COL));
+  const docId = docRef.id;
   const newRec: AttendanceRecord = { id: docId, ...record };
-  CACHE.attendance = [newRec, ...(CACHE.attendance || [])];
+  CACHE.attendance = deduplicateAttendance([newRec, ...(CACHE.attendance || [])]);
   saveCachedCollection('attendance', CACHE.attendance);
+
+  if (!isFirestoreQuotaExceeded()) {
+    setDoc(docRef, sanitizeFirestoreObject(record)).catch((err) => {
+      handleFirestoreError(err, OperationType.CREATE, ATTENDANCE_COL);
+    });
+  }
   return docId;
 }
 

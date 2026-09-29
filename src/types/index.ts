@@ -104,6 +104,8 @@ export interface Student {
   id: string; // document id
   studentId: string; // e.g. "STU-001"
   name: string;
+  age?: number; // Student age in years
+  joiningDate?: string; // YYYY-MM-DD joining date
   email: string;
   phone: string;
   parentName: string;
@@ -146,6 +148,8 @@ export interface Student {
 export interface TutorStudentView {
   studentId: string;
   name: string;
+  age?: number;
+  joiningDate?: string;
   status: StudentStatus;
   assignedTutorId: string;
   courseType: CourseType;

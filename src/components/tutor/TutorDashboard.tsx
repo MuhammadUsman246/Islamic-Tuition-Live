@@ -185,16 +185,20 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     }
   });
 
-  // Group unacknowledged classes by student
+  // Group unacknowledged classes by student (1 notification per student regardless of days/week)
   const studentClassMap = new Map<string, TimetableClass[]>();
-  myClasses.filter(c => !acknowledgedClassIds.includes(c.id)).forEach(c => {
-    const list = studentClassMap.get(c.studentId || c.studentName) || [];
-    list.push(c);
-    studentClassMap.set(c.studentId || c.studentName, list);
-  });
+  myClasses
+    .filter(c => !acknowledgedClassIds.includes(c.id) && !acknowledgedClassIds.includes(c.studentId))
+    .forEach(c => {
+      const list = studentClassMap.get(c.studentId || c.studentName) || [];
+      list.push(c);
+      studentClassMap.set(c.studentId || c.studentName, list);
+    });
 
   const groupedNewAssignments = Array.from(studentClassMap.entries()).map(([studentKey, studentClasses]) => {
     const first = studentClasses[0];
+    const studentObj = students.find(s => s.studentId === first.studentId || s.name === first.studentName);
+    
     // Sort days chronologically
     const dayOrder: Record<string, number> = { Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6, Sunday: 7 };
     const sortedDays = Array.from(new Set(studentClasses.map(c => c.dayOfWeek))).sort((a, b) => (dayOrder[a] || 99) - (dayOrder[b] || 99));
@@ -206,14 +210,42 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       daysLabel = 'Weekends';
     }
 
+    const daysCount = sortedDays.length;
+    const scheduleSummary = daysCount === 1 
+      ? `1 day/week (${sortedDays[0]})`
+      : `${daysCount} days/week (${daysLabel})`;
+
     return {
       studentKey,
       studentName: first.studentName,
       studentId: first.studentId,
+      studentAge: studentObj?.age,
       time: first.startTimePKT,
       daysLabel,
-      classIds: studentClasses.map(c => c.id)
+      daysCount,
+      scheduleSummary,
+      classIds: [...studentClasses.map(c => c.id), first.studentId]
     };
+  });
+
+  // Also include newly assigned students without timetable slots yet
+  myAssignedStudents.forEach(st => {
+    if (!studentClassMap.has(st.studentId) && !acknowledgedClassIds.includes(st.studentId)) {
+      const existingInAssignments = groupedNewAssignments.some(g => g.studentId === st.studentId);
+      if (!existingInAssignments) {
+        groupedNewAssignments.push({
+          studentKey: st.studentId,
+          studentName: st.name,
+          studentId: st.studentId,
+          studentAge: st.age,
+          time: 'Schedule Pending',
+          daysLabel: 'Pending Schedule',
+          daysCount: 0,
+          scheduleSummary: 'New Assignment (Schedule Pending)',
+          classIds: [st.studentId]
+        });
+      }
+    }
   });
 
   const handleAcknowledgeStudentGroup = (classIds: string[]) => {
@@ -225,7 +257,10 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   };
 
   const handleAcknowledgeAll = () => {
-    const allIds = myClasses.map(c => c.id);
+    const allIds = [
+      ...myClasses.map(c => c.id),
+      ...myAssignedStudents.map(s => s.studentId)
+    ];
     setAcknowledgedClassIds(allIds);
     try {
       localStorage.setItem(`tutor_ack_classes_${tutor?.tutorId}`, JSON.stringify(allIds));
@@ -352,16 +387,21 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                 className="bg-white/95 backdrop-blur-md p-3.5 rounded-xl border border-[#D5EADF] shadow-lg text-xs flex items-center justify-between gap-3 group hover:border-[#2D8B5C] transition-all"
               >
                 <div className="min-w-0 space-y-1">
-                  <div className="flex items-center space-x-1.5">
+                  <div className="flex items-center space-x-1.5 flex-wrap">
                     <span className="w-2 h-2 rounded-full bg-[#2D8B5C] shrink-0" />
                     <p className="font-extrabold text-[#161F1A] text-[13px] truncate">{ga.studentName}</p>
+                    {ga.studentAge !== undefined && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
+                        Age: {ga.studentAge}
+                      </span>
+                    )}
                   </div>
                   <div className="pl-3.5 space-y-0.5">
                     <p className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
-                      <span>Days:</span> <span className="text-[#1E5C3D]">{ga.daysLabel}</span>
+                      <span>Schedule:</span> <span className="text-[#1E5C3D]">{ga.scheduleSummary || ga.daysLabel}</span>
                     </p>
                     <p className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
-                      <span>Time:</span> <span className="text-[#1E5C3D]">{ga.time} PKT</span>
+                      <span>Time:</span> <span className="text-[#1E5C3D]">{ga.time === 'Schedule Pending' ? 'Schedule Pending' : `${ga.time} PKT`}</span>
                     </p>
                   </div>
                 </div>
@@ -432,7 +472,14 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
               <div key={st.studentId} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
                 <div className="flex items-start justify-between">
                   <div>
-                    <span className="text-xs font-mono font-bold text-[#2D8B5C]">{st.studentId}</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-mono font-bold text-[#2D8B5C]">{st.studentId}</span>
+                      {st.age !== undefined && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
+                          Age: {st.age}
+                        </span>
+                      )}
+                    </div>
                     <h4 className="text-sm font-bold text-[#161F1A]">{st.name}</h4>
                   </div>
                   {st.status === 'Trial' ? (
@@ -453,6 +500,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
 
                 <div className="space-y-1.5 text-xs bg-[#FAF9F7] p-3 rounded-lg border border-[#E3DFD7]">
                   <p><strong>Course:</strong> {st.courseType}</p>
+                  <p><strong>Student Age:</strong> {st.age !== undefined ? `${st.age} years old` : 'Not specified'}</p>
                   <p className="text-[#5A6B61]"><strong>Teaching Timetable:</strong> PKT Operational Schedule</p>
                   {st.status === 'Trial' && (
                     <p className="text-[#8C5D08]">

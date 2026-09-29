@@ -7,7 +7,7 @@ interface MultiDayClassDeleteModalProps {
   onClose: () => void;
   targetClass: TimetableClass | null;
   allClasses?: TimetableClass[];
-  onConfirmDelete: (classIds: string[], summary: string) => Promise<void>;
+  onConfirmDelete: (classIds: string[], summary: string, updateStudentStatus?: 'Not Taking' | 'Inactive' | 'On Leave' | 'keep') => Promise<void>;
 }
 
 export const MultiDayClassDeleteModal: React.FC<MultiDayClassDeleteModalProps> = ({
@@ -35,7 +35,7 @@ interface MultiDayClassDeleteModalContentProps {
   onClose: () => void;
   targetClass: TimetableClass;
   allClasses: TimetableClass[];
-  onConfirmDelete: (classIds: string[], summary: string) => Promise<void>;
+  onConfirmDelete: (classIds: string[], summary: string, updateStudentStatus?: 'Not Taking' | 'Inactive' | 'On Leave' | 'keep') => Promise<void>;
 }
 
 const MultiDayClassDeleteModalContent: React.FC<MultiDayClassDeleteModalContentProps> = ({
@@ -48,6 +48,7 @@ const MultiDayClassDeleteModalContent: React.FC<MultiDayClassDeleteModalContentP
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteScope, setDeleteScope] = useState<'selected' | 'all'>('selected');
+  const [studentStatusAction, setStudentStatusAction] = useState<'keep' | 'Not Taking' | 'Inactive' | 'On Leave'>('Not Taking');
 
   const safeAllClasses = allClasses || [];
 
@@ -112,7 +113,7 @@ const MultiDayClassDeleteModalContent: React.FC<MultiDayClassDeleteModalContentP
         .map(s => s.dayOfWeek)
         .join(', ');
       const summary = `${targetClass.studentName} (${targetClass.tutorId}) on ${dayNames}`;
-      await onConfirmDelete(selectedIds, summary);
+      await onConfirmDelete(selectedIds, summary, studentStatusAction);
       onClose();
     } catch (err) {
       console.error('Failed to delete slots:', err);
@@ -261,6 +262,26 @@ const MultiDayClassDeleteModalContent: React.FC<MultiDayClassDeleteModalContentP
                 );
               })}
             </div>
+          </div>
+
+          {/* Student Status Action on Slot Removal */}
+          <div className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 space-y-2 text-xs">
+            <label className="font-bold text-[#161F1A] block">
+              Student Profile Status Action on Slot Removal:
+            </label>
+            <p className="text-[11px] text-[#5A6B61] leading-relaxed">
+              Choose status to assign to <strong>{targetClass.studentName}</strong> after slot removal. Profile, records & contact details remain 100% saved in database.
+            </p>
+            <select
+              value={studentStatusAction}
+              onChange={(e) => setStudentStatusAction(e.target.value as any)}
+              className="w-full border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 text-xs bg-white font-semibold text-[#161F1A] focus:ring-1 focus:ring-[#2D8B5C]"
+            >
+              <option value="Not Taking">🚫 Mark Student as 'Not Taking' (Stopped taking classes)</option>
+              <option value="Inactive">📁 Mark Student as 'Inactive' (Archived in Inactive tab)</option>
+              <option value="On Leave">🏖️ Mark Student as 'On Leave'</option>
+              <option value="keep">Keep Current Status</option>
+            </select>
           </div>
 
           <p className="text-[11px] text-[#5A6B61]">

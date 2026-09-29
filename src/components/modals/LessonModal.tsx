@@ -95,8 +95,8 @@ export const LessonModal: React.FC<LessonModalProps> = ({
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
       .map(s => ({
         value: s.studentId,
-        label: `${s.name} (${s.studentId})`,
-        subLabel: `${s.courseType || 'Quran'} • Tutor: ${s.assignedTutorId || 'Unassigned'}`,
+        label: `${s.name} (${s.studentId}${s.age !== undefined ? ` • Age: ${s.age}` : ''})`,
+        subLabel: `${s.courseType || 'Quran'}${s.age !== undefined ? ` • ${s.age} yrs` : ''} • Tutor: ${s.assignedTutorId || 'Unassigned'}`,
         badge: s.status === 'Trial' ? 'Trial' : s.status,
         badgeColor:
           s.status === 'Trial'
@@ -745,6 +745,18 @@ export const LessonModal: React.FC<LessonModalProps> = ({
 
     // IF ABSENT: Record absence only
     if (attendanceStatus === 'Absent') {
+      // Prevent marking absent twice for the same student on the same date
+      const latestLessons = loadCachedCollection<Lesson[]>('lessons') || [];
+      const existingAbsent = latestLessons.find(l => 
+        l.studentId === selectedStudentId && 
+        l.date === date && 
+        l.attendanceStatus === 'Absent'
+      );
+      if (existingAbsent) {
+        alert(`Student ${currentStudent?.name || selectedStudentId} (${selectedStudentId}) is already marked absent for ${date}. A student cannot be marked absent twice on the same date.`);
+        return;
+      }
+
       setSaving(true);
       try {
         const absentSummary = absentReason.trim() ? `Absent (${absentReason.trim()})` : 'Absent';

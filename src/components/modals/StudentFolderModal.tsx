@@ -206,6 +206,14 @@ export const StudentFolderModal: React.FC<StudentFolderModalProps> = ({
 
                 {/* Subtitle Metadata */}
                 <div className="flex items-center space-x-2 text-xs text-gray-300 mt-1 flex-wrap">
+                  {student.age !== undefined && (
+                    <>
+                      <span>Age: <strong className="text-white">{student.age} yrs</strong></span>
+                      <span aria-hidden="true">•</span>
+                    </>
+                  )}
+                  <span>Joined: <strong className="text-emerald-300">{student.joiningDate || student.trialStartDate || student.createdAt?.slice(0, 10)}</strong></span>
+                  <span aria-hidden="true">•</span>
                   <span>{student.courseType}</span>
                   <span aria-hidden="true">•</span>
                   <span>Tutor: <strong className="text-white">{assignedTutor?.name || assignedTutor?.realName || student.assignedTutorId || 'Unassigned'}</strong></span>
