@@ -17,10 +17,11 @@ import {
   Search,
   Activity,
   X,
-  UserCheck
+  UserCheck,
+  Unlock
 } from 'lucide-react';
 import { AcademyUserSession, UserRole, UserProfile } from '../../types';
-import { getActiveUserSessions, terminateUserSession, sortAcademySessions } from '../../services/dataService';
+import { getActiveUserSessions, terminateUserSession, sortAcademySessions, clearUserTermination } from '../../services/dataService';
 import { useAuth } from '../../context/AuthContext';
 
 interface AcademySecurityTabProps {
@@ -46,6 +47,10 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
   const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [passwordResetEmail, setPasswordResetEmail] = useState('');
   const [isSendingReset, setIsSendingReset] = useState(false);
+
+  // Unblock/Re-authorize user state
+  const [unblockEmail, setUnblockEmail] = useState('');
+  const [isUnblocking, setIsUnblocking] = useState(false);
 
   // Security Policy Settings state
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number>(120);
@@ -79,7 +84,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
     try {
       await terminateUserSession(sessionToTerminate.id, sessionToTerminate.uid);
       setFeedbackMsg({
-        text: `Active session for ${targetName} was forcefully terminated. The user has been disconnected on that device.`,
+        text: `Active session for ${targetName} was forcefully signed out. The user can log back in with their password at any time.`,
         type: 'success'
       });
       setSessionToTerminate(null);
@@ -91,6 +96,28 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
       });
     } finally {
       setIsTerminating(false);
+      setTimeout(() => setFeedbackMsg(null), 5000);
+    }
+  };
+
+  const handleClearTerminationLocks = async (emailOrUid: string) => {
+    if (!emailOrUid.trim()) return;
+    setIsUnblocking(true);
+    try {
+      await clearUserTermination(emailOrUid.trim());
+      setFeedbackMsg({
+        text: `Session locks successfully cleared for ${emailOrUid}. User can immediately sign in.`,
+        type: 'success'
+      });
+      setUnblockEmail('');
+      await fetchSessions();
+    } catch (err: any) {
+      setFeedbackMsg({
+        text: `Failed to clear locks: ${err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setIsUnblocking(false);
       setTimeout(() => setFeedbackMsg(null), 5000);
     }
   };
@@ -677,7 +704,7 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
                 type="email"
                 value={passwordResetEmail}
                 onChange={(e) => setPasswordResetEmail(e.target.value)}
-                placeholder="e.g. tutor1@islamictuition.us or admin@islamictuition.us"
+                placeholder="e.g. tutor21islamictuition@gmail.com or tutor1@islamictuition.us"
                 className="w-full px-3 py-2 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A] focus:ring-1 focus:ring-[#2D8B5C]"
                 required
               />
@@ -697,6 +724,35 @@ export const AcademySecurityTab: React.FC<AcademySecurityTabProps> = ({
               </button>
             </div>
           </form>
+
+          {/* Quick Clear Locks & Re-Login Tool */}
+          <div className="pt-3 border-t border-[#EDEAE3] space-y-2">
+            <div className="flex items-center space-x-2">
+              <Unlock className="w-3.5 h-3.5 text-emerald-700" />
+              <h4 className="text-xs font-bold text-[#161F1A]">Clear Termination Locks & Allow Immediate Re-Login</h4>
+            </div>
+            <p className="text-[11px] text-[#5A6B61]">
+              If a tutor was terminated or stuck on past session locks, clear all termination flags instantly.
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                type="email"
+                value={unblockEmail}
+                onChange={(e) => setUnblockEmail(e.target.value)}
+                placeholder="e.g. tutor21islamictuition@gmail.com"
+                className="flex-1 px-3 py-1.5 bg-white border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A]"
+              />
+              <button
+                type="button"
+                disabled={isUnblocking || !unblockEmail.trim()}
+                onClick={() => handleClearTerminationLocks(unblockEmail)}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-2xs transition-colors flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+              >
+                <Unlock className="w-3 h-3" />
+                <span>{isUnblocking ? 'Clearing...' : 'Clear Locks'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -190,6 +190,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
+    setTerminationNotice(null);
     setLoading(true);
     try {
       await loginWithEmail(signInEmail.trim(), signInPassword, rememberMe);
@@ -322,12 +323,22 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
 
           <div className="p-4 sm:p-8 space-y-5 sm:space-y-6">
             {terminationNotice && (
-              <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs flex items-start gap-2.5 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="font-bold">Session Forcefully Revoked</p>
-                  <p className="text-[11px] mt-0.5 text-amber-800">{terminationNotice}</p>
+              <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs flex items-start justify-between gap-2.5 animate-in fade-in">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold">Session Signed Out</p>
+                    <p className="text-[11px] mt-0.5 text-amber-800">{terminationNotice}</p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setTerminationNotice(null)}
+                  className="text-amber-700 hover:text-amber-900 p-1 rounded-md"
+                  title="Dismiss notice"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 

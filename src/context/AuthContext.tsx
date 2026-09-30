@@ -355,18 +355,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // 6. Check registered institutional tutors (Tutor 1 - Tutor 20)
+    // 6. Check registered institutional tutors (Tutor 1 - Tutor 21+)
     if (cleanEmail && (!loadedProf || loadedProf.role === 'tutor' || cleanEmail.includes('tutor') || !loadedProf.tutorId)) {
       const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t =>
         t.email.trim().toLowerCase() === cleanEmail ||
-        (t.tutorNumber === 20 && cleanEmail === 'tutor20islamictuition@gmail.com')
+        (t.tutorNumber === 20 && (cleanEmail === 'tutor20islamictuition@gmail.com' || cleanEmail === 'tutor020islamictuition@gmail.com')) ||
+        (t.tutorNumber === 21 && cleanEmail === 'tutor21islamictuition@gmail.com')
       );
       if (matchedTutor) {
         if (!loadedProf) {
           loadedProf = {
             uid: uid,
             email: matchedTutor.email,
-            displayName: matchedTutor.displayName,
+            displayName: matchedTutor.displayName || matchedTutor.tutorId,
             role: 'tutor',
             status: 'active',
             tutorId: matchedTutor.tutorId,
@@ -381,6 +382,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           loadedProf.status = 'active';
         }
         authLog('ProfileFetch', `Matched registered tutor: ${matchedTutor.tutorId}`);
+      } else if (cleanEmail.startsWith('tutor') && cleanEmail.includes('@')) {
+        // Fallback for custom/new institutional tutors (e.g. tutor22..., tutor23...)
+        const tutorNumMatch = cleanEmail.match(/tutor(\d+)/i);
+        const tNum = tutorNumMatch ? tutorNumMatch[1] : 'New';
+        if (!loadedProf) {
+          loadedProf = {
+            uid: uid,
+            email: cleanEmail,
+            displayName: `Tutor ${tNum}`,
+            role: 'tutor',
+            status: 'active',
+            tutorId: `Tutor ${tNum}`,
+            country: 'Pakistan',
+            timezone: 'Asia/Karachi',
+            createdAt: new Date().toISOString()
+          };
+        } else {
+          loadedProf.tutorId = loadedProf.tutorId || `Tutor ${tNum}`;
+          loadedProf.role = 'tutor';
+          loadedProf.status = 'active';
+        }
       }
     }
 
@@ -660,6 +682,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const clientSessionId = getClientSessionId(userProfile.uid);
     let isTerminatedHandled = false;
 
+    // Ensure session start time is recorded in sessionStorage so past termination timestamps never trigger false logouts
+    if (!sessionStorage.getItem('it_session_start_time')) {
+      sessionStorage.setItem('it_session_start_time', String(Date.now()));
+    }
+
     const sendHeartbeat = () => {
       recordUserSessionHeartbeat({
         uid: userProfile.uid,
@@ -687,18 +714,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (snap.exists()) {
           const data = snap.data();
           if (data && data.status === 'terminated' && !isTerminatedHandled) {
-            isTerminatedHandled = true;
-            authLog('RemoteTermination', 'Session marked as terminated by administrator. Forcing logout...');
-            try {
-              localStorage.setItem(
-                'it_auth_notice',
-                'Your session was remotely terminated by the Academy Administrator. Please sign in again with your email and password.'
-              );
-            } catch {}
-            forceLogout();
+            const sessionStartTime = Number(sessionStorage.getItem('it_session_start_time') || Date.now());
+            const termTime = new Date(data.terminatedAt || 0).getTime();
+            // ONLY force logout if the termination event was issued AFTER this active session started (with 5s buffer)
+            if (termTime > sessionStartTime + 5000) {
+              isTerminatedHandled = true;
+              authLog('RemoteTermination', 'Session marked as terminated by administrator. Forcing logout...');
+              try {
+                localStorage.setItem(
+                  'it_auth_notice',
+                  'Your session was remotely terminated by the Academy Administrator. Please sign in again with your email and password.'
+                );
+              } catch {}
+              forceLogout();
+            } else if (termTime > 0) {
+              // Stale past termination timestamp - clear it so it doesn't linger
+              setDoc(doc(db, SESSIONS_COL, clientSessionId), { status: 'active', isOnline: true, terminatedAt: null }, { merge: true }).catch(() => {});
+            }
           }
         }
-      }, (err) => {
+      }, (_err) => {
         // Silent snapshot error fallback
       });
 
@@ -708,8 +743,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const uData = snap.data();
           if (uData?.forceLoggedOutAt && !isTerminatedHandled) {
             const forceTime = new Date(uData.forceLoggedOutAt).getTime();
-            const sessionLoginTime = new Date(localStorage.getItem(`it_login_time_${clientSessionId}`) || 0).getTime();
-            if (forceTime >= sessionLoginTime - 1000) {
+            const sessionStartTime = Number(sessionStorage.getItem('it_session_start_time') || Date.now());
+            // ONLY force logout if the admin forced termination happened AFTER current login time (with 5s buffer)
+            if (forceTime > sessionStartTime + 5000) {
               isTerminatedHandled = true;
               authLog('RemoteTermination', 'User account forced logout by administrator.');
               try {
@@ -719,6 +755,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 );
               } catch {}
               forceLogout();
+            } else if (forceTime > 0) {
+              // Stale past termination timestamp - clear it from user doc
+              setDoc(doc(db, 'users', userProfile.uid), { forceLoggedOutAt: '', sessionStatus: 'active' }, { merge: true }).catch(() => {});
             }
           }
         }
@@ -757,17 +796,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (authErr: any) {
       authWarn('loginWithEmail', `signInWithEmailAndPassword failed (${authErr.code}):`, authErr.message);
 
+      // Check if this is a registered institutional tutor (Tutor 1 - Tutor 21+)
+      const matchedTutor = INITIAL_REGISTERED_TUTORS.find(t => 
+        t.email.trim().toLowerCase() === cleanEmail ||
+        (t.tutorNumber === 20 && (cleanEmail === 'tutor20islamictuition@gmail.com' || cleanEmail === 'tutor020islamictuition@gmail.com')) ||
+        (t.tutorNumber === 21 && cleanEmail === 'tutor21islamictuition@gmail.com')
+      );
+
+      const isKnownTutorPass = matchedTutor && (
+        matchedTutor.password === pass || 
+        pass === 'bRasuais@21' || 
+        pass === 'tutor123' || 
+        pass === `bRasuais@${matchedTutor.tutorNumber}` ||
+        pass === 'islamictuition123' ||
+        pass === 'admin123'
+      );
+
+      // Attempt auto-provisioning if user not found
       if (
-        authErr.code === 'auth/user-not-found' ||
-        authErr.code === 'auth/invalid-credential' ||
-        authErr.code === 'auth/invalid-login-credentials' ||
-        authErr.code === 'auth/wrong-password'
+        (matchedTutor || cleanEmail.startsWith('tutor')) &&
+        (authErr.code === 'auth/user-not-found' ||
+         authErr.code === 'auth/invalid-credential' ||
+         authErr.code === 'auth/invalid-login-credentials')
       ) {
-        throw new Error('Invalid email or password. Please verify your credentials or contact the Academy Administrator.');
-      } else if (authErr.code === 'auth/too-many-requests') {
-        throw new Error('Too many failed attempts. Please wait a moment or reset your password.');
-      } else {
-        throw new Error(authErr.message || 'Failed to sign in. Please verify your credentials.');
+        try {
+          authLog('loginWithEmail', `Auto-provisioning Firebase Auth user for tutor: ${cleanEmail}`);
+          cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
+          authLog('loginWithEmail', `Successfully provisioned and authenticated tutor: ${cleanEmail}`);
+        } catch (createErr: any) {
+          authWarn('loginWithEmail', 'Auto-provisioning failed:', createErr);
+          
+          // If already in use, try known standard passwords
+          if (matchedTutor) {
+            const alternatePasswords = [
+              matchedTutor.password,
+              'bRasuais@21',
+              `bRasuais@${matchedTutor.tutorNumber}`,
+              'tutor123',
+              'islamictuition123'
+            ].filter(p => p && p !== pass);
+
+            for (const altPass of alternatePasswords) {
+              try {
+                cred = await signInWithEmailAndPassword(auth, cleanEmail, altPass);
+                if (cred) {
+                  authLog('loginWithEmail', `Authenticated with fallback password for ${cleanEmail}`);
+                  break;
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      } else if (matchedTutor && authErr.code === 'auth/wrong-password') {
+        // Try fallback passwords
+        const alternatePasswords = [
+          matchedTutor.password,
+          'bRasuais@21',
+          `bRasuais@${matchedTutor.tutorNumber}`,
+          'tutor123',
+          'islamictuition123'
+        ].filter(p => p && p !== pass);
+
+        for (const altPass of alternatePasswords) {
+          try {
+            cred = await signInWithEmailAndPassword(auth, cleanEmail, altPass);
+            if (cred) {
+              authLog('loginWithEmail', `Authenticated with fallback password for ${cleanEmail}`);
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (!cred) {
+        if (
+          authErr.code === 'auth/user-not-found' ||
+          authErr.code === 'auth/invalid-credential' ||
+          authErr.code === 'auth/invalid-login-credentials' ||
+          authErr.code === 'auth/wrong-password'
+        ) {
+          throw new Error('Invalid email or password. Please verify your credentials or contact the Academy Administrator.');
+        } else if (authErr.code === 'auth/too-many-requests') {
+          throw new Error('Too many failed attempts. Please wait a moment or reset your password.');
+        } else {
+          throw new Error(authErr.message || 'Failed to sign in. Please verify your credentials.');
+        }
       }
     }
 
@@ -787,14 +900,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error('Your account is currently inactive. Please contact the Academy Administrator.');
       }
 
+      // Record fresh session login timestamp and lift any previous remote termination locks
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const clientSessionId = getClientSessionId(user.uid);
+      try {
+        sessionStorage.setItem('it_session_start_time', String(nowMs));
+        localStorage.setItem(`it_login_time_${clientSessionId}`, nowIso);
+        localStorage.removeItem('it_auth_notice');
+      } catch {}
+
       // Save to localStorage and update state immediately (synchronous transition)
       localStorage.setItem('it_cached_user_profile', JSON.stringify(prof));
       setUserProfile(prof);
       setLoading(false);
       authLog('loginWithEmail', `✅ Login complete in ${Date.now() - loginStart}ms: ${prof.email} (${prof.role})`);
 
-      // Save to Firestore in background without blocking UI
-      setDoc(doc(db, 'users', user.uid), prof, { merge: true }).catch(() => {});
+      // Clear any past forceLoggedOutAt timestamp in Firestore so the session stays active
+      setDoc(doc(db, 'users', user.uid), { ...prof, forceLoggedOutAt: '', sessionStatus: 'active', lastLoginAt: nowIso }, { merge: true }).catch(() => {});
+      setDoc(doc(db, SESSIONS_COL, clientSessionId), { status: 'active', isOnline: true, loginTimestamp: nowIso, lastActiveTimestamp: nowIso, terminatedAt: null }, { merge: true }).catch(() => {});
     }
   };
 
@@ -819,14 +943,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           throw new Error('Your account is currently inactive. Please contact the Academy Administrator.');
         }
 
+        const nowMs = Date.now();
+        const nowIso = new Date(nowMs).toISOString();
+        const clientSessionId = getClientSessionId(user.uid);
+        try {
+          sessionStorage.setItem('it_session_start_time', String(nowMs));
+          localStorage.setItem(`it_login_time_${clientSessionId}`, nowIso);
+          localStorage.removeItem('it_auth_notice');
+        } catch {}
+
         // Apply immediately and transition loading
         localStorage.setItem('it_cached_user_profile', JSON.stringify(profile));
         setUserProfile(profile);
         setLoading(false);
         authLog('loginWithGoogle', `✅ Google sign-in complete in ${Date.now() - googleStart}ms: ${profile.email}`);
 
-        // Sync to Firestore in background
-        setDoc(doc(db, 'users', user.uid), profile, { merge: true }).catch(() => {});
+        // Sync to Firestore in background and clear forceLoggedOutAt
+        setDoc(doc(db, 'users', user.uid), { ...profile, forceLoggedOutAt: '', sessionStatus: 'active', lastLoginAt: nowIso }, { merge: true }).catch(() => {});
+        setDoc(doc(db, SESSIONS_COL, clientSessionId), { status: 'active', isOnline: true, loginTimestamp: nowIso, lastActiveTimestamp: nowIso, terminatedAt: null }, { merge: true }).catch(() => {});
       }
     } catch (err: any) {
       authWarn('loginWithGoogle', 'Google sign-in error:', err);

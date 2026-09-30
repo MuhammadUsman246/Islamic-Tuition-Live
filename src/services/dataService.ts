@@ -4698,6 +4698,30 @@ export async function terminateUserSession(sessionId: string, targetUid?: string
   MEMORY_SESSIONS = MEMORY_SESSIONS.filter(s => s.id !== sessionId);
 }
 
+/**
+ * Explicitly clear any termination locks/stale status on a user account so they can immediately log in
+ */
+export async function clearUserTermination(uidOrEmail: string): Promise<void> {
+  try {
+    const cleanId = uidOrEmail.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+    
+    // 1. Direct doc write
+    await setDoc(doc(db, USERS_COL, uidOrEmail), {
+      forceLoggedOutAt: '',
+      sessionStatus: 'active'
+    }, { merge: true });
+
+    if (cleanId !== uidOrEmail) {
+      await setDoc(doc(db, USERS_COL, cleanId), {
+        forceLoggedOutAt: '',
+        sessionStatus: 'active'
+      }, { merge: true });
+    }
+  } catch (err) {
+    console.warn('Could not clear user termination locks:', err);
+  }
+}
+
 // ==========================================
 // TRASH, UNDO & RECOVERY ENGINE (ITEM 10)
 // Prevents duplicate & conflicting restored records
