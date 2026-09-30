@@ -96,6 +96,7 @@ import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGene
 import { exportLessonsToCSV, exportFeesToCSV, exportFullAcademyBackupJSON } from '../../utils/csvExporter';
 import { getCurrencySymbol, formatFeeAmount, ALLOWED_CURRENCIES } from '../../utils/currency';
 import { getTimezoneShortCode, getCurrentTeachingDay, convertPKTToStudentTime } from '../../utils/timezone';
+import { calculateStudentTrialProgress } from '../../utils/trialCalculator';
 import {
   addClass,
   updateClass,
@@ -194,7 +195,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const openStudent360 = (studentOrId: Student | string) => {
     if (typeof studentOrId === 'string') {
-      const found = students.find(s => s.studentId === studentOrId || s.id === studentOrId || s.name === studentOrId);
+      const q = studentOrId.trim().toLowerCase();
+      const found = students.find(s => 
+        s.studentId.toLowerCase().trim() === q || 
+        s.id.toLowerCase().trim() === q || 
+        s.name.toLowerCase().trim() === q ||
+        s.studentId.replace(/[^a-z0-9]/g, '').toLowerCase() === q.replace(/[^a-z0-9]/g, '')
+      );
       if (found) {
         setDossierStudent(found);
         setIsDossierOpen(true);
@@ -3077,11 +3084,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </td>
                           <td className="py-3 px-4">
                             <div className="space-y-1">
-                              {st.status === 'Trial' ? (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FFF9ED] text-[#8C5D08] border border-[#E8A93E]/40 flex items-center w-max gap-1">
-                                  <Sparkles className="w-3 h-3" /> Trial ({st.trialSessionsCompleted || 0}/5)
-                                </span>
-                              ) : (
+                              {st.status === 'Trial' ? (() => {
+                                const trialInfo = calculateStudentTrialProgress(st, classes, lessons, attendance);
+                                return (
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center w-max gap-1 ${trialInfo.stageBadgeColor}`}>
+                                    <Sparkles className="w-3 h-3" /> {trialInfo.stageLabel} ({trialInfo.daysCompleted}/5)
+                                  </span>
+                                );
+                              })() : (
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                                   st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
                                 }`}>
@@ -3837,48 +3847,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               ) : (
                 trialStudents.map((st) => {
-                  const completed = st.trialSessionsCompleted || 0;
-                  const isFinished = completed >= 5;
-                  const percentage = Math.min((completed / 5) * 100, 100);
-                  const currentTrialStage = st.trialStatus || (completed <= 1 ? 'Day 1' : 'Follow-up');
+                  const trialInfo = calculateStudentTrialProgress(st, classes, lessons, attendance);
+                  const completed = trialInfo.daysCompleted;
+                  const isFinished = trialInfo.isFinished;
+                  const percentage = trialInfo.percentage;
+                  const currentTrialStage = st.trialStatus || trialInfo.stageLabel;
 
                   return (
                     <div key={st.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-4 hover:border-[#2D8B5C]/30 transition-all">
                       {/* Top Header & Stage Indicator */}
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs font-mono font-bold text-[#5A6B61]">{st.studentId}</span>
-                            {/* Primary Stage Indicator: Day 1 or Follow-up */}
-                            {currentTrialStage === 'Day 1' ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
-                                Day 1 (Initial Class)
-                              </span>
-                            ) : currentTrialStage === 'Follow-up' ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 inline-flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-purple-600" />
-                                Follow-up Stage
-                              </span>
-                            ) : currentTrialStage === 'Interested' ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                Interested
-                              </span>
-                            ) : currentTrialStage === 'Pending Call' ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                Pending Call
-                              </span>
-                            ) : isFinished ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FFF9ED] text-[#8C5D08] border border-[#E8A93E]">
-                                Decision Pending
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-800">
-                                In Progress
-                              </span>
-                            )}
+                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                            <button
+                              onClick={() => openStudent360(st)}
+                              className="text-xs font-mono font-bold text-[#2D8B5C] hover:underline cursor-pointer"
+                              title="Click to view full 360° Student File"
+                            >
+                              {st.studentId}
+                            </button>
+                            {/* Auto-Calculated Trial Stage Indicator */}
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${trialInfo.stageBadgeColor}`}>
+                              <Sparkles className="w-3 h-3" />
+                              {trialInfo.stageLabel}
+                            </span>
                           </div>
-                          <h4 className="text-sm font-bold text-[#161F1A] mt-1">{st.name}</h4>
+                          <button
+                            onClick={() => openStudent360(st)}
+                            className="text-sm font-bold text-[#161F1A] hover:text-[#2D8B5C] text-left block mt-1 cursor-pointer"
+                          >
+                            {st.name}
+                          </button>
                           <p className="text-xs text-[#5A6B61]">
                             Parent: <strong>{st.parentName || 'N/A'}</strong> • {st.parentPhone || st.parentEmail || 'No phone'}
                           </p>
@@ -3902,8 +3901,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {/* Progress Bar */}
                       <div className="space-y-1.5 bg-[#FAF9F7] p-3 rounded-lg border border-[#EAE6DE]">
                         <div className="flex items-center justify-between text-xs font-semibold">
-                          <span className="text-[#5A6B61]">Trial Sessions Completed:</span>
-                          <span className="text-[#161F1A] font-mono">{completed} / 5 Sessions</span>
+                          <span className="text-[#5A6B61]">Auto Trial Schedule Progress:</span>
+                          <span className="text-[#161F1A] font-mono font-bold">{completed} / 5 Days Completed ({percentage}%)</span>
                         </div>
                         <div className="w-full h-2.5 bg-[#EAE6DE] rounded-full overflow-hidden">
                           <div

@@ -35,7 +35,7 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
   lessons,
   onOpenLogLesson
 }) => {
-  const [timeFilter, setTimeFilter] = useState<'30' | '14' | '60' | 'all'>('30');
+  const [timeFilter, setTimeFilter] = useState<'30' | '14' | '60' | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedLessonForDetail, setSelectedLessonForDetail] = useState<Lesson | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -43,6 +43,20 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
   // Filter lessons for this specific student within selected time range
   const studentLessons = useMemo(() => {
     if (!student) return [];
+
+    const isMatchStudent = (l: Lesson) => {
+      if (!l) return false;
+      const sId = student.studentId?.trim().toLowerCase();
+      const dId = student.id?.trim().toLowerCase();
+      const lId = l.studentId?.trim().toLowerCase();
+      const sName = student.name?.trim().toLowerCase();
+      const lName = l.studentName?.trim().toLowerCase();
+
+      if (lId && sId && (lId === sId || lId.replace(/[^a-z0-9]/g, '') === sId.replace(/[^a-z0-9]/g, ''))) return true;
+      if (lId && dId && (lId === dId || lId.replace(/[^a-z0-9]/g, '') === dId.replace(/[^a-z0-9]/g, ''))) return true;
+      if (lName && sName && lName === sName) return true;
+      return false;
+    };
 
     const now = new Date();
     let cutoffDate: Date | null = null;
@@ -56,17 +70,17 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
     }
 
     return lessons
-      .filter(l => l.studentId === student.studentId)
+      .filter(isMatchStudent)
       .filter(l => {
-        if (!cutoffDate) return true;
+        if (!cutoffDate || !l.date) return true;
         const lessonDate = new Date(l.date);
-        return lessonDate >= cutoffDate;
+        return isNaN(lessonDate.getTime()) || lessonDate >= cutoffDate;
       })
       .filter(l => {
         if (!searchTerm.trim()) return true;
         const term = searchTerm.toLowerCase();
         return (
-          l.date.toLowerCase().includes(term) ||
+          l.date?.toLowerCase().includes(term) ||
           l.lessonCovered?.toLowerCase().includes(term) ||
           l.quranDetails?.surahName?.toLowerCase().includes(term) ||
           l.qaidaDetails?.lessonName?.toLowerCase().includes(term) ||
@@ -74,7 +88,7 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
           l.adaabManners?.toLowerCase().includes(term)
         );
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
   }, [student, lessons, timeFilter, searchTerm]);
 
   // Statistics calculation for the last 30 days

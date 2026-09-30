@@ -171,10 +171,23 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   const assignedTutor = student ? tutors.find(t => t.tutorId === student.assignedTutorId) || null : null;
 
+  const isMatchCurrentStudent = (targetIdOrName?: string) => {
+    if (!targetIdOrName || !student) return false;
+    const t = targetIdOrName.trim().toLowerCase();
+    const sId = student.studentId?.trim().toLowerCase();
+    const dId = student.id?.trim().toLowerCase();
+    const sName = student.name?.trim().toLowerCase();
+    
+    if (sId && (t === sId || t.replace(/[^a-z0-9]/g, '') === sId.replace(/[^a-z0-9]/g, ''))) return true;
+    if (dId && (t === dId || t.replace(/[^a-z0-9]/g, '') === dId.replace(/[^a-z0-9]/g, ''))) return true;
+    if (sName && t === sName) return true;
+    return false;
+  };
+
   // Filter student's own data strictly
-  const myClasses = student ? classes.filter(c => c.studentId === student.studentId) : [];
-  const myLessons = student ? lessons.filter(l => l.studentId === student.studentId) : [];
-  const myAttendance = student ? attendance.filter(a => a.studentId === student.studentId) : [];
+  const myClasses = student ? classes.filter(c => isMatchCurrentStudent(c.studentId) || isMatchCurrentStudent(c.studentName)) : [];
+  const myLessons = student ? lessons.filter(l => isMatchCurrentStudent(l.studentId) || isMatchCurrentStudent(l.studentName)) : [];
+  const myAttendance = student ? attendance.filter(a => isMatchCurrentStudent(a.studentId) || isMatchCurrentStudent(a.studentName)) : [];
 
   const lessonsByMonth = useMemo(() => {
     const grouped: { [key: string]: Lesson[] } = {};

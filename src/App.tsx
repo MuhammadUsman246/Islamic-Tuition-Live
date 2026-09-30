@@ -587,8 +587,13 @@ const MainPortal: React.FC = () => {
           subtitle="Real-Time Persistent Quran Academy Management System"
           tutors={tutors}
           students={students}
+          announcements={announcements}
+          fees={fees}
+          classes={classes}
+          lessons={lessons}
           isSidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
+          onNavigateTab={(tab) => setCurrentTab(tab)}
         />
 
         <main className="flex-1 pb-20 lg:pb-8 px-4 sm:px-8 lg:px-12 py-4 sm:py-6 overflow-x-hidden">
@@ -692,13 +697,13 @@ const MainPortal: React.FC = () => {
           </div>
         </main>
 
-        {/* Mobile Sticky Bottom Navigation Bar */}
+        {/* Mobile Sticky Bottom Navigation Bar (iOS / Android PWA Safe) */}
         <nav
           id="mobile_bottom_nav_bar"
           aria-label="Mobile Navigation"
-          className="fixed bottom-0 inset-x-0 bg-[#1B2E24] border-t border-[#263e32] text-white z-30 lg:hidden shadow-lg"
+          className="fixed bottom-0 inset-x-0 bg-[#12241A]/95 backdrop-blur-md border-t border-[#263e32] text-white z-30 lg:hidden shadow-2xl pb-[env(safe-area-inset-bottom,0px)]"
         >
-          <div className="flex items-center justify-around h-14 px-1">
+          <div className="flex items-center justify-around h-15 px-1 max-w-md mx-auto">
             {bottomNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentTab === item.id;
@@ -708,20 +713,22 @@ const MainPortal: React.FC = () => {
                   key={item.id}
                   id={`bottom_nav_${item.id}`}
                   onClick={() => setCurrentTab(item.id)}
-                  className={`relative flex flex-col items-center justify-center flex-1 h-full text-center transition-colors cursor-pointer py-1 ${
-                    isActive ? 'text-[#6de0a2]' : 'text-[#8ba295] hover:text-white'
+                  className={`relative flex flex-col items-center justify-center flex-1 h-full text-center transition-all cursor-pointer py-1 select-none active:scale-95 ${
+                    isActive ? 'text-[#58D68D]' : 'text-[#8ba295] hover:text-white'
                   }`}
                 >
-                  <div className="relative">
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-[#6de0a2]' : 'text-[#8ba295]'}`} />
+                  <div className={`relative p-1 rounded-xl transition-all ${isActive ? 'bg-white/10' : ''}`}>
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-[#58D68D]' : 'text-[#8ba295]'}`} />
                     {isMessages && unreadMessagesTotal > 0 && (
-                      <span className="absolute -top-1.5 -right-2 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-[#25D366] text-white shadow-xs">
+                      <span className="absolute -top-1 -right-1.5 px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-[#25D366] text-white shadow-xs border border-[#12241A]">
                         {unreadMessagesTotal}
                       </span>
                     )}
                   </div>
-                  <span className="text-[10px] font-medium truncate max-w-[58px] mt-0.5">{item.label}</span>
-                  {isActive && <span className="w-1 h-1 bg-[#6de0a2] rounded-full mt-0.5"></span>}
+                  <span className={`text-[10px] truncate max-w-[58px] mt-0.5 tracking-tight ${isActive ? 'font-bold text-white' : 'font-medium'}`}>
+                    {item.label}
+                  </span>
+                  {isActive && <span className="w-1.5 h-1 bg-[#58D68D] rounded-full mt-0.5 shadow-xs"></span>}
                 </button>
               );
             })}
@@ -730,9 +737,11 @@ const MainPortal: React.FC = () => {
               type="button"
               id="bottom_nav_more_menu"
               onClick={() => setIsSidebarOpen(true)}
-              className="flex flex-col items-center justify-center flex-1 h-full text-center text-[#8ba295] hover:text-white transition-colors cursor-pointer py-1"
+              className="flex flex-col items-center justify-center flex-1 h-full text-center text-[#8ba295] hover:text-white transition-all cursor-pointer py-1 select-none active:scale-95"
             >
-              <Menu className="w-4 h-4 text-[#E8A93E]" />
+              <div className="p-1">
+                <Menu className="w-4 h-4 text-[#E8A93E]" />
+              </div>
               <span className="text-[10px] font-medium truncate max-w-[58px] mt-0.5">Menu</span>
             </button>
           </div>

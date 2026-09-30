@@ -1,16 +1,22 @@
-import React from 'react';
-import { LogOut, Eye, Menu, PanelLeftClose } from 'lucide-react';
+import React, { useState } from 'react';
+import { LogOut, Eye, Menu, PanelLeftClose, Bell } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { Tutor, Student } from '../../types';
+import { Tutor, Student, Announcement, StudentFee, TimetableClass, Lesson } from '../../types';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
+import { NotificationCenterModal } from '../common/NotificationCenterModal';
 
 interface HeaderProps {
   title: string;
   subtitle?: string;
   tutors?: Tutor[];
   students?: Student[];
+  announcements?: Announcement[];
+  fees?: StudentFee[];
+  classes?: TimetableClass[];
+  lessons?: Lesson[];
   isSidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  onNavigateTab?: (tab: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,8 +24,13 @@ export const Header: React.FC<HeaderProps> = ({
   subtitle,
   tutors = [],
   students = [],
+  announcements = [],
+  fees = [],
+  classes = [],
+  lessons = [],
   isSidebarOpen = true,
-  onToggleSidebar
+  onToggleSidebar,
+  onNavigateTab
 }) => {
   const {
     userProfile,
@@ -30,6 +41,8 @@ export const Header: React.FC<HeaderProps> = ({
     setAdminViewingRole,
     logout
   } = useAuth();
+
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
 
   const handlePersonaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -251,6 +264,32 @@ export const Header: React.FC<HeaderProps> = ({
           );
         })()}
 
+        {/* Notification Bell Center */}
+        {(() => {
+          const pendingFeesCount = (activeRole === 'student' || activeRole === 'parent')
+            ? fees.filter(f => f.status === 'Pending' || f.status === 'Overdue').length
+            : 0;
+          const alertsTotal = announcements.length + pendingFeesCount;
+
+          return (
+            <button
+              type="button"
+              id="header_notification_bell_button"
+              onClick={() => setIsNotificationCenterOpen(true)}
+              className="relative min-h-[36px] min-w-[36px] p-2 rounded-lg text-[#5A6B61] hover:text-[#161F1A] hover:bg-[#FAF9F7] border border-[#D5D0C6] transition-colors cursor-pointer flex items-center justify-center shadow-2xs"
+              title="Open Notification Center & Announcements"
+              aria-label="Open Notifications"
+            >
+              <Bell className="w-4 h-4 text-[#2D8B5C]" />
+              {alertsTotal > 0 && (
+                <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-[#E8A93E] text-white shadow-xs border border-white animate-pulse">
+                  {alertsTotal}
+                </span>
+              )}
+            </button>
+          );
+        })()}
+
         {/* User Identity Chip */}
         <div className="flex items-center space-x-1.5 sm:space-x-2 pl-1 border-l border-gray-200">
           <div
@@ -289,6 +328,17 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={() => setIsNotificationCenterOpen(false)}
+        announcements={announcements}
+        fees={fees}
+        classes={classes}
+        lessons={lessons}
+        onNavigateTab={onNavigateTab}
+      />
     </header>
   );
 };

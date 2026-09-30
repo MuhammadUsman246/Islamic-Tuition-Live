@@ -2250,15 +2250,14 @@ export function deduplicateLessons(lessons: Lesson[]): Lesson[] {
   if (!lessons || lessons.length === 0) return [];
   const seenMap = new Map<string, Lesson>();
   for (const lesson of lessons) {
-    if (!lesson || !lesson.studentId || !lesson.date) continue;
-    const key = `${lesson.studentId}_${lesson.date}`;
-    const existing = seenMap.get(key);
-    if (!existing) {
+    if (!lesson) continue;
+    // Deduplicate strictly by unique lesson ID (or fallback timestamp) so EVERY lesson report for every day is preserved
+    const key = lesson.id || `${lesson.studentId}_${lesson.date}_${lesson.createdAt || Math.random()}`;
+    if (!seenMap.has(key)) {
       seenMap.set(key, lesson);
     } else {
-      if (existing.attendanceStatus === 'Absent' && lesson.attendanceStatus !== 'Absent') {
-        seenMap.set(key, lesson);
-      } else if (lesson.createdAt && existing.createdAt && new Date(lesson.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+      const existing = seenMap.get(key)!;
+      if (lesson.updatedAt && existing.updatedAt && new Date(lesson.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
         seenMap.set(key, lesson);
       }
     }
@@ -2274,15 +2273,10 @@ export function deduplicateAttendance(records: AttendanceRecord[]): AttendanceRe
   if (!records || records.length === 0) return [];
   const seenMap = new Map<string, AttendanceRecord>();
   for (const rec of records) {
-    if (!rec || !rec.studentId || !rec.date) continue;
-    const key = `${rec.studentId}_${rec.date}`;
-    const existing = seenMap.get(key);
-    if (!existing) {
+    if (!rec) continue;
+    const key = rec.id || `${rec.studentId}_${rec.date}_${rec.markedAt || Math.random()}`;
+    if (!seenMap.has(key)) {
       seenMap.set(key, rec);
-    } else {
-      if (rec.markedAt && existing.markedAt && new Date(rec.markedAt).getTime() > new Date(existing.markedAt).getTime()) {
-        seenMap.set(key, rec);
-      }
     }
   }
   return Array.from(seenMap.values()).sort(
@@ -2297,8 +2291,8 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
     return () => {};
   }
   const q = filterTutorId
-    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(25))
-    : query(collection(db, LESSONS_COL), limit(35));
+    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(1500))
+    : query(collection(db, LESSONS_COL), limit(2500));
 
   return safeOnSnapshot(
     q,
@@ -2336,7 +2330,7 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
-      const snap = await getDocs(query(collection(db, LESSONS_COL), limit(150)));
+      const snap = await getDocs(query(collection(db, LESSONS_COL), limit(2500)));
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
         const cleaned = cleanExpiredScreenshots(items);
@@ -2362,35 +2356,6 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
 }
 
 export async function addLesson(lessonData: Omit<Lesson, 'id'>): Promise<string> {
-  const existingLessons = CACHE.lessons || (await getLessons());
-  // Prevent duplicate absent or lesson entries for the same student on the same date
-  const duplicate = existingLessons.find(l => 
-    l.studentId === lessonData.studentId && 
-    l.date === lessonData.date
-  );
-
-  if (duplicate) {
-    await updateLesson(duplicate.id, lessonData);
-    if (lessonData.attendanceStatus) {
-      await addAttendanceRecord({
-        classId: 'lesson_session',
-        studentId: lessonData.studentId,
-        studentName: lessonData.studentName,
-        tutorId: lessonData.tutorId,
-        date: lessonData.date,
-        status: lessonData.attendanceStatus === 'Absent' ? 'Absent' : lessonData.attendanceStatus === 'Late' ? 'Late' : 'Present',
-        markedBy: lessonData.tutorId,
-        markedAt: new Date().toISOString(),
-        notes: lessonData.attendanceStatus === 'Late' && lessonData.lateMinutes
-          ? `Late by ${lessonData.lateMinutes} mins`
-          : lessonData.attendanceStatus === 'Absent' && lessonData.absentReason
-          ? `Absent: ${lessonData.absentReason}`
-          : undefined
-      });
-    }
-    return duplicate.id;
-  }
-
   const docRef = doc(collection(db, LESSONS_COL));
   const docId = docRef.id;
   const newLesson: Lesson = { id: docId, ...lessonData };

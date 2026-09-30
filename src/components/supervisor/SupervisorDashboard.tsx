@@ -87,9 +87,24 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     }
   });
 
+  // Re-sync acknowledged IDs when component mounts
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem('supervisor_ack_classes');
+      if (stored) {
+        setSupervisorAcknowledgedClassIds(JSON.parse(stored));
+      }
+    } catch (_) {}
+  }, []);
+
   // Group unacknowledged classes by student & tutor for supervisor
   const supervisorStudentMap = new Map<string, TimetableClass[]>();
-  classes.filter(c => !supervisorAcknowledgedClassIds.includes(c.id)).forEach(c => {
+  classes.filter(c => 
+    !supervisorAcknowledgedClassIds.includes(c.id) && 
+    !supervisorAcknowledgedClassIds.includes(c.studentId) &&
+    !supervisorAcknowledgedClassIds.includes(c.studentName) &&
+    !supervisorAcknowledgedClassIds.includes(`${c.studentId || c.studentName}_${c.tutorId}`)
+  ).forEach(c => {
     const key = `${c.studentId || c.studentName}_${c.tutorId}`;
     const list = supervisorStudentMap.get(key) || [];
     list.push(c);
@@ -117,7 +132,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       tutorName: assignedTutor?.name || first.tutorId,
       time: first.startTimePKT,
       daysLabel,
-      classIds: studentClasses.map(c => c.id)
+      classIds: [...studentClasses.map(c => c.id), first.studentId, first.studentName, key]
     };
   });
 
@@ -130,10 +145,16 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   };
 
   const handleSupervisorAcknowledgeAll = () => {
-    const allIds = classes.map(c => c.id);
-    setSupervisorAcknowledgedClassIds(allIds);
+    const allIds = [
+      ...classes.map(c => c.id),
+      ...classes.map(c => c.studentId),
+      ...classes.map(c => c.studentName),
+      ...Array.from(supervisorStudentMap.keys())
+    ];
+    const updated = Array.from(new Set([...supervisorAcknowledgedClassIds, ...allIds]));
+    setSupervisorAcknowledgedClassIds(updated);
     try {
-      localStorage.setItem('supervisor_ack_classes', JSON.stringify(allIds));
+      localStorage.setItem('supervisor_ack_classes', JSON.stringify(updated));
     } catch {}
   };
 

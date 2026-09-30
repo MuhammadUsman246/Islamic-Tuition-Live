@@ -176,7 +176,18 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   }, [myLessons, selectedStudentFilter, reportTimeMode, tutorStartDate, tutorEndDate]);
 
   // New Class Notifications tracking for Tutor (Item 8)
-  const [acknowledgedClassIds, setAcknowledgedClassIds] = useState<string[]>([]);
+  const [acknowledgedClassIds, setAcknowledgedClassIds] = useState<string[]>(() => {
+    try {
+      const activeTutorId = tutor?.tutorId || currentTutorId;
+      const storedSpecific = activeTutorId ? localStorage.getItem(`tutor_ack_classes_${activeTutorId}`) : null;
+      const storedGeneral = localStorage.getItem('tutor_ack_classes_all');
+      const specList = storedSpecific ? JSON.parse(storedSpecific) : [];
+      const genList = storedGeneral ? JSON.parse(storedGeneral) : [];
+      return Array.from(new Set([...specList, ...genList]));
+    } catch {
+      return [];
+    }
+  });
 
   // Sync acknowledged notifications from localStorage when tutor is resolved
   React.useEffect(() => {
@@ -194,7 +205,12 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   // Group unacknowledged classes by student (1 notification per student regardless of days/week)
   const studentClassMap = new Map<string, TimetableClass[]>();
   myClasses
-    .filter(c => !acknowledgedClassIds.includes(c.id) && !acknowledgedClassIds.includes(c.studentId))
+    .filter(c => 
+      !acknowledgedClassIds.includes(c.id) && 
+      !acknowledgedClassIds.includes(c.studentId) &&
+      !acknowledgedClassIds.includes(c.studentName) &&
+      !acknowledgedClassIds.includes(`${c.studentId || c.studentName}_${c.dayOfWeek}_${c.startTimePKT}`)
+    )
     .forEach(c => {
       const list = studentClassMap.get(c.studentId || c.studentName) || [];
       list.push(c);
@@ -230,14 +246,25 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       daysLabel,
       daysCount,
       scheduleSummary,
-      classIds: [...studentClasses.map(c => c.id), first.studentId]
+      classIds: [
+        ...studentClasses.map(c => c.id), 
+        first.studentId, 
+        first.studentName,
+        studentKey,
+        ...studentClasses.map(c => `${c.studentId || c.studentName}_${c.dayOfWeek}_${c.startTimePKT}`)
+      ]
     };
   });
 
   // Also include newly assigned students without timetable slots yet
   myAssignedStudents.forEach(st => {
-    if (!studentClassMap.has(st.studentId) && !acknowledgedClassIds.includes(st.studentId)) {
-      const existingInAssignments = groupedNewAssignments.some(g => g.studentId === st.studentId);
+    if (
+      !studentClassMap.has(st.studentId) && 
+      !studentClassMap.has(st.name) &&
+      !acknowledgedClassIds.includes(st.studentId) &&
+      !acknowledgedClassIds.includes(st.name)
+    ) {
+      const existingInAssignments = groupedNewAssignments.some(g => g.studentId === st.studentId || g.studentName === st.name);
       if (!existingInAssignments) {
         groupedNewAssignments.push({
           studentKey: st.studentId,
@@ -248,7 +275,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
           daysLabel: 'Pending Schedule',
           daysCount: 0,
           scheduleSummary: 'New Assignment (Schedule Pending)',
-          classIds: [st.studentId]
+          classIds: [st.studentId, st.name]
         });
       }
     }
