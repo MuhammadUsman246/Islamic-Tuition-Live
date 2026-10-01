@@ -65,6 +65,7 @@ import {
   SummaryMetrics
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
+import { TutorSlotAvailabilityInspector } from '../common/TutorSlotAvailabilityInspector';
 import { LessonModal } from '../modals/LessonModal';
 import { ClassModal } from '../modals/ClassModal';
 import { StudentModal } from '../modals/StudentModal';
@@ -238,6 +239,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Filters
   const [tutorFilter, setTutorFilter] = useState<string>('all');
+  const [timetableSubView, setTimetableSubView] = useState<'grid' | 'availability'>('grid');
 
   // Naturally sorted tutors (Tutor 1, Tutor 2, Tutor 3, ..., Tutor 10)
   const sortedTutors = useMemo(() => {
@@ -2526,21 +2528,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-bold text-[#161F1A]">
-                Academy Master Timetable
+                Academy Master Timetable &amp; Schedule
               </h3>
               <p className="text-xs text-[#5A6B61]">
                 Authoritative schedule calibrated in Asia/Karachi (PKT). Double-booking conflicts are automatically blocked.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2.5">
-              <span className="inline-flex items-center px-2.5 py-1.5 border border-[#EDEAE3] bg-[#FAF9F7] text-xs font-semibold text-[#5A6B61] rounded-lg">
-                👥 All Tutors Combined
-              </span>
+              {/* Sub-view switcher tabs */}
+              <div className="bg-[#FAF9F7] p-1 border border-[#D5D0C6] rounded-xl flex items-center gap-1 shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setTimetableSubView('grid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    timetableSubView === 'grid'
+                      ? 'bg-[#2D8B5C] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Master Grid</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimetableSubView('availability')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    timetableSubView === 'availability'
+                      ? 'bg-[#1B365D] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>24/7 Slot Availability</span>
+                </button>
+              </div>
 
               <button
                 id="add_class_button"
                 onClick={() => {
                   setSelectedClass(null);
+                  setSelectedSlot(undefined);
                   setIsClassModalOpen(true);
                 }}
                 className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
@@ -2551,62 +2578,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Individual Tutor Snapshot when a specific tutor is selected */}
-          {tutorFilter !== 'all' && (() => {
-            const indTutor = tutors.find(t => t.tutorId === tutorFilter);
-            const indClasses = classes.filter(c => c.tutorId === tutorFilter);
-            const indStudents = students.filter(s => s.assignedTutorId === tutorFilter);
-            return (
-              <div className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center space-x-3">
-                  <div className="w-9 h-9 rounded-lg bg-[#2D8B5C]/10 text-[#2D8B5C] flex items-center justify-center font-bold">
-                    <Users className="w-4 h-4" />
+          {/* Availability Inspector Sub-view */}
+          {timetableSubView === 'availability' ? (
+            <TutorSlotAvailabilityInspector
+              tutors={tutors}
+              students={students}
+              classes={classes}
+              onAddClass={(tutorId, day, slot) => {
+                setSelectedSlot({ day, time: slot });
+                setSelectedClass(null);
+                setTutorFilter(tutorId);
+                setIsClassModalOpen(true);
+              }}
+              onSelectTutor={(tutor) => {
+                setSelectedTutor(tutor);
+                setIsTutorModalOpen(true);
+              }}
+              onSelectStudent={(student) => {
+                openStudent360(student);
+              }}
+            />
+          ) : (
+            <>
+              {/* Individual Tutor Snapshot when a specific tutor is selected */}
+              {tutorFilter !== 'all' && (() => {
+                const indTutor = tutors.find(t => t.tutorId === tutorFilter);
+                const indClasses = classes.filter(c => c.tutorId === tutorFilter);
+                const indStudents = students.filter(s => s.assignedTutorId === tutorFilter);
+                return (
+                  <div className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-9 h-9 rounded-lg bg-[#2D8B5C]/10 text-[#2D8B5C] flex items-center justify-center font-bold">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-[#161F1A] text-sm">{indTutor?.realName} ({indTutor?.tutorId})</h4>
+                        <p className="text-[#5A6B61] text-[11px]">{indTutor?.email} • {indTutor?.phone}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      <span className="text-[#5A6B61]">Assigned Students: <strong className="text-[#161F1A]">{indStudents.length}</strong></span>
+                      <span className="text-[#5A6B61]">Weekly Classes: <strong className="text-[#2D8B5C]">{indClasses.length}</strong></span>
+                      <a
+                        href={indTutor?.zoomLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 bg-[#FAF9F7] border border-[#D5D0C6] rounded-md text-[#2D8B5C] font-mono hover:bg-emerald-50"
+                      >
+                        Zoom Classroom ↗
+                      </a>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="font-bold text-[#161F1A] text-sm">{indTutor?.realName} ({indTutor?.tutorId})</h4>
-                    <p className="text-[#5A6B61] text-[11px]">{indTutor?.email} • {indTutor?.phone}</p>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-4">
-                  <span className="text-[#5A6B61]">Assigned Students: <strong className="text-[#161F1A]">{indStudents.length}</strong></span>
-                  <span className="text-[#5A6B61]">Weekly Classes: <strong className="text-[#2D8B5C]">{indClasses.length}</strong></span>
-                  <a
-                    href={indTutor?.zoomLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1 bg-[#FAF9F7] border border-[#D5D0C6] rounded-md text-[#2D8B5C] font-mono hover:bg-emerald-50"
-                  >
-                    Zoom Classroom ↗
-                  </a>
-                </div>
-              </div>
-            );
-          })()}
+                );
+              })()}
 
-          <TimetableGrid
-            key={tutorFilter}
-            classes={filteredClasses}
-            role="admin"
-            currentTutorId={tutorFilter === 'all' ? undefined : tutorFilter}
-            onTutorFilterChange={setTutorFilter}
-            students={students}
-            tutors={tutors}
-            onAddClass={(slot) => {
-              setSelectedSlot(slot);
-              setSelectedClass(null);
-              setIsClassModalOpen(true);
-            }}
-            onEditClass={(cls) => {
-              setSelectedClass(cls);
-              setIsClassModalOpen(true);
-            }}
-            onDeleteClass={handleDeleteClass}
-            onCancelClass={handleCancelClass}
-            onLogLesson={(studentId) => {
-              setSelectedStudentForLesson(studentId);
-              setIsLessonModalOpen(true);
-            }}
-          />
+              <TimetableGrid
+                key={tutorFilter}
+                classes={filteredClasses}
+                role="admin"
+                currentTutorId={tutorFilter === 'all' ? undefined : tutorFilter}
+                onTutorFilterChange={setTutorFilter}
+                students={students}
+                tutors={tutors}
+                onAddClass={(slot) => {
+                  setSelectedSlot(slot);
+                  setSelectedClass(null);
+                  setIsClassModalOpen(true);
+                }}
+                onEditClass={(cls) => {
+                  setSelectedClass(cls);
+                  setIsClassModalOpen(true);
+                }}
+                onDeleteClass={handleDeleteClass}
+                onCancelClass={handleCancelClass}
+                onLogLesson={(studentId) => {
+                  setSelectedStudentForLesson(studentId);
+                  setIsLessonModalOpen(true);
+                }}
+              />
+            </>
+          )}
         </div>
       )}
 

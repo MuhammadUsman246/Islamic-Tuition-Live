@@ -31,6 +31,7 @@ import {
   Announcement
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
+import { TutorSlotAvailabilityInspector } from '../common/TutorSlotAvailabilityInspector';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import {
@@ -166,6 +167,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     : classes.filter(c => c.tutorId === selectedTutorId);
 
   const [supervisorLessonsViewMode, setSupervisorLessonsViewMode] = useState<'cards' | 'spreadsheet'>('spreadsheet');
+  const [supervisorTimetableMode, setSupervisorTimetableMode] = useState<'grid' | 'availability'>('grid');
   const [supervisorSearchQuery, setSupervisorSearchQuery] = useState<string>('');
   const [supervisorSafetyFilter, setSupervisorSafetyFilter] = useState<'all' | 'audited' | 'flagged' | 'pending'>('all');
   const [supervisorTimeMode, setSupervisorTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('all');
@@ -381,20 +383,63 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       {/* TAB 2: TIMETABLES */}
       {currentTab === 'timetable' && (
         <div className="space-y-4">
-          <h3 className="text-base font-bold text-[#161F1A]">Faculty Timetables</h3>
-          <TimetableGrid
-            classes={filteredClasses}
-            role="supervisor"
-            currentTutorId={selectedTutorId}
-            students={students}
-            tutors={tutors}
-            onCancelClass={async (classId, newStatus) => {
-              await updateClass(classId, { status: newStatus });
-              if (onRefreshData) {
-                await onRefreshData();
-              }
-            }}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-[#161F1A]">Faculty Timetables &amp; Availability</h3>
+              <p className="text-xs text-[#5A6B61]">
+                Live master schedules and 24/7 tutor open slot inspector.
+              </p>
+            </div>
+
+            <div className="bg-[#FAF9F7] p-1 border border-[#D5D0C6] rounded-xl flex items-center gap-1 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setSupervisorTimetableMode('grid')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  supervisorTimetableMode === 'grid'
+                    ? 'bg-[#2D8B5C] text-white shadow-xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Master Grid</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSupervisorTimetableMode('availability')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  supervisorTimetableMode === 'availability'
+                    ? 'bg-[#1B365D] text-white shadow-xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                <span>24/7 Slot Availability</span>
+              </button>
+            </div>
+          </div>
+
+          {supervisorTimetableMode === 'availability' ? (
+            <TutorSlotAvailabilityInspector
+              tutors={tutors}
+              students={students}
+              classes={classes}
+            />
+          ) : (
+            <TimetableGrid
+              classes={filteredClasses}
+              role="supervisor"
+              currentTutorId={selectedTutorId}
+              students={students}
+              tutors={tutors}
+              onCancelClass={async (classId, newStatus) => {
+                await updateClass(classId, { status: newStatus });
+                if (onRefreshData) {
+                  await onRefreshData();
+                }
+              }}
+            />
+          )}
         </div>
       )}
 
