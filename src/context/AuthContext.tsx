@@ -727,9 +727,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 );
               } catch {}
               forceLogout();
-            } else if (termTime > 0) {
-              // Stale past termination timestamp - clear it so it doesn't linger
-              setDoc(doc(db, SESSIONS_COL, clientSessionId), { status: 'active', isOnline: true, terminatedAt: null }, { merge: true }).catch(() => {});
             }
           }
         }
@@ -755,9 +752,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 );
               } catch {}
               forceLogout();
-            } else if (forceTime > 0) {
-              // Stale past termination timestamp - clear it from user doc
-              setDoc(doc(db, 'users', userProfile.uid), { forceLoggedOutAt: '', sessionStatus: 'active' }, { merge: true }).catch(() => {});
             }
           }
         }

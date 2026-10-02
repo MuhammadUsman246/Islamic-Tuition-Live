@@ -4553,10 +4553,22 @@ export async function recordUserSessionHeartbeat(session: {
     MEMORY_SESSIONS.unshift(sessionRecord);
   }
 
-  // 2. Persist to Firestore
+  // 2. Persist to Firestore with intelligent 5-minute client-side throttling to minimize writes
   if (!auth.currentUser || isFirestoreQuotaExceeded()) return sessionId;
 
+  const nowMs = Date.now();
+  const lastWriteTime = (window as any).__lastSessionWriteMap?.[sessionId] || 0;
+  // If written within last 5 minutes (300,000ms), skip remote Firestore write
+  if (nowMs - lastWriteTime < 300000) {
+    return sessionId;
+  }
+
   try {
+    if (!(window as any).__lastSessionWriteMap) {
+      (window as any).__lastSessionWriteMap = {};
+    }
+    (window as any).__lastSessionWriteMap[sessionId] = nowMs;
+
     const sessionRef = doc(db, SESSIONS_COL, sessionId);
     await setDoc(sessionRef, sanitizeFirestoreObject(sessionRecord), { merge: true });
   } catch (err) {
