@@ -3,7 +3,7 @@ import fs from 'fs';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { createServer as createViteServer } from 'vite';
 

@@ -45,13 +45,28 @@ export const DEFAULT_CLASSROOM_SETTINGS: ClassroomLabSettings = {
 /**
  * Generate a canonical, deterministic LiveKit room name shared between Tutor, Student & Admin
  */
-export function getCanonicalRoomName(tutorId: string, studentId?: string, customRoomName?: string): string {
-  if (customRoomName && customRoomName.trim()) {
+export function getCanonicalRoomName(tutorInput: any, studentInput?: any, customRoomName?: string): string {
+  if (customRoomName && typeof customRoomName === 'string' && customRoomName.trim()) {
     return customRoomName.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
   }
-  const cleanTutor = (tutorId || 'Tutor_1').toString().replace(/[^a-zA-Z0-9]/g, '_');
-  if (studentId) {
-    const cleanStudent = studentId.toString().replace(/[^a-zA-Z0-9]/g, '_');
+
+  let tutorStr = 'Tutor_1';
+  if (typeof tutorInput === 'string') {
+    tutorStr = tutorInput;
+  } else if (tutorInput && typeof tutorInput === 'object') {
+    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || tutorInput.displayName || 'Tutor_1';
+  }
+
+  let studentStr = '';
+  if (typeof studentInput === 'string') {
+    studentStr = studentInput;
+  } else if (studentInput && typeof studentInput === 'object') {
+    studentStr = studentInput.studentId || studentInput.id || studentInput.name || '';
+  }
+
+  const cleanTutor = tutorStr.replace(/[^a-zA-Z0-9]/g, '_');
+  if (studentStr && studentStr.trim()) {
+    const cleanStudent = studentStr.trim().replace(/[^a-zA-Z0-9]/g, '_');
     return `room_${cleanTutor}_${cleanStudent}`;
   }
   return `room_tutor_${cleanTutor}`;
