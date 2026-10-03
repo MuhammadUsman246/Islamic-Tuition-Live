@@ -147,6 +147,11 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
   }
 });
 
+// Explicit 404 handler for API routes to prevent falling through to SPA HTML fallback
+app.use('/api/*', (req: Request, res: Response) => {
+  res.status(404).json({ error: `API endpoint ${req.method} ${req.originalUrl} not found` });
+});
+
 // Vite middleware & Static serving
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

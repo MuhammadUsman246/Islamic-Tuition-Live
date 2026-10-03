@@ -467,8 +467,10 @@ export interface LiveKitRoomTokenResponse {
   participantIdentity: string;
   participantName: string;
   role: UserRole;
+  classId?: string | null;
   isMockSession?: boolean;
   isMaskedSecret?: boolean;
+  expiresInSeconds?: number;
   message?: string;
 }
 

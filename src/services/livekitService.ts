@@ -84,18 +84,58 @@ export async function fetchLiveKitToken(params: {
   customServerUrl?: string;
   forceSimulation?: boolean;
 }): Promise<LiveKitRoomTokenResponse> {
-  const response = await fetch('/api/livekit/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
+  try {
+    const response = await fetch('/api/livekit/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Failed to obtain LiveKit token: ${errText || response.statusText}`);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      if (response.ok) {
+        return data;
+      }
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+    }
+
+    // If server returned non-JSON (e.g. HTML or text), read error text safely
+    const rawText = await response.text().catch(() => '');
+    console.warn('[LiveKit Token Notice] Non-JSON backend response:', response.status, rawText.slice(0, 100));
+
+    // Fallback to Interactive Lab Simulation Token so classroom UI always functions
+    const mockToken = `mock_token_${Date.now()}`;
+    return {
+      token: mockToken,
+      serverUrl: params.customServerUrl || 'wss://demo.livekit.cloud',
+      roomName: params.roomId,
+      participantIdentity: params.identity,
+      participantName: params.participantName,
+      role: params.role,
+      classId: params.classId || null,
+      isMockSession: true,
+      expiresInSeconds: 7200,
+      message: 'Running in Interactive Lab Simulation Mode.',
+    };
+  } catch (err: any) {
+    console.warn('[LiveKit Token Notice] Request error:', err?.message || err);
+    const mockToken = `mock_token_${Date.now()}`;
+    return {
+      token: mockToken,
+      serverUrl: params.customServerUrl || 'wss://demo.livekit.cloud',
+      roomName: params.roomId,
+      participantIdentity: params.identity,
+      participantName: params.participantName,
+      role: params.role,
+      classId: params.classId || null,
+      isMockSession: true,
+      expiresInSeconds: 7200,
+      message: 'Running in Interactive Lab Simulation Mode.',
+    };
   }
-
-  return response.json();
 }
 
 /**
@@ -112,7 +152,8 @@ export async function checkLiveKitServerStatus(): Promise<{
 }> {
   try {
     const res = await fetch('/api/livekit/status');
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       return await res.json();
     }
   } catch (err) {
