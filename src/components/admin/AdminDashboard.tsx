@@ -92,6 +92,7 @@ import { ShiftTutorModal } from '../modals/ShiftTutorModal';
 import { StudentFolderModal } from '../modals/StudentFolderModal';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
+import { ClassroomLab } from './ClassroomLab';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
 import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV, exportFeesToCSV, exportFullAcademyBackupJSON } from '../../utils/csvExporter';
@@ -4755,6 +4756,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             await updateReferral(ref.id, { status: 'Paid' });
             await onRefreshData();
           }}
+        />
+      )}
+
+      {/* 9.4 CLASSROOM LAB (LIVEKIT TESTING & BENCHMARK) */}
+      {currentTab === 'classroom_lab' && (
+        <ClassroomLab
+          tutors={tutors}
+          students={students}
+          classes={classes}
         />
       )}
 

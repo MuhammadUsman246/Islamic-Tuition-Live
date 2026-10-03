@@ -443,6 +443,65 @@ export interface ChatThread {
   unreadCountFor: Record<string, number>;
 }
 
+export interface ClassroomLabSettings {
+  classroomEnabled: boolean;
+  testModeOnly: boolean;
+  livekitServerUrl: string;
+  allowedTestTutorIds: string[];
+  allowedTestStudentIds: string[];
+  tutorScreenShareEnabled: boolean;
+  tutorCameraPermanentlyDisabled: boolean;
+  studentCameraEnabled: boolean;
+  studentScreenShareEnabled: boolean;
+  recordingEnabled: boolean;
+  recordingRetentionDays: number;
+  audioQualityPreset: 'speech_optimized' | 'high_fidelity' | 'adaptive_network';
+  classroomTitle: string;
+  welcomeMessage: string;
+}
+
+export interface LiveKitRoomTokenResponse {
+  token: string;
+  serverUrl: string;
+  roomName: string;
+  participantIdentity: string;
+  participantName: string;
+  role: UserRole;
+  isMockSession?: boolean;
+  isMaskedSecret?: boolean;
+  message?: string;
+}
+
+export interface ClassroomLabTestSession {
+  id: string;
+  roomName: string;
+  classId?: string;
+  tutorId: string;
+  tutorName: string;
+  studentId: string;
+  studentName: string;
+  status: 'idle' | 'active' | 'completed';
+  startedAt?: string;
+  durationMinutes: number;
+  hasRecording?: boolean;
+  recordingUrl?: string;
+  simulatedNetworkCondition?: 'excellent' | 'normal' | 'poor_mobile_4g';
+}
+
+export interface ClassroomRecordingItem {
+  id: string;
+  roomName: string;
+  classId?: string;
+  tutorId: string;
+  studentName: string;
+  recordedAt: string;
+  expiresAt: string;
+  durationSeconds: number;
+  sizeBytes?: number;
+  status: 'ready' | 'processing' | 'expired';
+  downloadUrl?: string;
+}
+
 export interface AcademySettings {
   academyName: string;
   operationalTimezone: string; // "Asia/Karachi"
@@ -452,6 +511,7 @@ export interface AcademySettings {
   defaultZoomLink?: string;
   trialSessionsCount?: number;
   siblingDiscountPercent?: number;
+  classroomSettings?: ClassroomLabSettings;
 }
 
 export type TrashItemType = 'class' | 'student' | 'tutor' | 'user' | 'referral' | 'announcement' | 'tutor_attendance';

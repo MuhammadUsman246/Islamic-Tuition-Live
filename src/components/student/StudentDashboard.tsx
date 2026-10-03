@@ -21,7 +21,8 @@ import {
   Flame,
   Award,
   FileSpreadsheet,
-  Palmtree
+  Palmtree,
+  Radio
 } from 'lucide-react';
 import {
   Student,
@@ -30,7 +31,8 @@ import {
   Lesson,
   AttendanceRecord,
   StudentFee,
-  Announcement
+  Announcement,
+  LiveKitRoomTokenResponse
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { convertPKTToStudentTime, getTimezoneShortCode } from '../../utils/timezone';
@@ -41,6 +43,8 @@ import { StudentProfileCustomizerModal } from '../modals/StudentProfileCustomize
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { findStudentByEmailOrId } from '../../services/dataService';
+import { getLocalClassroomSettings, fetchLiveKitToken } from '../../services/livekitService';
+import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 
 interface StudentDashboardProps {
   currentTab: string;
@@ -243,8 +247,56 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       });
   }, [fees, student]);
 
+  // LiveKit Pilot Classroom Integration for Allowed Test Students
+  const [isLiveKitModalOpen, setIsLiveKitModalOpen] = useState<boolean>(false);
+  const [liveKitTokenData, setLiveKitTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
+  const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
+  const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
+  const isAllowedTestStudent = useMemo(() => {
+    if (!classroomSettings.classroomEnabled) return false;
+    const currentId = student?.studentId || currentStudentId;
+    return classroomSettings.allowedTestStudentIds.includes(currentId);
+  }, [classroomSettings, student?.studentId, currentStudentId]);
+
+  const handleJoinLiveKitTestClass = async () => {
+    try {
+      setIsJoiningLiveKit(true);
+      const activeTutorId = student?.assignedTutorId || assignedTutor?.tutorId || 'Tutor 1';
+      const roomName = `room_class_${activeTutorId.replace(/\s+/g, '')}`;
+      const tokenRes = await fetchLiveKitToken({
+        roomId: roomName,
+        identity: `student_${student?.studentId || 'stu'}_${Date.now()}`,
+        participantName: student?.name || userProfile?.displayName || 'Student',
+        role: 'student',
+        customServerUrl: classroomSettings.livekitServerUrl || undefined,
+      });
+      setLiveKitTokenData(tokenRes);
+      setIsLiveKitModalOpen(true);
+    } catch (err: any) {
+      alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
+    } finally {
+      setIsJoiningLiveKit(false);
+    }
+  };
+
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
+      {/* LiveKit Classroom Modal for Allowed Test Students */}
+      {isLiveKitModalOpen && liveKitTokenData && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
+          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+            <IslamicTuitionClassroom
+              roomName={liveKitTokenData.roomName}
+              tokenData={liveKitTokenData}
+              userRole="student"
+              participantName={student?.name || userProfile?.displayName || 'Student'}
+              settings={classroomSettings}
+              onLeave={() => setIsLiveKitModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Alert if student is not found */}
       {!student && (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-start gap-3 text-xs">
@@ -343,6 +395,24 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <span>Join My Live Class (Zoom)</span>
                 <ExternalLink className="w-4 h-4" />
               </a>
+            )}
+
+            {/* LiveKit Test Classroom Button (Controlled Test Access - Visible ONLY to Allowed Test Students) */}
+            {isAllowedTestStudent && (
+              <button
+                type="button"
+                id="student_livekit_launch_button"
+                onClick={handleJoinLiveKitTestClass}
+                disabled={isJoiningLiveKit}
+                className="px-6 py-3 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-sm transition-all flex items-center space-x-2.5 shadow-md transform hover:scale-[1.02] cursor-pointer border border-emerald-400/40"
+                title="Enter your live integrated Islamic Tuition test classroom"
+              >
+                <Radio className="w-5 h-5 text-[#E8A93E] animate-pulse" />
+                <span>{isJoiningLiveKit ? 'Connecting...' : 'Join Integrated Classroom'}</span>
+                <span className="text-[10px] font-bold bg-[#E8A93E] text-slate-900 px-2 py-0.5 rounded font-mono">
+                  Pilot
+                </span>
+              </button>
             )}
           </div>
         </div>

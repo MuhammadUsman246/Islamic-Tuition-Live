@@ -19,7 +19,8 @@ import {
   Palmtree,
   Edit3,
   Lock,
-  Clock
+  Clock,
+  Radio
 } from 'lucide-react';
 import {
   Tutor,
@@ -28,12 +29,15 @@ import {
   Lesson,
   AttendanceRecord,
   TutorStudentView,
-  Announcement
+  Announcement,
+  LiveKitRoomTokenResponse
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
+import { getLocalClassroomSettings, fetchLiveKitToken } from '../../services/livekitService';
+import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
@@ -346,8 +350,56 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     launchTutorZoomDesktop(tutor?.zoomLink);
   };
 
+  // LiveKit Pilot Classroom Integration for Allowed Test Tutors
+  const [isLiveKitModalOpen, setIsLiveKitModalOpen] = useState<boolean>(false);
+  const [liveKitTokenData, setLiveKitTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
+  const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
+  const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
+  const isAllowedTestTutor = useMemo(() => {
+    if (!classroomSettings.classroomEnabled) return false;
+    const currentId = tutor?.tutorId || currentTutorId;
+    return classroomSettings.allowedTestTutorIds.includes(currentId);
+  }, [classroomSettings, tutor?.tutorId, currentTutorId]);
+
+  const handleJoinLiveKitTestClass = async () => {
+    try {
+      setIsJoiningLiveKit(true);
+      const activeTutorId = tutor?.tutorId || currentTutorId || 'Tutor 1';
+      const roomName = `room_class_${activeTutorId.replace(/\s+/g, '')}`;
+      const tokenRes = await fetchLiveKitToken({
+        roomId: roomName,
+        identity: `tutor_${activeTutorId}_${Date.now()}`,
+        participantName: tutor?.realName || tutor?.displayName || activeTutorId,
+        role: 'tutor',
+        customServerUrl: classroomSettings.livekitServerUrl || undefined,
+      });
+      setLiveKitTokenData(tokenRes);
+      setIsLiveKitModalOpen(true);
+    } catch (err: any) {
+      alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
+    } finally {
+      setIsJoiningLiveKit(false);
+    }
+  };
+
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
+      {/* LiveKit Classroom Modal for Allowed Test Tutors */}
+      {isLiveKitModalOpen && liveKitTokenData && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
+          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+            <IslamicTuitionClassroom
+              roomName={liveKitTokenData.roomName}
+              tokenData={liveKitTokenData}
+              userRole="tutor"
+              participantName={tutor?.realName || tutor?.displayName || tutor?.tutorId || 'Ustadh'}
+              settings={classroomSettings}
+              onLeave={() => setIsLiveKitModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Top Banner: Permanent Zoom Classroom & Quick Log Lesson */}
       <div className="bg-[#1E5C3D] text-white p-6 rounded-2xl shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
@@ -378,6 +430,24 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
             <span>Launch Zoom Classroom</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
+
+          {/* LiveKit Test Classroom Button (Controlled Test Access - Visible ONLY to Allowed Test Tutors) */}
+          {isAllowedTestTutor && (
+            <button
+              type="button"
+              id="tutor_livekit_launch_button"
+              onClick={handleJoinLiveKitTestClass}
+              disabled={isJoiningLiveKit}
+              className="px-5 py-2.5 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs cursor-pointer border border-emerald-400/40"
+              title="Enter your live integrated Islamic Tuition test classroom"
+            >
+              <Radio className="w-4 h-4 text-[#E8A93E] animate-pulse" />
+              <span>{isJoiningLiveKit ? 'Connecting...' : 'Join Integrated Classroom'}</span>
+              <span className="text-[9px] font-bold bg-[#E8A93E] text-slate-900 px-1.5 py-0.2 rounded font-mono">
+                Pilot
+              </span>
+            </button>
+          )}
 
           {/* Quick Log Lesson Button */}
           <button
