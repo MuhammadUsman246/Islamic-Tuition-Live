@@ -22,7 +22,8 @@ import {
   GraduationCap,
   Receipt,
   Send,
-  Palmtree
+  Palmtree,
+  Radio
 } from 'lucide-react';
 import {
   Student,
@@ -31,7 +32,8 @@ import {
   Lesson,
   AttendanceRecord,
   StudentFee,
-  Announcement
+  Announcement,
+  LiveKitRoomTokenResponse
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { convertPKTToStudentTime, getTimezoneShortCode } from '../../utils/timezone';
@@ -41,6 +43,8 @@ import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { updateFee } from '../../services/dataService';
+import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
+import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 
 interface ParentDashboardProps {
   currentTab: string;
@@ -253,8 +257,51 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     }
   };
 
+  // LiveKit Pilot Classroom Integration for Parents / Observers
+  const [isLiveKitModalOpen, setIsLiveKitModalOpen] = useState<boolean>(false);
+  const [liveKitTokenData, setLiveKitTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
+  const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
+  const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
+
+  const handleJoinLiveKitClass = async (childObj: Student) => {
+    try {
+      setIsJoiningLiveKit(true);
+      const activeTutorId = childObj.assignedTutorId || 'Tutor 1';
+      const roomName = getCanonicalRoomName(activeTutorId, childObj.studentId);
+      const tokenRes = await fetchLiveKitToken({
+        roomId: roomName,
+        identity: `parent_${childObj.studentId}_${Date.now()}`,
+        participantName: `Parent (${userProfile?.displayName || 'Guardian'})`,
+        role: 'student',
+        customServerUrl: classroomSettings.livekitServerUrl || undefined,
+      });
+      setLiveKitTokenData(tokenRes);
+      setIsLiveKitModalOpen(true);
+    } catch (err: any) {
+      alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
+    } finally {
+      setIsJoiningLiveKit(false);
+    }
+  };
+
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
+      {/* LiveKit Classroom Modal for Parents */}
+      {isLiveKitModalOpen && liveKitTokenData && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
+          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+            <IslamicTuitionClassroom
+              roomName={liveKitTokenData.roomName}
+              tokenData={liveKitTokenData}
+              userRole="student"
+              participantName={`Parent (${userProfile?.displayName || 'Guardian'})`}
+              settings={classroomSettings}
+              onLeave={() => setIsLiveKitModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Top Banner with Children Switcher */}
       <div className="bg-[#1E5C3D] text-white p-6 rounded-2xl shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
@@ -349,11 +396,22 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               rel="noopener noreferrer"
               className="px-4 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs"
             >
-            <Video className="w-4 h-4" />
-            <span>Launch {activeChild.name}'s Zoom Class</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
+              <Video className="w-4 h-4" />
+              <span>Launch {activeChild.name}'s Zoom Class</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+
+            <button
+              type="button"
+              onClick={() => handleJoinLiveKitClass(activeChild)}
+              disabled={isJoiningLiveKit}
+              className="px-4 py-2 bg-[#E8A93E] hover:bg-[#C98A1E] text-slate-900 font-bold text-xs rounded-lg flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              title="Observe or join child's live integrated Quran classroom"
+            >
+              <Radio className="w-4 h-4 text-emerald-950 animate-pulse" />
+              <span>{isJoiningLiveKit ? 'Connecting...' : `Observe Live Class`}</span>
+            </button>
+          </div>
       </div>
     )}
 

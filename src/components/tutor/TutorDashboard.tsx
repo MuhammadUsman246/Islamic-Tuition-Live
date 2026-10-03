@@ -36,7 +36,7 @@ import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
-import { getLocalClassroomSettings, fetchLiveKitToken } from '../../services/livekitService';
+import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
@@ -350,22 +350,25 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     launchTutorZoomDesktop(tutor?.zoomLink);
   };
 
-  // LiveKit Pilot Classroom Integration for Allowed Test Tutors
+  // LiveKit Pilot Classroom Integration for Tutors
   const [isLiveKitModalOpen, setIsLiveKitModalOpen] = useState<boolean>(false);
   const [liveKitTokenData, setLiveKitTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
   const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
+  const [customRoomCode, setCustomRoomCode] = useState<string>('');
   const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
   const isAllowedTestTutor = useMemo(() => {
-    if (!classroomSettings.classroomEnabled) return false;
+    if (!classroomSettings.classroomEnabled) return true;
     const currentId = tutor?.tutorId || currentTutorId;
+    if (!currentId) return true;
+    if (classroomSettings.allowedTestTutorIds.includes('all')) return true;
     return classroomSettings.allowedTestTutorIds.includes(currentId);
   }, [classroomSettings, tutor?.tutorId, currentTutorId]);
 
-  const handleJoinLiveKitTestClass = async () => {
+  const handleJoinLiveKitTestClass = async (targetStudentId?: string, overrideRoomCode?: string) => {
     try {
       setIsJoiningLiveKit(true);
       const activeTutorId = tutor?.tutorId || currentTutorId || 'Tutor 1';
-      const roomName = `room_class_${activeTutorId.replace(/\s+/g, '')}`;
+      const roomName = getCanonicalRoomName(activeTutorId, targetStudentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
         identity: `tutor_${activeTutorId}_${Date.now()}`,

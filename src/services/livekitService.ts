@@ -26,11 +26,11 @@ import {
 } from '../types';
 
 export const DEFAULT_CLASSROOM_SETTINGS: ClassroomLabSettings = {
-  classroomEnabled: false,
-  testModeOnly: true,
+  classroomEnabled: true,
+  testModeOnly: false,
   livekitServerUrl: '',
-  allowedTestTutorIds: ['Tutor 1', 'Tutor 6'],
-  allowedTestStudentIds: ['STU-001', 'STU-002'],
+  allowedTestTutorIds: ['Tutor 1', 'Tutor 2', 'Tutor 3', 'Tutor 4', 'Tutor 5', 'Tutor 6', 'Tutor 7', 'Tutor 8', 'all'],
+  allowedTestStudentIds: ['STU-001', 'STU-002', 'STU-003', 'STU-004', 'STU-005', 'all'],
   tutorScreenShareEnabled: true,
   tutorCameraPermanentlyDisabled: true, // Permanent rule
   studentCameraEnabled: true,
@@ -41,6 +41,21 @@ export const DEFAULT_CLASSROOM_SETTINGS: ClassroomLabSettings = {
   classroomTitle: 'Islamic Tuition Live Quran Classroom',
   welcomeMessage: 'Assalamu Alaykum. Welcome to your live 1-to-1 Quran session.',
 };
+
+/**
+ * Generate a canonical, deterministic LiveKit room name shared between Tutor, Student & Admin
+ */
+export function getCanonicalRoomName(tutorId: string, studentId?: string, customRoomName?: string): string {
+  if (customRoomName && customRoomName.trim()) {
+    return customRoomName.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
+  }
+  const cleanTutor = (tutorId || 'Tutor_1').toString().replace(/[^a-zA-Z0-9]/g, '_');
+  if (studentId) {
+    const cleanStudent = studentId.toString().replace(/[^a-zA-Z0-9]/g, '_');
+    return `room_${cleanTutor}_${cleanStudent}`;
+  }
+  return `room_tutor_${cleanTutor}`;
+}
 
 const CLASSROOM_SETTINGS_STORAGE_KEY = 'it_classroom_lab_settings_v1';
 const CLASSROOM_RECORDINGS_STORAGE_KEY = 'it_classroom_recordings_v1';

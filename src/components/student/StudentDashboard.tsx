@@ -43,7 +43,7 @@ import { StudentProfileCustomizerModal } from '../modals/StudentProfileCustomize
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { findStudentByEmailOrId } from '../../services/dataService';
-import { getLocalClassroomSettings, fetchLiveKitToken } from '../../services/livekitService';
+import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 
 interface StudentDashboardProps {
@@ -247,22 +247,25 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       });
   }, [fees, student]);
 
-  // LiveKit Pilot Classroom Integration for Allowed Test Students
+  // LiveKit Pilot Classroom Integration for Students
   const [isLiveKitModalOpen, setIsLiveKitModalOpen] = useState<boolean>(false);
   const [liveKitTokenData, setLiveKitTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
   const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
+  const [customRoomCode, setCustomRoomCode] = useState<string>('');
   const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
   const isAllowedTestStudent = useMemo(() => {
-    if (!classroomSettings.classroomEnabled) return false;
+    if (!classroomSettings.classroomEnabled) return true;
     const currentId = student?.studentId || currentStudentId;
+    if (!currentId) return true;
+    if (classroomSettings.allowedTestStudentIds.includes('all')) return true;
     return classroomSettings.allowedTestStudentIds.includes(currentId);
   }, [classroomSettings, student?.studentId, currentStudentId]);
 
-  const handleJoinLiveKitTestClass = async () => {
+  const handleJoinLiveKitTestClass = async (overrideRoomCode?: string) => {
     try {
       setIsJoiningLiveKit(true);
       const activeTutorId = student?.assignedTutorId || assignedTutor?.tutorId || 'Tutor 1';
-      const roomName = `room_class_${activeTutorId.replace(/\s+/g, '')}`;
+      const roomName = getCanonicalRoomName(activeTutorId, student?.studentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
         identity: `student_${student?.studentId || 'stu'}_${Date.now()}`,

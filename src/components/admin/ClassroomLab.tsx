@@ -51,6 +51,7 @@ import {
   saveLabTestSessions,
   getLocalClassroomRecordings,
   saveLocalClassroomRecordings,
+  getCanonicalRoomName,
   DEFAULT_CLASSROOM_SETTINGS
 } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
@@ -152,7 +153,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
       const tutorObj = tutors.find(t => t.tutorId === selectedTutorId) || tutors[0];
       const studentObj = students.find(s => s.studentId === selectedStudentId) || students[0];
 
-      const roomName = `room_${testRoomPrefix}_${selectedTutorId.replace(/\s+/g, '')}`;
+      const roomName = getCanonicalRoomName(selectedTutorId, selectedStudentId, testRoomPrefix);
       const participantName = role === 'tutor'
         ? (tutorObj?.realName ? `${tutorObj.realName} (${selectedTutorId})` : selectedTutorId)
         : (studentObj?.name || 'Student Zayd');
