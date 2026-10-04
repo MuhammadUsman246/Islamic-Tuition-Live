@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Room,
   RoomEvent,
@@ -42,7 +43,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
   BookOpen,
-  Volume2
+  Volume2,
+  ExternalLink
 } from 'lucide-react';
 import {
   LiveKitRoomTokenResponse,
@@ -254,12 +256,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [selectedVideoInput, setSelectedVideoInput] = useState<string>('');
   const selectedAudioOutputRef = useRef<string>('');
 
-  // Right Sidebar: Open by default to show compact participants, student camera, and live chat without shrinking screen share
+  // Right Sidebar & Chat: Chat is CLOSED by default; clicking Chat opens it, clicking Chat again closes it!
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
   const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
   const [chatInputText, setChatInputText] = useState<string>('');
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Always-On-Top Floating Mini Control Bar (Document Picture-in-Picture) for PDFs & Other Browser Tabs
+  const [pipWindow, setPipWindow] = useState<Window | null>(null);
+  const pipWindowRef = useRef<Window | null>(null);
+
+  useEffect(() => {
+    pipWindowRef.current = pipWindow;
+  }, [pipWindow]);
 
   useEffect(() => {
     isAudioMutedRef.current = isAudioMuted;
@@ -280,10 +291,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, [selectedAudioOutput]);
 
-  // Auto-scroll chat to bottom when new message arrives
+  // Auto-scroll chat to bottom when new message arrives or chat opens
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages, isSidebarOpen]);
+    if (isChatOpen) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isChatOpen, isSidebarOpen]);
 
   // 5-Second Voice Recorder Loopback Test States
   const [micTestState, setMicTestState] = useState<'idle' | 'recording' | 'recorded' | 'playing'>('idle');
@@ -466,28 +479,26 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, [participantName, userRole, settings?.recordingEnabled, attachRemoteAudioTrack]);
 
-  // Attach active Screen Share & Student Camera video tracks whenever video state or participants change
+  // Attach active REMOTE Screen Share & Student Camera video tracks whenever video state or participants change
+  // CRITICAL FIX: Never attach localParticipant's own ScreenShare track to screenShareVideoRef!
+  // Self-mirroring the presenter's own screen inside the browser tab causes the recursive "Hall of Mirrors" tunnel.
   useEffect(() => {
     const room = roomRef.current;
     if (!room || room.state !== ConnectionState.Connected) return;
 
-    // 1. Attach Screen Share Video Track (Remote or Local)
+    // 1. Attach Remote Screen Share Video Track ONLY (When viewing someone else's shared screen)
     if (screenShareVideoRef.current) {
-      let screenTrack: Track | undefined;
+      let remoteScreenTrack: Track | undefined;
       room.remoteParticipants.forEach((p) => {
         const pub = p.getTrackPublication(Track.Source.ScreenShare);
         if (pub?.track && !pub.isMuted) {
-          screenTrack = pub.track;
+          remoteScreenTrack = pub.track;
         }
       });
-      if (!screenTrack && room.localParticipant) {
-        const localPub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
-        if (localPub?.track && !localPub.isMuted) {
-          screenTrack = localPub.track;
-        }
-      }
-      if (screenTrack) {
-        screenTrack.attach(screenShareVideoRef.current);
+      if (remoteScreenTrack && !isScreenSharing) {
+        remoteScreenTrack.attach(screenShareVideoRef.current);
+      } else {
+        screenShareVideoRef.current.srcObject = null;
       }
     }
 
@@ -745,8 +756,6 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 text: msgObj.text,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               }]);
-              // Automatically open sidebar when a chat message arrives so no one misses it
-              setIsSidebarOpen(true);
               setUnreadChatCount(prev => prev + 1);
             }
           } catch (e) {
@@ -863,8 +872,80 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       if (roomRef.current) {
         try { roomRef.current.disconnect(); } catch {}
       }
+      if (pipWindowRef.current && !pipWindowRef.current.closed) {
+        try { pipWindowRef.current.close(); } catch {}
+      }
     };
   }, [tokenData.token, tokenData.serverUrl, tokenData.isMockSession, roomName]);
+
+  // Open Always-On-Top Floating Mini Control Bar (Stays visible on top of PDFs & other browser tabs!)
+  const openFloatingControlBar = useCallback(async () => {
+    try {
+      const docPip = (window as any).documentPictureInPicture;
+      if (!docPip || typeof docPip.requestWindow !== 'function') return;
+      if (pipWindowRef.current && !pipWindowRef.current.closed) {
+        pipWindowRef.current.focus();
+        return;
+      }
+
+      const pipWin: Window = await docPip.requestWindow({
+        width: 500,
+        height: isChatOpen ? 340 : 66,
+      });
+
+      pipWin.document.title = 'Islamic Tuition Classroom';
+      pipWin.document.body.style.margin = '0';
+      pipWin.document.body.style.padding = '0';
+      pipWin.document.body.style.backgroundColor = '#050806';
+      pipWin.document.body.style.color = '#FFFFFF';
+      pipWin.document.body.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+      pipWin.document.body.style.overflow = 'hidden';
+
+      Array.from(document.styleSheets).forEach((styleSheet) => {
+        try {
+          if (styleSheet.cssRules) {
+            const newStyleEl = pipWin.document.createElement('style');
+            Array.from(styleSheet.cssRules).forEach((rule) => {
+              newStyleEl.appendChild(pipWin.document.createTextNode(rule.cssText));
+            });
+            pipWin.document.head.appendChild(newStyleEl);
+          } else if (styleSheet.href) {
+            const newLinkEl = pipWin.document.createElement('link');
+            newLinkEl.rel = 'stylesheet';
+            newLinkEl.href = styleSheet.href;
+            pipWin.document.head.appendChild(newLinkEl);
+          }
+        } catch {}
+      });
+
+      pipWin.addEventListener('pagehide', () => {
+        setPipWindow(null);
+      });
+
+      setPipWindow(pipWin);
+    } catch (e) {
+      // Browser may not support Document PiP or lacked direct gesture
+    }
+  }, [isChatOpen]);
+
+  // Resize Floating Mini Control Bar automatically when Chat is toggled open or closed
+  useEffect(() => {
+    if (!pipWindow || pipWindow.closed) return;
+    try {
+      pipWindow.resizeTo(500, isChatOpen ? 340 : 66);
+    } catch {}
+  }, [isChatOpen, pipWindow]);
+
+  // Register Chrome automatic Picture-in-Picture handler when switching tabs
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        (navigator.mediaSession as any).setActionHandler('enterpictureinpicture', () => {
+          openFloatingControlBar();
+        });
+      } catch {}
+    }
+  }, [openFloatingControlBar]);
 
   // Switch active microphone device on the fly without disconnecting room (Noise Filter permanently active)
   const handleSelectAudioInput = async (deviceId: string) => {
@@ -924,7 +1005,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  // Control 2: Share Screen (Optimized for Full HD Quran Mushaf without audio feedback loopback)
+  // Control 2: Share Screen (Optimized for Full HD Quran Mushaf with zero self-mirroring & automatic floating bar)
   const handleToggleScreenShare = async () => {
     try {
       if (isScreenSharing) {
@@ -943,13 +1024,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               // Keep system audio off by default so student voice playing on tutor speakers never echoes back into the room!
               audio: false,
               selfBrowserSurface: 'exclude',
+              surfaceSwitching: 'include',
+              systemAudio: 'exclude',
               contentHint: 'detail',
               resolution: {
                 width: 1920,
                 height: 1080,
                 frameRate: 10,
               },
-            },
+            } as any,
             {
               simulcast: true,
               degradationPreference: 'maintain-resolution',
@@ -964,14 +1047,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             }
           );
           setIsScreenSharing(true);
+          openFloatingControlBar();
         } else if (navigator.mediaDevices?.getDisplayMedia) {
-          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+          await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              displaySurface: 'window',
+            } as any,
+            audio: false,
+            selfBrowserSurface: 'exclude',
+            surfaceSwitching: 'include',
+            systemAudio: 'exclude',
+          } as any);
           setIsScreenSharing(true);
-          setTimeout(() => {
-            if (screenShareVideoRef.current) {
-              screenShareVideoRef.current.srcObject = stream;
-            }
-          }, 50);
+          openFloatingControlBar();
         }
       }
       if (roomRef.current) syncParticipantsState(roomRef.current);
@@ -1188,6 +1276,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     };
 
     setChatMessages(prev => [...prev, newMsg]);
+    setIsChatOpen(true);
     setIsSidebarOpen(true);
 
     if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
@@ -1203,13 +1292,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     setChatInputText('');
   };
 
-  // Open Chat in Sidebar when clicking Chat button at bottom
-  const handleOpenChatInSidebar = () => {
-    setIsSidebarOpen(true);
-    setUnreadChatCount(0);
-    setTimeout(() => {
-      chatInputRef.current?.focus();
-    }, 100);
+  // Toggle Chat open / closed when clicking Chat button at bottom
+  const handleToggleChatInSidebar = () => {
+    setIsChatOpen(prev => {
+      const next = !prev;
+      if (next) {
+        setIsSidebarOpen(true);
+        setUnreadChatCount(0);
+        setTimeout(() => {
+          chatInputRef.current?.focus();
+        }, 100);
+      }
+      return next;
+    });
   };
 
   // Tutor Admit / Reject Intercept Actions
@@ -1229,11 +1324,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  const hasActiveScreenShare = Boolean(isScreenSharing || activeScreenShareParticipant);
+  // Only render the full-screen <video> element when viewing a REMOTE participant's screen share.
+  // When the local user is the one sharing their screen (isScreenSharing === true), we keep the browser tab
+  // calm and static so it never creates recursive "Hall of Mirrors" nested screen views!
+  const isViewingRemoteScreenShare = Boolean(activeScreenShareParticipant && !isScreenSharing);
   const hasActiveStudentCamera = Boolean(isCameraActive || activeCameraParticipant);
 
   return (
     <div
+      ref={stageContainerRef}
       className={`relative flex flex-col h-full min-h-[600px] rounded-2xl overflow-hidden border shadow-[0_25px_70px_rgba(0,0,0,0.85)] transition-colors duration-200 ${
         isLight
           ? 'bg-[#F6F4EE] text-[#14231B] border-[#D5CFC2]'
@@ -1404,13 +1503,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       <div className="relative flex-1 flex overflow-hidden min-h-0">
         {/* PRIMARY CENTER STAGE: Dedicated to Quran Screen Share */}
         <main
-          ref={stageContainerRef}
           className={`flex-1 flex flex-col min-w-0 min-h-0 p-1.5 sm:p-2.5 overflow-hidden ${
             isLight ? 'bg-[#ECE9DF]' : 'bg-[#040705]'
           }`}
         >
-          {hasActiveScreenShare ? (
-            /* FULL-HEIGHT, FULL-WIDTH QURAN LESSON SCREEN SHARE */
+          {isViewingRemoteScreenShare ? (
+            /* FULL-HEIGHT, FULL-WIDTH QURAN LESSON SCREEN SHARE (FOR STUDENT / VIEWER) */
             <div
               className={`relative flex-1 w-full h-full rounded-xl overflow-hidden border flex flex-col shadow-lg ${
                 isLight ? 'bg-[#111613] border-[#C9C3B6]' : 'bg-black border-emerald-500/50'
@@ -1421,9 +1519,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <span className="flex items-center space-x-1.5 truncate">
                   <Monitor className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span className="truncate">
-                    {isScreenSharing
-                      ? 'Sharing Your Quran / Lesson Screen (Full HD)'
-                      : `Quran / Lesson Screen Shared by ${activeScreenShareParticipant}`}
+                    {`Quran / Lesson Screen Shared by ${activeScreenShareParticipant}`}
                   </span>
                 </span>
                 <div className="flex items-center space-x-1.5 shrink-0">
@@ -1431,7 +1527,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     type="button"
                     onClick={handleToggleStageFullscreen}
                     className="px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white flex items-center space-x-1 cursor-pointer text-[10px]"
-                    title="Toggle Fullscreen Quran View"
+                    title="Toggle Fullscreen Quran View (Bottom Controls Stay Visible)"
                   >
                     {isStageFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
                     <span>{isStageFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
@@ -1443,12 +1539,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 ref={screenShareVideoRef}
                 autoPlay
                 playsInline
-                muted={isScreenSharing}
                 className="w-full h-full flex-1 object-contain"
               />
             </div>
           ) : (
-            /* CLEAN QURAN CLASSROOM STAGE WHEN SCREEN SHARE IS NOT YET ACTIVE */
+            /* CLEAN STATIC QURAN CLASSROOM STAGE (Eliminates recursive mirror views when Tutor is in browser tab!) */
             <div
               className={`flex-1 w-full h-full rounded-xl border flex flex-col items-center justify-center p-6 text-center transition-colors ${
                 isLight
@@ -1458,21 +1553,25 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             >
               <div
                 className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3 border ${
-                  isLight
-                    ? 'bg-[#E8F5EE] border-[#B8DFC8] text-[#1E5C3D]'
-                    : 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 shadow-md'
+                  isScreenSharing
+                    ? 'bg-blue-500/20 border-blue-400/50 text-blue-300 shadow-md'
+                    : isLight
+                      ? 'bg-[#E8F5EE] border-[#B8DFC8] text-[#1E5C3D]'
+                      : 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 shadow-md'
                 }`}
               >
-                <BookOpen className="w-7 h-7" />
+                {isScreenSharing ? <Monitor className="w-7 h-7" /> : <BookOpen className="w-7 h-7" />}
               </div>
 
               <h3 className={`text-base sm:text-lg font-extrabold tracking-tight ${isLight ? 'text-[#14231B]' : 'text-white'}`}>
-                Islamic Tuition Classroom
+                {isScreenSharing ? 'Your Screen is Live for Your Student' : 'Islamic Tuition Classroom'}
               </h3>
               <p className={`text-xs max-w-md mt-1 leading-relaxed ${isLight ? 'text-[#4A5B51]' : 'text-[#B8CEC1]'}`}>
-                {isTutor
-                  ? 'Click "Share Screen" below to display the Quran Mushaf, Qaida PDF, or lesson in full size for your student.'
-                  : 'Connected to live classroom audio. When your tutor shares the Quran Mushaf or lesson screen, it will fill this entire board automatically.'}
+                {isScreenSharing
+                  ? 'Switch to your Quran PDF, Mushaf, or lesson window to teach. We keep this browser tab static so it never creates duplicate mirror screens.'
+                  : isTutor
+                    ? 'Click "Share Screen" below to display the Quran Mushaf, Qaida PDF, or lesson in full size for your student.'
+                    : 'Connected to live classroom audio. When your tutor shares the Quran Mushaf or lesson screen, it will fill this entire board automatically.'}
               </p>
 
               {/* Compact Live Voice Activity Visualizer */}
@@ -1498,41 +1597,65 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               </div>
 
               {!isStudent && (
-                <button
-                  type="button"
-                  onClick={handleToggleScreenShare}
-                  className="mt-1 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center space-x-2 shadow-lg cursor-pointer transition-all"
-                >
-                  <Monitor className="w-4 h-4" />
-                  <span>Share Quran / Lesson Screen Now</span>
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2.5 mt-1">
+                  <button
+                    type="button"
+                    onClick={handleToggleScreenShare}
+                    className={`px-5 py-2.5 rounded-xl text-white text-xs font-bold flex items-center space-x-2 shadow-lg cursor-pointer transition-all ${
+                      isScreenSharing
+                        ? 'bg-rose-600 hover:bg-rose-500'
+                        : 'bg-emerald-600 hover:bg-emerald-500'
+                    }`}
+                  >
+                    <Monitor className="w-4 h-4" />
+                    <span>{isScreenSharing ? 'Stop Screen Share' : 'Share Quran / Lesson Screen Now'}</span>
+                  </button>
+
+                  {typeof window !== 'undefined' && 'documentPictureInPicture' in window && (
+                    <button
+                      type="button"
+                      onClick={openFloatingControlBar}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 border cursor-pointer transition-all ${
+                        isLight
+                          ? 'bg-[#FAF9F5] hover:bg-emerald-50 border-[#D5D0C6] text-[#1E5C3D]'
+                          : 'bg-[#15241B] hover:bg-[#1E3327] border-[#2B4B39] text-emerald-300'
+                      }`}
+                      title="Open compact floating control bar that stays visible on top of PDFs and other browser tabs"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>{pipWindow ? 'Floating Controls Active' : 'Floating Controls for PDF / Tabs'}</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
         </main>
 
-        {/* COMPACT RIGHT SIDEBAR: Small Participants Strip + Compact Student Video + Live Chat */}
+        {/* COMPACT RIGHT SIDEBAR: Small Participants Strip + Compact Student Video + Toggleable Chat */}
         {isSidebarOpen && (
           <aside
-            className={`w-64 sm:w-72 shrink-0 flex flex-col border-l z-20 transition-colors ${
+            className={`${
+              isChatOpen || hasActiveStudentCamera ? 'w-64 sm:w-72' : 'w-52 sm:w-60'
+            } shrink-0 flex flex-col border-l z-20 transition-all duration-150 ${
               isLight
                 ? 'bg-white border-[#DFDBD0] text-[#14231B]'
                 : 'bg-[#09100C] border-[#223D2E] text-white'
             }`}
           >
             {/* 1. COMPACT PARTICIPANTS SECTION (Top of Sidebar) */}
-            <div className={`p-2.5 border-b ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+            <div className={`p-2.5 ${isChatOpen || hasActiveStudentCamera ? 'border-b' : ''} ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className={`text-[10px] font-bold uppercase tracking-wider flex items-center space-x-1 ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
                   <Users className="w-3 h-3 text-emerald-400" />
                   <span>In Class ({activeVisibleParticipantsCount})</span>
                 </span>
                 <span className="text-[10px] font-bold text-emerald-400">
-                  Studio HD Audio
+                  Studio HD
                 </span>
               </div>
 
-              <div className="space-y-1.5 max-h-32 overflow-y-auto">
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
                 {filteredParticipants.map((p) => (
                   <div
                     key={p.id}
@@ -1578,7 +1701,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
             {/* 2. COMPACT STUDENT CAMERA BOX INSIDE SIDEBAR (Only shown when Student turns on camera) */}
             {hasActiveStudentCamera && (
-              <div className={`p-2.5 border-b ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+              <div className={`p-2.5 ${isChatOpen ? 'border-b' : ''} ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
                 <div className="flex items-center justify-between text-[10px] font-bold mb-1">
                   <span className="flex items-center space-x-1 text-emerald-400">
                     <Camera className="w-3 h-3" />
@@ -1599,77 +1722,84 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               </div>
             )}
 
-            {/* 3. LIVE CLASSROOM CHAT SECTION INSIDE SIDEBAR */}
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              <div
-                className={`px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-bold ${
-                  isLight ? 'border-[#E8E4DA] text-[#14231B]' : 'border-[#223D2E] text-white'
-                }`}
-              >
-                <span className="flex items-center space-x-1.5">
-                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Classroom Chat</span>
-                </span>
-                <span className={`text-[10px] font-normal ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}>
-                  {chatMessages.length} msg{chatMessages.length === 1 ? '' : 's'}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
-                {chatMessages.length === 0 ? (
-                  <div className={`text-center py-8 text-[11px] ${isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}`}>
-                    Send a message or Surah/Ayah reference here during class.
-                  </div>
-                ) : (
-                  chatMessages.map(msg => (
-                    <div
-                      key={msg.id}
-                      className={`rounded-xl p-2 text-xs border ${
-                        isLight
-                          ? 'bg-[#FAF9F5] border-[#E2DDD2] text-[#14231B]'
-                          : 'bg-[#121F17] border-[#264232] text-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between text-[10px] mb-0.5">
-                        <span className="font-bold text-emerald-400">{msg.sender}</span>
-                        <span className={isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}>{msg.timestamp}</span>
-                      </div>
-                      <p className="leading-snug break-words text-[11px]">{msg.text}</p>
-                    </div>
-                  ))
-                )}
-                <div ref={chatEndRef} />
-              </div>
-
-              <div className={`p-2 border-t flex items-center space-x-1.5 ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
-                <input
-                  ref={chatInputRef}
-                  type="text"
-                  value={chatInputText}
-                  onChange={e => setChatInputText(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
-                  placeholder="Write message..."
-                  className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs border focus:outline-none focus:border-emerald-500 ${
-                    isLight
-                      ? 'bg-white border-[#D5D0C6] text-[#14231B] placeholder-[#7A8A80]'
-                      : 'bg-[#070C09] border-[#284736] text-white placeholder-[#8AA393]'
+            {/* 3. LIVE CLASSROOM CHAT SECTION INSIDE SIDEBAR (Closed by default; only opens when user clicks Chat!) */}
+            {isChatOpen && (
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <div
+                  className={`px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-bold ${
+                    isLight ? 'border-[#E8E4DA] text-[#14231B]' : 'border-[#223D2E] text-white'
                   }`}
-                />
-                <button
-                  type="button"
-                  onClick={handleSendChatMessage}
-                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0"
-                  title="Send Chat Message"
                 >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
+                  <span className="flex items-center space-x-1.5">
+                    <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Classroom Chat</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsChatOpen(false)}
+                    className={`p-0.5 rounded hover:bg-white/10 cursor-pointer ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}
+                    title="Close Chat"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+                  {chatMessages.length === 0 ? (
+                    <div className={`text-center py-8 text-[11px] ${isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}`}>
+                      Send a message or Surah/Ayah reference here during class.
+                    </div>
+                  ) : (
+                    chatMessages.map(msg => (
+                      <div
+                        key={msg.id}
+                        className={`rounded-xl p-2 text-xs border ${
+                          isLight
+                            ? 'bg-[#FAF9F5] border-[#E2DDD2] text-[#14231B]'
+                            : 'bg-[#121F17] border-[#264232] text-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-[10px] mb-0.5">
+                          <span className="font-bold text-emerald-400">{msg.sender}</span>
+                          <span className={isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}>{msg.timestamp}</span>
+                        </div>
+                        <p className="leading-snug break-words text-[11px]">{msg.text}</p>
+                      </div>
+                    ))
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                <div className={`p-2 border-t flex items-center space-x-1.5 ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+                  <input
+                    ref={chatInputRef}
+                    type="text"
+                    value={chatInputText}
+                    onChange={e => setChatInputText(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
+                    placeholder="Write message..."
+                    className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs border focus:outline-none focus:border-emerald-500 ${
+                      isLight
+                        ? 'bg-white border-[#D5D0C6] text-[#14231B] placeholder-[#7A8A80]'
+                        : 'bg-[#070C09] border-[#284736] text-white placeholder-[#8AA393]'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendChatMessage}
+                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0"
+                    title="Send Chat Message"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </aside>
         )}
       </div>
 
-      {/* ULTRA-SLIM BOTTOM CONTROLS BAR */}
+      {/* ULTRA-SLIM BOTTOM CONTROLS BAR (Stays visible in Classroom & Fullscreen: Mute/Unmute, Share/Stop Screen, Chat Toggle, Leave) */}
       <footer
         className={`px-4 py-2 border-t flex flex-wrap items-center justify-center gap-2 sm:gap-3 z-20 shrink-0 ${
           isLight
@@ -1691,7 +1821,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <span>{isAudioMuted ? 'Unmute Mic' : 'Mute'}</span>
         </button>
 
-        {/* Button 2: Share Screen (Tutor & Admin Only - Hidden for Students) */}
+        {/* Button 2: Share Screen / Stop Share (Tutor & Admin Only - Hidden for Students) */}
         {!isStudent && (
           <button
             type="button"
@@ -1706,7 +1836,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             title="Share Quran Mushaf or Lesson Screen"
           >
             <Monitor className={`w-4 h-4 ${isScreenSharing ? 'text-white' : 'text-blue-400'}`} />
-            <span>{isScreenSharing ? 'Stop Screen' : 'Share Screen'}</span>
+            <span>{isScreenSharing ? 'Stop Share' : 'Share Screen'}</span>
           </button>
         )}
 
@@ -1729,22 +1859,24 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           </button>
         )}
 
-        {/* Button 4: Chat Button (Opens Chat in Sidebar!) */}
+        {/* Button 4: Chat Button (Toggles Chat Open / Closed on Click!) */}
         <button
           type="button"
-          onClick={handleOpenChatInSidebar}
+          onClick={handleToggleChatInSidebar}
           className={`px-4 py-2 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs relative ${
-            isLight
-              ? 'bg-[#FAF9F5] hover:bg-emerald-50 text-[#14231B] border-[#D5D0C6]'
-              : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
+            isChatOpen
+              ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
+              : isLight
+                ? 'bg-[#FAF9F5] hover:bg-emerald-50 text-[#14231B] border-[#D5D0C6]'
+                : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
           }`}
-          title="Open Classroom Chat in Sidebar"
+          title={isChatOpen ? 'Click to Close Classroom Chat' : 'Click to Open Classroom Chat'}
         >
-          <MessageSquare className="w-4 h-4 text-emerald-400" />
-          <span>Chat</span>
-          {(unreadChatCount > 0 || chatMessages.length > 0) && (
-            <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">
-              {unreadChatCount > 0 ? unreadChatCount : chatMessages.length}
+          <MessageSquare className={`w-4 h-4 ${isChatOpen ? 'text-white' : 'text-emerald-400'}`} />
+          <span>{isChatOpen ? 'Close Chat' : 'Chat'}</span>
+          {!isChatOpen && unreadChatCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold animate-bounce">
+              {unreadChatCount}
             </span>
           )}
         </button>
@@ -2104,6 +2236,129 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           </div>
         </div>
       )}
+
+      {/* ALWAYS-ON-TOP FLOATING MINI CONTROL BAR PORTAL (Stays visible on PDFs & other browser tabs!) */}
+      {pipWindow &&
+        createPortal(
+          <div className="w-full h-screen bg-[#070D0A] text-white flex flex-col justify-between overflow-hidden select-none border border-[#223D2E]">
+            {/* Compact 4-Button Bottom/Top Control Strip */}
+            <div className="px-3 py-2 bg-[#0B130E] border-b border-[#223D2E] flex items-center justify-between gap-2 shrink-0">
+              {/* 1. Mute / Unmute */}
+              <button
+                type="button"
+                onClick={handleToggleAudio}
+                className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 text-xs font-bold cursor-pointer ${
+                  isAudioMuted ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+                }`}
+              >
+                {isAudioMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                <span>{isAudioMuted ? 'Unmute' : 'Mute'}</span>
+              </button>
+
+              {/* 2. Share Screen / Stop Share (or Student Camera) */}
+              {!isStudent ? (
+                <button
+                  type="button"
+                  onClick={handleToggleScreenShare}
+                  className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 text-xs font-bold cursor-pointer border ${
+                    isScreenSharing
+                      ? 'bg-blue-600 text-white border-blue-400'
+                      : 'bg-[#15241B] text-white border-[#2B4B39]'
+                  }`}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>{isScreenSharing ? 'Stop Share' : 'Share Screen'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleToggleCamera}
+                  className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 text-xs font-bold cursor-pointer border ${
+                    isCameraActive
+                      ? 'bg-emerald-600 text-white border-emerald-400'
+                      : 'bg-[#15241B] text-white border-[#2B4B39]'
+                  }`}
+                >
+                  {isCameraActive ? <Camera className="w-3.5 h-3.5" /> : <CameraOff className="w-3.5 h-3.5" />}
+                  <span>{isCameraActive ? 'Stop Video' : 'Camera'}</span>
+                </button>
+              )}
+
+              {/* 3. Chat Toggle (Click to Open, Click Again to Close) */}
+              <button
+                type="button"
+                onClick={handleToggleChatInSidebar}
+                className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 text-xs font-bold cursor-pointer border relative ${
+                  isChatOpen
+                    ? 'bg-emerald-600 text-white border-emerald-400'
+                    : 'bg-[#15241B] text-white border-[#2B4B39]'
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>{isChatOpen ? 'Close Chat' : 'Chat'}</span>
+                {!isChatOpen && unreadChatCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold">
+                    {unreadChatCount}
+                  </span>
+                )}
+              </button>
+
+              {/* 4. End / Leave */}
+              <button
+                type="button"
+                onClick={() => {
+                  try { pipWindow.close(); } catch {}
+                  onLeave();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center space-x-1 cursor-pointer"
+              >
+                <PhoneOff className="w-3.5 h-3.5" />
+                <span>{isTutor ? 'End' : 'Leave'}</span>
+              </button>
+            </div>
+
+            {/* Expandable Live Chat Drawer inside the Floating Bar when Chat is Open */}
+            {isChatOpen && (
+              <div className="flex-1 flex flex-col min-h-0 bg-[#09100C] p-2.5 overflow-hidden">
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                  {chatMessages.length === 0 ? (
+                    <div className="text-center py-6 text-[11px] text-[#9BB5A6]">
+                      No chat messages yet. Type below to message your class.
+                    </div>
+                  ) : (
+                    chatMessages.map(msg => (
+                      <div key={msg.id} className="rounded-lg p-2 text-xs bg-[#121F17] border border-[#264232] text-white">
+                        <div className="flex items-center justify-between text-[10px] mb-0.5">
+                          <span className="font-bold text-emerald-400">{msg.sender}</span>
+                          <span className="text-[#9BB5A6]">{msg.timestamp}</span>
+                        </div>
+                        <p className="leading-snug break-words text-[11px]">{msg.text}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="pt-2 mt-1 border-t border-[#223D2E] flex items-center space-x-1.5">
+                  <input
+                    type="text"
+                    value={chatInputText}
+                    onChange={e => setChatInputText(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
+                    placeholder="Write message..."
+                    className="flex-1 rounded-lg px-2.5 py-1.5 text-xs bg-[#050806] border border-[#284736] text-white focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendChatMessage}
+                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>,
+          pipWindow.document.body
+        )}
     </div>
   );
 };
