@@ -374,7 +374,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     const pollWaitingRoom = async () => {
       try {
         const res = await fetch(`/api/livekit/waiting-room?roomSlug=${encodeURIComponent(roomName)}`);
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
           if (data.waitingList) {
             setWaitingQueue(data.waitingList);
@@ -589,7 +590,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             role: userRole
           })
         })
-          .then(r => (r.ok ? r.json() : null))
+          .then(r => {
+            const ct = r.headers.get('content-type') || '';
+            return r.ok && ct.includes('application/json') ? r.json() : null;
+          })
           .then(data => {
             if (!isCancelled && isTutor && data?.waitingList) {
               setWaitingQueue(data.waitingList);
@@ -622,7 +626,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           role: userRole
         })
       })
-        .then(r => (r.ok ? r.json() : null))
+        .then(r => {
+          const ct = r.headers.get('content-type') || '';
+          return r.ok && ct.includes('application/json') ? r.json() : null;
+        })
         .then(data => {
           if (!isCancelled && isTutor && data?.waitingList) {
             setWaitingQueue(data.waitingList);

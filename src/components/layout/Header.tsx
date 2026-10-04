@@ -435,8 +435,19 @@ export const Header: React.FC<HeaderProps> = ({
         isOpen={isZoomJoinModalOpen}
         onClose={() => setIsZoomJoinModalOpen(false)}
         currentUserRole={activeRole}
-        currentUserName={userProfile?.displayName || 'Academy Member'}
-        currentUserId={userProfile?.uid || ''}
+        currentUserName={
+          (adminViewingRole === 'student' && adminViewingTargetId
+            ? students.find(s => s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)?.name
+            : adminViewingRole === 'tutor' && adminViewingTargetId
+              ? tutors.find(t => t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)?.realName
+              : adminViewingRole === 'parent' && adminViewingTargetId
+                ? students.find(s => s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)?.parentName
+                : null) ||
+          assignedTutorsForModal[0]?.studentName ||
+          userProfile?.displayName ||
+          'Academy Member'
+        }
+        currentUserId={adminViewingTargetId || userProfile?.uid || ''}
         defaultTutorSlug={assignedTutorsForModal[0]?.slug}
         assignedTutors={assignedTutorsForModal}
       />

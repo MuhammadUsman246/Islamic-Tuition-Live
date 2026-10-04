@@ -52,6 +52,8 @@ import {
   getLocalClassroomRecordings,
   saveLocalClassroomRecordings,
   getCanonicalRoomName,
+  getDefaultPermanentRooms,
+  saveCustomRoomPasscode,
   DEFAULT_CLASSROOM_SETTINGS
 } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
@@ -140,20 +142,23 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
     livekit_room_id: string;
     tutor_id: string;
     passcode: string;
-  }>>([]);
+  }>>(() => getDefaultPermanentRooms());
 
   const loadBackendLiveKitData = async () => {
     try {
       const res = await fetch('/api/livekit/rooms/permanent');
-      if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         if (data.rooms) {
           setPermanentRooms(data.rooms);
+          return;
         }
       }
     } catch (e) {
       console.warn('Permanent rooms fetch notice:', e);
     }
+    setPermanentRooms(getDefaultPermanentRooms());
   };
 
   // Probe server status & permanent rooms on mount
@@ -566,11 +571,12 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
                               type="button"
                               onClick={async () => {
                                 try {
+                                  saveCustomRoomPasscode(slug, newPasscodeValue);
                                   await fetch(`/api/livekit/rooms/permanent/${slug}`, {
                                     method: 'PATCH',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ passcode: newPasscodeValue })
-                                  });
+                                  }).catch(() => {});
                                   await loadBackendLiveKitData();
                                   setEditingPasscodeTutorId(null);
                                 } catch (e) {

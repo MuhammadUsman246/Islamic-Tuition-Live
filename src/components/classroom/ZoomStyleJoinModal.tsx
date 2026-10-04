@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Video, Lock, User, AlertCircle, X, Sparkles, ExternalLink, Copy, Check } from 'lucide-react';
 import { IslamicTuitionClassroom } from './IslamicTuitionClassroom';
 import { LiveKitRoomTokenResponse, UserRole } from '../../types';
+import { joinClassroomBySlugOrPasscode, getSavedCustomPasscodes } from '../../services/livekitService';
 
 export interface AssignedTutorRoomOption {
   tutorId: string;
@@ -56,11 +57,17 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
   // Fetch permanent rooms passcodes so enrolled students/parents always have their assigned tutor's current passcode
   useEffect(() => {
     if (!isOpen) return;
+    const localCustomMap = getSavedCustomPasscodes();
+    setRoomPasscodesMap(prev => ({ ...localCustomMap, ...prev }));
+
     fetch('/api/livekit/rooms/permanent')
-      .then(res => (res.ok ? res.json() : null))
+      .then(res => {
+        const ct = res.headers.get('content-type') || '';
+        return res.ok && ct.includes('application/json') ? res.json() : null;
+      })
       .then(data => {
         if (data?.rooms && Array.isArray(data.rooms)) {
-          const map: Record<string, string> = {};
+          const map: Record<string, string> = { ...localCustomMap };
           data.rooms.forEach((r: any) => {
             if (r.room_slug && r.passcode) {
               map[r.room_slug.toLowerCase()] = String(r.passcode);
@@ -96,26 +103,14 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const response = await fetch('/api/c/slug-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomSlug: meetingIdOrSlug.trim(),
-          passcode: passcode.trim(),
-          sessionUserId: currentUserId,
-          userRole: currentUserRole,
-          guestName: displayName || currentUserName,
-          admittedWaitingId: admittedId
-        })
+      const data = await joinClassroomBySlugOrPasscode({
+        roomSlug: meetingIdOrSlug.trim(),
+        passcode: passcode.trim(),
+        sessionUserId: currentUserId,
+        userRole: currentUserRole,
+        guestName: displayName || currentUserName,
+        admittedWaitingId: admittedId
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setErrorMessage(data.error || 'Failed to join classroom. Please check your Tutor ID or Passcode.');
-        setIsLoading(false);
-        return;
-      }
 
       if (data.inWaitingRoom) {
         setInWaitingRoom(true);
@@ -127,7 +122,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
 
       if (data.token) {
         setInWaitingRoom(false);
-        setTokenData(data);
+        setTokenData(data as LiveKitRoomTokenResponse);
       } else {
         setErrorMessage('Failed to issue access token');
       }
@@ -145,7 +140,8 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/livekit/waiting-room?waitingId=${encodeURIComponent(waitingId)}`);
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
           if (data.participant) {
             if (data.participant.status === 'ADMITTED') {

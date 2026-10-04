@@ -3,6 +3,7 @@ import { Lock, Radio, Clock, ShieldCheck, AlertCircle, Sparkles, UserCheck } fro
 import { IslamicTuitionClassroom } from './IslamicTuitionClassroom';
 import { LiveKitRoomTokenResponse } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { joinClassroomBySlugOrPasscode } from '../../services/livekitService';
 
 export const PermanentSlugRoute: React.FC = () => {
   const { userProfile, activeRole } = useAuth();
@@ -54,7 +55,8 @@ export const PermanentSlugRoute: React.FC = () => {
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/livekit/waiting-room?waitingId=${waitingId}`);
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
           if (data.participant) {
             if (data.participant.status === 'ADMITTED') {
@@ -82,26 +84,14 @@ export const PermanentSlugRoute: React.FC = () => {
     try {
       const codeToSubmit = enteredCode !== undefined ? enteredCode : passcode;
 
-      const response = await fetch('/api/c/slug-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomSlug: slug,
-          passcode: codeToSubmit,
-          sessionUserId: userProfile?.uid || userProfile?.tutorId || userProfile?.studentId || '',
-          userRole: activeRole || userProfile?.role || 'guest',
-          guestName: guestName || userProfile?.displayName || 'Guest Student',
-          admittedWaitingId: admittedId
-        }),
+      const data = await joinClassroomBySlugOrPasscode({
+        roomSlug: slug,
+        passcode: codeToSubmit,
+        sessionUserId: userProfile?.uid || userProfile?.tutorId || userProfile?.studentId || '',
+        userRole: activeRole || userProfile?.role || 'guest',
+        guestName: guestName || userProfile?.displayName || 'Guest Student',
+        admittedWaitingId: admittedId
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setErrorMessage(data.error || 'Access denied');
-        setIsLoading(false);
-        return;
-      }
 
       if (data.inWaitingRoom) {
         setInWaitingRoom(true);
@@ -112,7 +102,7 @@ export const PermanentSlugRoute: React.FC = () => {
       }
 
       if (data.token) {
-        setTokenData(data);
+        setTokenData(data as LiveKitRoomTokenResponse);
       } else {
         setErrorMessage('Failed to receive LiveKit token');
       }

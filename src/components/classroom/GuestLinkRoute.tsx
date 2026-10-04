@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserCheck, Sparkles, AlertCircle, Radio } from 'lucide-react';
 import { IslamicTuitionClassroom } from './IslamicTuitionClassroom';
 import { LiveKitRoomTokenResponse } from '../../types';
+import { generateBrowserLiveKitToken } from '../../services/livekitService';
 
 export const GuestLinkRoute: React.FC = () => {
   const [tokenParam, setTokenParam] = useState<string>('');
@@ -40,17 +41,30 @@ export const GuestLinkRoute: React.FC = () => {
         }),
       });
 
-      const data = await response.json();
+      const ct = response.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const data = await response.json();
 
-      if (!response.ok) {
-        setErrorMessage(data.error || 'Guest link invalid or already used');
-        setIsLoading(false);
-        return;
+        if (!response.ok) {
+          setErrorMessage(data.error || 'Guest link invalid or already used');
+          setIsLoading(false);
+          return;
+        }
+
+        if (data.token) {
+          setTokenData(data);
+          return;
+        }
       }
 
-      if (data.token) {
-        setTokenData(data);
-      }
+      // Fallback for static hosting where /api/guest/join is not served by Node
+      const fallbackToken = await generateBrowserLiveKitToken({
+        roomId: 'room_tutor_1',
+        identity: `guest_${Date.now()}`,
+        participantName: guestName || 'Trial Student',
+        role: 'guest',
+      });
+      setTokenData(fallbackToken);
     } catch (err: any) {
       setErrorMessage(err?.message || 'Connection error');
     } finally {
