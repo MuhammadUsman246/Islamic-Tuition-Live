@@ -4,25 +4,18 @@ import {
   RoomEvent,
   Track,
   ConnectionState,
-  ConnectionQuality,
   RemoteParticipant,
   Participant,
-  RemoteTrackPublication,
   RemoteTrack,
   LocalAudioTrack,
-  LocalVideoTrack,
   createLocalAudioTrack,
-  createLocalVideoTrack,
   AudioPresets,
   VideoPresets
 } from 'livekit-client';
 import {
   Mic,
   MicOff,
-  Volume2,
-  VolumeX,
   PhoneOff,
-  Radio,
   Lock,
   MessageSquare,
   Users,
@@ -30,24 +23,26 @@ import {
   ShieldCheck,
   Clock,
   Sparkles,
-  ChevronRight,
-  ChevronLeft,
   X,
   Send,
   UserCheck,
   UserX,
   Sliders,
-  Share2,
   Monitor,
   Camera,
   CameraOff,
   Play,
-  Square,
   RotateCcw,
   AlertTriangle,
   Headphones,
-  CheckCircle2,
-  Info
+  Sun,
+  Moon,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  PanelRightOpen,
+  BookOpen,
+  Volume2
 } from 'lucide-react';
 import {
   LiveKitRoomTokenResponse,
@@ -87,6 +82,112 @@ interface ParticipantInfo {
   audioLevel: number;
 }
 
+/**
+ * Creates a Studio Voice Isolation Web Audio filter graph that strips out:
+ * - Laptop fan / AC / machine rumble (< 120 Hz High-Pass Filter)
+ * - 50/60 Hz electrical hum (Notch Filter)
+ * - High-frequency static / white-noise hiss (> 6,800 Hz Low-Pass Filter)
+ * while enhancing vocal Tajweed clarity (2.4 kHz presence boost).
+ */
+function createStudioVoiceFilterTrack(
+  rawStream: MediaStream
+): { filteredTrack: MediaStreamTrack; audioCtx: AudioContext } | null {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+
+    const audioCtx: AudioContext = new AudioCtx({ sampleRate: 48000 });
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+
+    const source = audioCtx.createMediaStreamSource(rawStream);
+
+    // 1. High-Pass Filter @ 125 Hz: Cuts laptop fan, AC rumble, desk thumps
+    const highPass = audioCtx.createBiquadFilter();
+    highPass.type = 'highpass';
+    highPass.frequency.value = 125;
+    highPass.Q.value = 0.707;
+
+    // 2. Electrical Hum Notch Filter @ 60 Hz
+    const humNotch = audioCtx.createBiquadFilter();
+    humNotch.type = 'notch';
+    humNotch.frequency.value = 60;
+    humNotch.Q.value = 10;
+
+    // 3. Low-Pass Filter @ 6800 Hz: Cuts microphone static hiss & high-pitched whine
+    const lowPass = audioCtx.createBiquadFilter();
+    lowPass.type = 'lowpass';
+    lowPass.frequency.value = 6800;
+    lowPass.Q.value = 0.707;
+
+    // 4. Tajweed Speech Presence Filter @ 2400 Hz (+2 dB for crisp Arabic letters)
+    const presence = audioCtx.createBiquadFilter();
+    presence.type = 'peaking';
+    presence.frequency.value = 2400;
+    presence.Q.value = 1.0;
+    presence.gain.value = 2.0;
+
+    // 5. Gentle Broadcast Compressor (prevents clipping without boosting background silence)
+    const compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -20;
+    compressor.knee.value = 12;
+    compressor.ratio.value = 3;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.15;
+
+    const destination = audioCtx.createMediaStreamDestination();
+
+    source.connect(humNotch);
+    humNotch.connect(highPass);
+    highPass.connect(lowPass);
+    lowPass.connect(presence);
+    presence.connect(compressor);
+    compressor.connect(destination);
+
+    const filteredTrack = destination.stream.getAudioTracks()[0];
+    if (!filteredTrack) {
+      audioCtx.close().catch(() => {});
+      return null;
+    }
+
+    return { filteredTrack, audioCtx };
+  } catch (e) {
+    console.warn('Studio voice filter fallback to native track:', e);
+    return null;
+  }
+}
+
+/**
+ * Plays a warm, subtle studio connection harmonic chime when entering the classroom
+ * or when a student/tutor connects, giving a refined broadcast-studio feel.
+ */
+function playStudioConnectionChime(type: 'connect' | 'peer_join' = 'connect') {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx: AudioContext = new AudioCtx();
+    const now = ctx.currentTime;
+    const notes = type === 'connect' ? [440, 554.37, 659.25] : [523.25, 659.25];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.09);
+      gain.gain.setValueAtTime(0.001, now + idx * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.06, now + idx * 0.09 + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.09 + 0.45);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.09);
+      osc.stop(now + idx * 0.09 + 0.48);
+    });
+    setTimeout(() => {
+      if (ctx.state !== 'closed') ctx.close().catch(() => {});
+    }, 1200);
+  } catch {}
+}
+
 export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = ({
   roomName,
   tokenData,
@@ -100,11 +201,37 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const isTutor = userRole === 'tutor' || userRole === 'admin' || userRole === 'supervisor';
   const isStudent = userRole === 'student' || userRole === 'guest' || userRole === 'parent';
 
+  // Theme Mode: Default to 'dark' (Enhanced Premium High-Contrast Black) with 1-click Light/Dark toggle
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('it_classroom_theme_v2');
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch {}
+    return 'dark';
+  });
+  const isLight = themeMode === 'light';
+
+  const toggleThemeMode = () => {
+    const next = isLight ? 'dark' : 'light';
+    setThemeMode(next);
+    try {
+      localStorage.setItem('it_classroom_theme_v2', next);
+    } catch {}
+  };
+
+  // Studio Background & Machine Noise Filter (Permanently ON) & Auto-Gain Control (Permanently OFF so fan noise is never boosted)
+  const studioNoiseFilter = true;
+  const enableAutoGain = false;
+
   // LiveKit Room instance & DOM Refs
   const roomRef = useRef<Room | null>(null);
   const remoteAudioContainerRef = useRef<HTMLDivElement | null>(null);
   const screenShareVideoRef = useRef<HTMLVideoElement | null>(null);
   const studentCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const stageContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const filterAudioCtxRef = useRef<AudioContext | null>(null);
+  const rawMicStreamRef = useRef<MediaStream | null>(null);
 
   // Connection & Track States
   const [connectionStatus, setConnectionStatus] = useState<ConnectionState>(ConnectionState.Connecting);
@@ -116,6 +243,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [activeScreenShareParticipant, setActiveScreenShareParticipant] = useState<string | null>(null);
   const [activeCameraParticipant, setActiveCameraParticipant] = useState<string | null>(null);
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState<boolean>(false);
+  const [isStageFullscreen, setIsStageFullscreen] = useState<boolean>(false);
 
   // Hardware Devices
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -125,6 +253,13 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [selectedAudioOutput, setSelectedAudioOutput] = useState<string>('');
   const [selectedVideoInput, setSelectedVideoInput] = useState<string>('');
   const selectedAudioOutputRef = useRef<string>('');
+
+  // Right Sidebar: Open by default to show compact participants, student camera, and live chat without shrinking screen share
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
+  const [chatInputText, setChatInputText] = useState<string>('');
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     isAudioMutedRef.current = isAudioMuted;
@@ -145,6 +280,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, [selectedAudioOutput]);
 
+  // Auto-scroll chat to bottom when new message arrives
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, isSidebarOpen]);
+
   // 5-Second Voice Recorder Loopback Test States
   const [micTestState, setMicTestState] = useState<'idle' | 'recording' | 'recorded' | 'playing'>('idle');
   const [micTestError, setMicTestError] = useState<string | null>(null);
@@ -159,21 +299,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Participant List & State
   const [filteredParticipants, setFilteredParticipants] = useState<ParticipantInfo[]>([]);
   const [activeVisibleParticipantsCount, setActiveVisibleParticipantsCount] = useState<number>(1);
-
-  // Audio Visualizer waveform level (0 - 100)
   const [localAudioLevel, setLocalAudioLevel] = useState<number>(0);
-  const animFrameRef = useRef<number | null>(null);
 
   // Chronometer & Recording
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
   const [isEgressRecordingActive, setIsEgressRecordingActive] = useState<boolean>(false);
-
-  // Collapsible Drawer (Chat & Participants)
-  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
-  const [activeDrawerTab, setActiveDrawerTab] = useState<'chat' | 'participants'>('chat');
-  const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
-  const [chatInputText, setChatInputText] = useState<string>('');
 
   // Modals
   const [showDeviceSettingsModal, setShowDeviceSettingsModal] = useState<boolean>(false);
@@ -213,6 +344,36 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
+  // Attach and play a remote audio track reliably with zero duplicate elements and instant low-latency playback
+  const attachRemoteAudioTrack = useCallback((track: RemoteTrack, room?: Room) => {
+    if (track.kind !== Track.Kind.Audio || !remoteAudioContainerRef.current) return;
+
+    const trackId = track.sid || `audio_${Math.random()}`;
+    const existing = remoteAudioContainerRef.current.querySelector(`audio[data-track-sid="${trackId}"]`);
+    if (existing) return;
+
+    const audioEl = track.attach() as HTMLAudioElement;
+    audioEl.setAttribute('data-track-sid', trackId);
+    audioEl.autoplay = true;
+    (audioEl as any).playsInline = true;
+    audioEl.volume = 1.0;
+
+    if (selectedAudioOutputRef.current && (audioEl as any).setSinkId) {
+      (audioEl as any).setSinkId(selectedAudioOutputRef.current).catch(() => {});
+    }
+
+    remoteAudioContainerRef.current.appendChild(audioEl);
+
+    const playPromise = audioEl.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {
+        if (room && !room.canPlaybackAudio) {
+          setAudioPlaybackBlocked(true);
+        }
+      });
+    }
+  }, []);
+
   // Synchronize visible participants list excluding hidden admins
   const syncParticipantsState = useCallback((room: Room) => {
     const visibleList: ParticipantInfo[] = [];
@@ -228,6 +389,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       const localHasCam = Boolean(camPub?.track && !camPub.isMuted);
       setIsScreenSharing(localHasScreen);
       setIsCameraActive(localHasCam);
+      setLocalAudioLevel(Math.min(100, Math.round((room.localParticipant.audioLevel || 0) * 100)));
 
       if (!isHidden) {
         visibleList.push({
@@ -248,6 +410,13 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     let foundScreenShare: string | null = null;
     let foundCameraShare: string | null = null;
     room.remoteParticipants.forEach((p) => {
+      // Ensure any already-published remote audio tracks are attached immediately
+      p.audioTrackPublications.forEach((pub) => {
+        if (pub.track && pub.isSubscribed) {
+          attachRemoteAudioTrack(pub.track as RemoteTrack, room);
+        }
+      });
+
       if (!isParticipantHiddenAdmin(p)) {
         let pRole = 'Student';
         try {
@@ -289,14 +458,13 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     setFilteredParticipants(visibleList);
     setActiveVisibleParticipantsCount(visibleList.length);
 
-    // Trigger chronometer & automated recording status when active visible count >= 2
     if (visibleList.length >= 2) {
       setIsTimerRunning(true);
       if (settings?.recordingEnabled) {
         setIsEgressRecordingActive(true);
       }
     }
-  }, [participantName, userRole, settings?.recordingEnabled]);
+  }, [participantName, userRole, settings?.recordingEnabled, attachRemoteAudioTrack]);
 
   // Attach active Screen Share & Student Camera video tracks whenever video state or participants change
   useEffect(() => {
@@ -323,7 +491,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       }
     }
 
-    // 2. Attach Student Camera Video Track (Remote or Local)
+    // 2. Attach Student Camera Video Track (Remote or Local) inside compact sidebar
     if (studentCameraVideoRef.current) {
       let camTrack: Track | undefined;
       room.remoteParticipants.forEach((p) => {
@@ -342,7 +510,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         camTrack.attach(studentCameraVideoRef.current);
       }
     }
-  }, [isScreenSharing, activeScreenShareParticipant, isCameraActive, activeCameraParticipant, filteredParticipants]);
+  }, [isScreenSharing, activeScreenShareParticipant, isCameraActive, activeCameraParticipant, filteredParticipants, isSidebarOpen]);
 
   // Load hardware audio & video devices
   useEffect(() => {
@@ -366,6 +534,81 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
     loadDevices();
   }, [selectedAudioInput, selectedAudioOutput, selectedVideoInput]);
+
+  // Helper to capture and publish clean, studio-filtered microphone track
+  const publishCleanMicrophoneTrack = useCallback(async (
+    room: Room,
+    deviceId?: string,
+    useNoiseFilter = studioNoiseFilter,
+    useAutoGain = enableAutoGain
+  ) => {
+    try {
+      // Unpublish existing mic track if switching
+      const existingPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      if (existingPub?.track) {
+        await room.localParticipant.unpublishTrack(existingPub.track);
+      }
+      if (filterAudioCtxRef.current && filterAudioCtxRef.current.state !== 'closed') {
+        filterAudioCtxRef.current.close().catch(() => {});
+        filterAudioCtxRef.current = null;
+      }
+      if (rawMicStreamRef.current) {
+        rawMicStreamRef.current.getTracks().forEach(t => t.stop());
+        rawMicStreamRef.current = null;
+      }
+
+      const audioConstraints: MediaTrackConstraints = {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: useAutoGain,
+        channelCount: 1,
+        sampleRate: 48000,
+        ...({
+          voiceIsolation: true,
+          googEchoCancellation: true,
+          googNoiseSuppression: true,
+          googHighpassFilter: true,
+          googAutoGainControl: useAutoGain,
+          latency: 0.01,
+        } as any),
+      };
+
+      let micTrack: LocalAudioTrack;
+
+      if (useNoiseFilter && navigator.mediaDevices?.getUserMedia) {
+        const rawStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+        rawMicStreamRef.current = rawStream;
+        const filterRes = createStudioVoiceFilterTrack(rawStream);
+        if (filterRes) {
+          filterAudioCtxRef.current = filterRes.audioCtx;
+          micTrack = new LocalAudioTrack(filterRes.filteredTrack, audioConstraints, false);
+        } else {
+          micTrack = await createLocalAudioTrack(audioConstraints);
+        }
+      } else {
+        micTrack = await createLocalAudioTrack(audioConstraints);
+      }
+
+      if (isAudioMutedRef.current) {
+        await micTrack.mute();
+      }
+
+      await room.localParticipant.publishTrack(micTrack, {
+        source: Track.Source.Microphone,
+        dtx: false, // Continuous speech stream: prevents first-syllable clipping & delayed audio
+        red: true,  // Redundant audio frames: prevents voice breaking on unstable Wi-Fi / 4G
+        audioPreset: {
+          maxBitrate: 48_000,
+          priority: 'high',
+        },
+      });
+
+      syncParticipantsState(room);
+    } catch (e) {
+      console.warn('Mic publish notice:', e);
+    }
+  }, [studioNoiseFilter, enableAutoGain, syncParticipantsState]);
 
   // Poll Tutor Waiting Room Intercept Queue if user is Tutor
   useEffect(() => {
@@ -397,7 +640,6 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Connect to LiveKit Room (Stable lifecycle - never disconnects on mute/unmute or device switch)
   useEffect(() => {
     let isCancelled = false;
-    let activeAudioCtx: AudioContext | null = null;
 
     async function initClassroom() {
       try {
@@ -417,7 +659,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           return;
         }
 
-        const room = createOptimizedLiveKitRoom();
+        const room = createOptimizedLiveKitRoom(enableAutoGain);
         roomRef.current = room;
 
         room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
@@ -428,11 +670,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         room.on(RoomEvent.Connected, () => {
           if (isCancelled) return;
           setConnectionStatus(ConnectionState.Connected);
+          playStudioConnectionChime('connect');
+          room.startAudio().catch(() => {});
           syncParticipantsState(room);
         });
 
         room.on(RoomEvent.ParticipantConnected, () => {
           if (isCancelled) return;
+          playStudioConnectionChime('peer_join');
           syncParticipantsState(room);
         });
 
@@ -473,13 +718,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
           if (isCancelled) return;
-          if (track.kind === Track.Kind.Audio && remoteAudioContainerRef.current) {
-            const audioEl = track.attach();
-            audioEl.autoplay = true;
-            if (selectedAudioOutputRef.current && (audioEl as any).setSinkId) {
-              (audioEl as any).setSinkId(selectedAudioOutputRef.current).catch(() => {});
-            }
-            remoteAudioContainerRef.current.appendChild(audioEl);
+          if (track.kind === Track.Kind.Audio) {
+            attachRemoteAudioTrack(track, room);
           }
           syncParticipantsState(room);
         });
@@ -505,6 +745,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 text: msgObj.text,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               }]);
+              // Automatically open sidebar when a chat message arrives so no one misses it
+              setIsSidebarOpen(true);
+              setUnreadChatCount(prev => prev + 1);
             }
           } catch (e) {
             console.warn('Data channel parse notice:', e);
@@ -515,69 +758,27 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           autoSubscribe: true,
         });
 
-        if (!room.canPlaybackAudio) {
-          setAudioPlaybackBlocked(true);
-        }
-
-        // Capture local microphone with high-definition noise cancellation
-        try {
-          const micTrack = await createLocalAudioTrack({
-            deviceId: selectedAudioInput || undefined,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1,
-            sampleRate: 48000,
-            sampleSize: 16,
-          });
-
-          if (initialMuted) {
-            await micTrack.mute();
-            setIsAudioMuted(true);
-            isAudioMutedRef.current = true;
+        // Start audio playback immediately upon connection
+        room.startAudio().catch(() => {
+          if (!room.canPlaybackAudio) {
+            setAudioPlaybackBlocked(true);
           }
+        });
 
-          await room.localParticipant.publishTrack(micTrack, {
-            dtx: true, // Cuts background noise when participant is silent
-            audioPreset: AudioPresets.speech,
-            red: true, // Redundant Audio Data for zero packet loss
-          });
+        // Publish local microphone with Studio Voice Filter (unless hidden observer)
+        let isHiddenObserver = false;
+        try {
+          if (room.localParticipant.metadata) {
+            const meta = JSON.parse(room.localParticipant.metadata);
+            isHiddenObserver = Boolean(meta.hidden);
+          }
+        } catch {}
 
-          syncParticipantsState(room);
-
-          // Measure local volume level for waveform (throttled to ~5Hz to prevent 60fps React re-render storm)
-          const trackStream = new MediaStream([micTrack.mediaStreamTrack]);
-          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-          const audioCtx = new AudioCtx();
-          activeAudioCtx = audioCtx;
-          const analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 64;
-          const source = audioCtx.createMediaStreamSource(trackStream);
-          source.connect(analyser);
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          let lastWaveformUpdateMs = 0;
-          let lastReportedLevel = -1;
-          const updateWaveform = (nowMs: number) => {
-            if (isCancelled) return;
-            if (nowMs - lastWaveformUpdateMs >= 200) {
-              lastWaveformUpdateMs = nowMs;
-              analyser.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-              const avg = sum / dataArray.length;
-              const nextLevel = Math.min(100, Math.round((avg / 128) * 100));
-              if (Math.abs(nextLevel - lastReportedLevel) >= 3 || (nextLevel === 0 && lastReportedLevel !== 0)) {
-                lastReportedLevel = nextLevel;
-                setLocalAudioLevel(nextLevel);
-              }
-            }
-            animFrameRef.current = requestAnimationFrame(updateWaveform);
-          };
-          animFrameRef.current = requestAnimationFrame(updateWaveform);
-        } catch (e) {
-          console.warn('Mic auto-publish notice:', e);
+        if (!isHiddenObserver) {
+          await publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain);
         }
+
+        syncParticipantsState(room);
 
         // Send initial presence heartbeat
         fetch('/api/livekit/rooms/heartbeat', {
@@ -606,8 +807,6 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         if (!isCancelled) {
           console.warn('[LiveKit Connect Notice]:', err);
           setConnectionStatus(ConnectionState.Connected);
-          setActiveVisibleParticipantsCount(2);
-          setIsTimerRunning(true);
         }
       }
     }
@@ -642,11 +841,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     return () => {
       isCancelled = true;
       clearInterval(heartbeatInterval);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (activeAudioCtx && activeAudioCtx.state !== 'closed') {
-        activeAudioCtx.close().catch(() => {});
+      if (filterAudioCtxRef.current && filterAudioCtxRef.current.state !== 'closed') {
+        filterAudioCtxRef.current.close().catch(() => {});
+        filterAudioCtxRef.current = null;
       }
-      
+      if (rawMicStreamRef.current) {
+        rawMicStreamRef.current.getTracks().forEach(t => t.stop());
+        rawMicStreamRef.current = null;
+      }
+
       // Send leave notification
       fetch('/api/livekit/rooms/leave', {
         method: 'POST',
@@ -663,15 +866,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     };
   }, [tokenData.token, tokenData.serverUrl, tokenData.isMockSession, roomName]);
 
-  // Switch active microphone device on the fly without disconnecting room
+  // Switch active microphone device on the fly without disconnecting room (Noise Filter permanently active)
   const handleSelectAudioInput = async (deviceId: string) => {
     setSelectedAudioInput(deviceId);
     if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
-      try {
-        await roomRef.current.switchActiveDevice('audioinput', deviceId);
-      } catch (e) {
-        console.warn('Audio input switch notice:', e);
-      }
+      await publishCleanMicrophoneTrack(roomRef.current, deviceId, true, false);
     }
   };
 
@@ -705,12 +904,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           syncParticipantsState(roomRef.current);
           return;
         } else {
-          // If microphone was not yet published, publish it now
-          await roomRef.current.localParticipant.setMicrophoneEnabled(isAudioMuted);
-          const nextMuted = !isAudioMuted;
-          setIsAudioMuted(nextMuted);
-          isAudioMutedRef.current = nextMuted;
-          syncParticipantsState(roomRef.current);
+          setIsAudioMuted(false);
+          isAudioMutedRef.current = false;
+          await publishCleanMicrophoneTrack(roomRef.current, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain);
           return;
         }
       }
@@ -728,7 +924,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  // Control 2: Share Screen (With System Audio Shared Automatically)
+  // Control 2: Share Screen (Optimized for Full HD Quran Mushaf without audio feedback loopback)
   const handleToggleScreenShare = async () => {
     try {
       if (isScreenSharing) {
@@ -744,8 +940,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           await roomRef.current.localParticipant.setScreenShareEnabled(
             true,
             {
-              audio: true,
-              selfBrowserSurface: 'include',
+              // Keep system audio off by default so student voice playing on tutor speakers never echoes back into the room!
+              audio: false,
+              selfBrowserSurface: 'exclude',
               contentHint: 'detail',
               resolution: {
                 width: 1920,
@@ -755,12 +952,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             },
             {
               simulcast: true,
-              degradationPreference: 'balanced',
+              degradationPreference: 'maintain-resolution',
               screenShareSimulcastLayers: [
                 VideoPresets.h720,
               ],
               screenShareEncoding: {
-                maxBitrate: 800_000,
+                maxBitrate: 850_000,
                 maxFramerate: 10,
                 priority: 'medium',
               },
@@ -768,7 +965,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           );
           setIsScreenSharing(true);
         } else if (navigator.mediaDevices?.getDisplayMedia) {
-          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
           setIsScreenSharing(true);
           setTimeout(() => {
             if (screenShareVideoRef.current) {
@@ -784,9 +981,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  // Student Camera Toggle (Allowed for Students, Strictly Blocked for Tutors)
+  // Student Camera Toggle (Allowed for Students at compact 480p in sidebar, Strictly Blocked for Tutors)
   const executeToggleCamera = async (enable: boolean) => {
-    if (!isStudent) return; // Tutors do NOT have camera option (Islamic Tuition privacy)
+    if (!isStudent) return;
 
     try {
       if (!enable) {
@@ -798,6 +995,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         }
         setIsCameraActive(false);
       } else {
+        setIsSidebarOpen(true); // Ensure sidebar is visible so compact camera view appears in sidebar
         if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
           await roomRef.current.localParticipant.setCameraEnabled(
             true,
@@ -841,15 +1039,23 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const handleToggleCamera = () => {
     if (!isStudent) return;
     if (isCameraActive) {
-      // Direct turn off
       executeToggleCamera(false);
     } else {
-      // Require explicit confirmation to prevent accidental camera activation
       setShowCameraConfirmModal(true);
     }
   };
 
-  // 5-Second Voice Recorder & Playback Loopback Test
+  // Toggle Fullscreen on the Quran Screen-Share Stage
+  const handleToggleStageFullscreen = () => {
+    if (!stageContainerRef.current) return;
+    if (!document.fullscreenElement) {
+      stageContainerRef.current.requestFullscreen().then(() => setIsStageFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsStageFullscreen(false)).catch(() => {});
+    }
+  };
+
+  // 5-Second Voice Recorder & Playback Loopback Test (With Studio Noise Filter applied!)
   const handleStart5SecMicTest = async () => {
     try {
       setMicTestError(null);
@@ -858,16 +1064,23 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       setRecordedAudioUrl(null);
       testAudioChunksRef.current = [];
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true
+      const rawStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: enableAutoGain,
+        }
       });
 
-      // Local test audio level analyser
+      const filterRes = studioNoiseFilter ? createStudioVoiceFilterTrack(rawStream) : null;
+      const streamToRecord = filterRes ? new MediaStream([filterRes.filteredTrack]) : rawStream;
+
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioCtx();
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 64;
-      const source = audioCtx.createMediaStreamSource(stream);
+      const source = audioCtx.createMediaStreamSource(streamToRecord);
       source.connect(analyser);
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -880,7 +1093,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       };
       updateTestWaveform();
 
-      const mediaRecorder = new MediaRecorder(stream);
+      const mediaRecorder = new MediaRecorder(streamToRecord);
       testMediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (e) => {
@@ -891,12 +1104,31 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       mediaRecorder.onstop = () => {
         if (testAnimFrameRef.current) cancelAnimationFrame(testAnimFrameRef.current);
-        stream.getTracks().forEach(t => t.stop());
+        rawStream.getTracks().forEach(t => t.stop());
+        if (filterRes?.audioCtx && filterRes.audioCtx.state !== 'closed') {
+          filterRes.audioCtx.close().catch(() => {});
+        }
+        if (audioCtx.state !== 'closed') {
+          audioCtx.close().catch(() => {});
+        }
 
         const audioBlob = new Blob(testAudioChunksRef.current, { type: 'audio/webm' });
         const audioUrl = URL.createObjectURL(audioBlob);
         setRecordedAudioUrl(audioUrl);
-        setMicTestState('recorded');
+
+        // Automatically play back the 5-second voice sample immediately so the user doesn't have to click Play
+        const autoAudio = new Audio(audioUrl);
+        testAudioPlayerRef.current = autoAudio;
+        if (selectedAudioOutputRef.current && (autoAudio as any).setSinkId) {
+          (autoAudio as any).setSinkId(selectedAudioOutputRef.current).catch(() => {});
+        }
+        setMicTestState('playing');
+        autoAudio.play().catch(() => {
+          setMicTestState('recorded');
+        });
+        autoAudio.onended = () => {
+          setMicTestState('recorded');
+        };
       };
 
       mediaRecorder.start();
@@ -956,6 +1188,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     };
 
     setChatMessages(prev => [...prev, newMsg]);
+    setIsSidebarOpen(true);
 
     if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
       const payload = new TextEncoder().encode(JSON.stringify({
@@ -968,6 +1201,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
 
     setChatInputText('');
+  };
+
+  // Open Chat in Sidebar when clicking Chat button at bottom
+  const handleOpenChatInSidebar = () => {
+    setIsSidebarOpen(true);
+    setUnreadChatCount(0);
+    setTimeout(() => {
+      chatInputRef.current?.focus();
+    }, 100);
   };
 
   // Tutor Admit / Reject Intercept Actions
@@ -987,15 +1229,45 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
+  const hasActiveScreenShare = Boolean(isScreenSharing || activeScreenShareParticipant);
+  const hasActiveStudentCamera = Boolean(isCameraActive || activeCameraParticipant);
+
   return (
-    <div className={`relative flex flex-col h-full min-h-[600px] bg-[#0A110D] text-white rounded-2xl overflow-hidden border border-[#18291F] shadow-2xl ${className}`}>
-      {/* Dedicated Multi-Track Audio Container for Remote Participants & Screen Share Audio */}
+    <div
+      className={`relative flex flex-col h-full min-h-[600px] rounded-2xl overflow-hidden border shadow-[0_25px_70px_rgba(0,0,0,0.85)] transition-colors duration-200 ${
+        isLight
+          ? 'bg-[#F6F4EE] text-[#14231B] border-[#D5CFC2]'
+          : 'bg-[#050806] text-[#F8FAFC] border-[#1F3A2C]'
+      } ${className}`}
+    >
+      {/* Dedicated Multi-Track Audio Container for Remote Participants */}
       <div ref={remoteAudioContainerRef} className="hidden" />
+
+      {/* Smooth Studio Connecting Overlay when establishing encrypted WebRTC session */}
+      {connectionStatus === ConnectionState.Connecting && (
+        <div className="absolute inset-0 z-40 bg-[#050806]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-200">
+          <div className="relative w-16 h-16 flex items-center justify-center mb-4">
+            <div className="absolute inset-0 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 animate-ping" />
+            <div className="relative w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/30 to-emerald-900/40 border border-emerald-400/50 flex items-center justify-center text-emerald-300 shadow-lg">
+              <BookOpen className="w-7 h-7" />
+            </div>
+          </div>
+          <h3 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
+            Connecting to Islamic Tuition Classroom...
+          </h3>
+          <p className="text-xs text-emerald-300/90 mt-1 font-medium">
+            Initializing Studio Voice Isolation & Low-Latency HD Stream
+          </p>
+        </div>
+      )}
 
       {/* Browser Autoplay Audio Unlocker Banner if needed */}
       {audioPlaybackBlocked && (
-        <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-between z-30">
-          <span>Your browser paused classroom speaker audio. Click to enable live audio playback:</span>
+        <div className="bg-amber-500 text-slate-950 px-4 py-1.5 text-xs font-bold flex items-center justify-between z-30 shrink-0">
+          <span className="flex items-center space-x-1.5">
+            <Volume2 className="w-4 h-4" />
+            <span>Your browser paused classroom speaker audio. Click to enable live voice playback:</span>
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -1008,289 +1280,415 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       )}
 
-      {/* TOP BAR & STATUS */}
-      <header className="px-5 py-3 bg-[#0F1A14] border-b border-[#1A2E22] flex items-center justify-between gap-4 z-20">
-        <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-            <Radio className="w-5 h-5 animate-pulse" />
+      {/* ULTRA-SLIM TOP HEADER BAR (Maximizes vertical space for Quran Screen Share) */}
+      <header
+        className={`px-3.5 py-2 border-b flex items-center justify-between gap-2 z-20 shrink-0 ${
+          isLight
+            ? 'bg-white border-[#DFDBD0] text-[#14231B]'
+            : 'bg-[#0B130E] border-[#223D2E] text-white'
+        }`}
+      >
+        {/* Left: Simple & Clean Islamic Tuition Classroom Brand */}
+        <div className="flex items-center space-x-2.5 min-w-0">
+          <div
+            className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+              isLight
+                ? 'bg-[#E8F5EE] border-[#B8DFC8] text-[#1E5C3D]'
+                : 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 shadow-xs'
+            }`}
+          >
+            <BookOpen className="w-4 h-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center space-x-2">
-              <h2 className="text-sm font-bold text-white tracking-tight">1-on-1 Virtual Classroom</h2>
-              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
-                <Lock className="w-3 h-3 text-emerald-400" />
-                <span>Encrypted</span>
+              <h2 className="text-xs sm:text-sm font-extrabold tracking-tight truncate">
+                Islamic Tuition Classroom
+              </h2>
+              <span
+                className={`hidden sm:inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  connectionStatus === ConnectionState.Connected
+                    ? isLight
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+                      : 'bg-emerald-500/20 border border-emerald-400/40 text-emerald-300'
+                    : 'bg-amber-500/20 border border-amber-400/40 text-amber-300'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus === ConnectionState.Connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                <span>{connectionStatus === ConnectionState.Connected ? 'Live HD' : 'Connecting'}</span>
               </span>
             </div>
-            <p className="text-xs text-[#8AA393] font-mono">
-              Room: {roomName} • Role: {userRole.toUpperCase()}
+            <p className={`text-[10px] font-mono truncate ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
+              Room: {roomName} · {userRole.toUpperCase()}
             </p>
           </div>
         </div>
 
-        {/* DATA METRICS */}
-        <div className="flex items-center space-x-3">
+        {/* Right: Timer, Light/Dark Toggle, Settings Button & Sidebar Toggle */}
+        <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
           {/* Recording Indicator */}
           {isEgressRecordingActive && settings?.recordingEnabled && (
-            <div className="flex items-center space-x-2 px-3 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold animate-pulse">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+            <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[11px] font-bold animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
               <span>REC</span>
             </div>
           )}
 
           {/* Chronometer */}
-          <div className="flex items-center space-x-2 px-3 py-1 rounded-full bg-black/40 border border-white/10 text-xs font-mono font-bold text-white">
+          <div
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-bold ${
+              isLight
+                ? 'bg-[#FAF9F5] border-[#D5D0C6] text-[#14231B]'
+                : 'bg-[#121F17] border-[#274635] text-white'
+            }`}
+          >
             <Clock className="w-3.5 h-3.5 text-amber-400" />
             <span>{formatChronometerTime(elapsedSeconds)}</span>
           </div>
 
-          {/* Drawer Toggle */}
+          {/* Light / Dark Mode Toggle */}
           <button
             type="button"
-            onClick={() => setIsDrawerOpen(prev => !prev)}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white cursor-pointer transition-colors relative"
-            title="Open Chat & Attendees Drawer"
+            onClick={toggleThemeMode}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center space-x-1 cursor-pointer transition-colors ${
+              isLight
+                ? 'bg-[#FAF9F5] hover:bg-gray-100 border-[#D5D0C6] text-[#14231B]'
+                : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-amber-300'
+            }`}
+            title={isLight ? 'Switch Classroom to Dark Mode' : 'Switch Classroom to Light Mode'}
           >
-            <MessageSquare className="w-4 h-4 text-emerald-400" />
-            {chatMessages.length > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 text-[10px] font-bold text-slate-950 flex items-center justify-center">
-                {chatMessages.length}
-              </span>
+            {isLight ? (
+              <>
+                <Moon className="w-3.5 h-3.5 text-slate-700" />
+                <span className="hidden sm:inline">Dark</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Light</span>
+              </>
             )}
+          </button>
+
+          {/* Settings Button */}
+          <button
+            type="button"
+            onClick={() => setShowDeviceSettingsModal(true)}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-colors ${
+              isLight
+                ? 'bg-[#FAF9F5] hover:bg-emerald-50 border-[#D5D0C6] text-[#1E5C3D]'
+                : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-emerald-300'
+            }`}
+            title="Audio, Microphone & Speaker Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
+
+          {/* Toggle Compact Right Sidebar */}
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(prev => !prev)}
+            className={`p-1.5 rounded-lg border cursor-pointer transition-colors ${
+              isLight
+                ? 'bg-[#FAF9F5] hover:bg-gray-100 border-[#D5D0C6] text-[#14231B]'
+                : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-white'
+            }`}
+            title={isSidebarOpen ? 'Hide Sidebar (Maximize Quran Screen)' : 'Show Participants & Chat Sidebar'}
+          >
+            {isSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
           </button>
         </div>
       </header>
 
-      {/* MAIN STAGE / WORKSPACE */}
-      <div className="relative flex-1 flex overflow-hidden bg-gradient-to-b from-[#080E0B] to-[#0D1712]">
-        <main className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6 space-y-6 overflow-y-auto">
-          
-          {/* Active Screen Share Stage if Screen Share is Active */}
-          {(isScreenSharing || activeScreenShareParticipant) ? (
-            <div className="w-full max-w-4xl bg-black rounded-2xl border border-emerald-500/40 p-2 shadow-2xl space-y-2">
-              <div className="flex items-center justify-between px-2 text-xs font-bold text-emerald-400">
-                <span className="flex items-center space-x-1.5">
-                  <Monitor className="w-4 h-4" />
-                  <span>{isScreenSharing ? 'Your Screen Share (Quran / Lesson Material)' : `Screen Share from ${activeScreenShareParticipant}`}</span>
+      {/* MAIN WORKSPACE: PRIMARY QURAN SCREEN-SHARE STAGE (LEFT/CENTER) + COMPACT SIDEBAR (RIGHT) */}
+      <div className="relative flex-1 flex overflow-hidden min-h-0">
+        {/* PRIMARY CENTER STAGE: Dedicated to Quran Screen Share */}
+        <main
+          ref={stageContainerRef}
+          className={`flex-1 flex flex-col min-w-0 min-h-0 p-1.5 sm:p-2.5 overflow-hidden ${
+            isLight ? 'bg-[#ECE9DF]' : 'bg-[#040705]'
+          }`}
+        >
+          {hasActiveScreenShare ? (
+            /* FULL-HEIGHT, FULL-WIDTH QURAN LESSON SCREEN SHARE */
+            <div
+              className={`relative flex-1 w-full h-full rounded-xl overflow-hidden border flex flex-col shadow-lg ${
+                isLight ? 'bg-[#111613] border-[#C9C3B6]' : 'bg-black border-emerald-500/50'
+              }`}
+            >
+              {/* Ultra-compact floating top overlay bar on screen share */}
+              <div className="absolute top-2 left-2 right-2 flex items-center justify-between px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-xs text-white text-[11px] font-semibold z-10 pointer-events-auto border border-white/10">
+                <span className="flex items-center space-x-1.5 truncate">
+                  <Monitor className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate">
+                    {isScreenSharing
+                      ? 'Sharing Your Quran / Lesson Screen (Full HD)'
+                      : `Quran / Lesson Screen Shared by ${activeScreenShareParticipant}`}
+                  </span>
                 </span>
-                <span className="text-[10px] text-white/70 font-mono">Real-time WebRTC Stream</span>
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleToggleStageFullscreen}
+                    className="px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white flex items-center space-x-1 cursor-pointer text-[10px]"
+                    title="Toggle Fullscreen Quran View"
+                  >
+                    {isStageFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                    <span>{isStageFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+                  </button>
+                </div>
               </div>
-              <div className="relative aspect-video bg-black/80 rounded-xl overflow-hidden flex items-center justify-center">
-                <video ref={screenShareVideoRef} autoPlay playsInline muted={isScreenSharing} className="w-full h-full object-contain" />
+
+              <video
+                ref={screenShareVideoRef}
+                autoPlay
+                playsInline
+                muted={isScreenSharing}
+                className="w-full h-full flex-1 object-contain"
+              />
+            </div>
+          ) : (
+            /* CLEAN QURAN CLASSROOM STAGE WHEN SCREEN SHARE IS NOT YET ACTIVE */
+            <div
+              className={`flex-1 w-full h-full rounded-xl border flex flex-col items-center justify-center p-6 text-center transition-colors ${
+                isLight
+                  ? 'bg-white border-[#DFDBD0] shadow-xs'
+                  : 'bg-gradient-to-b from-[#0D1812] to-[#08100C] border-[#233F2F] shadow-inner'
+              }`}
+            >
+              <div
+                className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3 border ${
+                  isLight
+                    ? 'bg-[#E8F5EE] border-[#B8DFC8] text-[#1E5C3D]'
+                    : 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 shadow-md'
+                }`}
+              >
+                <BookOpen className="w-7 h-7" />
               </div>
-            </div>
-          ) : null}
 
-          {/* AUDIO BRIDGE & PARTICIPANTS CONTAINER */}
-          <div className="w-full max-w-2xl bg-[#0F1B15] border border-[#1D3327] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 text-center">
-            <div className="flex items-center justify-between text-xs text-emerald-400/80 uppercase tracking-widest font-mono border-b border-white/10 pb-3">
-              <span className="flex items-center space-x-1.5">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>Live Audio Studio Bridge</span>
-              </span>
-              <span className="text-[10px] text-white/60">
-                {activeVisibleParticipantsCount} Active in Class
-              </span>
-            </div>
+              <h3 className={`text-base sm:text-lg font-extrabold tracking-tight ${isLight ? 'text-[#14231B]' : 'text-white'}`}>
+                Islamic Tuition Classroom
+              </h3>
+              <p className={`text-xs max-w-md mt-1 leading-relaxed ${isLight ? 'text-[#4A5B51]' : 'text-[#B8CEC1]'}`}>
+                {isTutor
+                  ? 'Click "Share Screen" below to display the Quran Mushaf, Qaida PDF, or lesson in full size for your student.'
+                  : 'Connected to live classroom audio. When your tutor shares the Quran Mushaf or lesson screen, it will fill this entire board automatically.'}
+              </p>
 
-            {/* Fluid Audio Waveform Component driven natively by volume level */}
-            <div className="flex items-center justify-center space-x-1.5 h-16 py-2">
-              {[0.4, 0.7, 0.3, 0.9, 0.5, 1.0, 0.6, 0.8, 0.4, 0.9, 0.3, 0.7].map((heightFactor, i) => {
-                const dynamicHeight = Math.max(10, Math.round((localAudioLevel / 100) * 56 * heightFactor));
-                return (
-                  <div
-                    key={i}
-                    className={`w-2.5 rounded-full transition-all duration-75 ${
-                      !isAudioMuted && localAudioLevel > 10
-                        ? 'bg-gradient-to-t from-emerald-600 to-emerald-400 shadow-md shadow-emerald-500/20'
-                        : 'bg-emerald-950 border border-emerald-800/40'
-                    }`}
-                    style={{ height: `${dynamicHeight}px` }}
-                  />
-                );
-              })}
-            </div>
+              {/* Compact Live Voice Activity Visualizer */}
+              <div className="flex items-center justify-center space-x-1 h-10 my-4">
+                {[0.4, 0.7, 0.5, 0.9, 0.6, 1.0, 0.7, 0.8, 0.5, 0.9, 0.4, 0.7].map((factor, i) => {
+                  const anySpeaking = filteredParticipants.some(p => p.isSpeaking && !p.isMuted);
+                  const activeLevel = anySpeaking ? Math.max(35, localAudioLevel) : localAudioLevel;
+                  const h = Math.max(6, Math.round((activeLevel / 100) * 36 * factor));
+                  return (
+                    <div
+                      key={i}
+                      className={`w-2 rounded-full transition-all duration-100 ${
+                        !isAudioMuted && activeLevel > 8
+                          ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]'
+                          : isLight
+                            ? 'bg-[#DFDBD0]'
+                            : 'bg-[#1D3527]'
+                      }`}
+                      style={{ height: `${h}px` }}
+                    />
+                  );
+                })}
+              </div>
 
-            {/* Participants Cards with Live Mic Status, Mute Indicator & Volume Bars */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-              {filteredParticipants.map((p) => (
-                <div
-                  key={p.id}
-                  className={`p-4 rounded-xl border transition-all text-left ${
-                    p.isSpeaking && !p.isMuted
-                      ? 'bg-emerald-500/15 border-emerald-500/60 ring-2 ring-emerald-500/30 shadow-lg'
-                      : 'bg-black/30 border-white/10'
-                  }`}
+              {!isStudent && (
+                <button
+                  type="button"
+                  onClick={handleToggleScreenShare}
+                  className="mt-1 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center space-x-2 shadow-lg cursor-pointer transition-all"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-[#8AA393] uppercase tracking-wider">{p.role}</span>
-                    
-                    {/* Live Mic Status Indicator */}
-                    <div className="flex items-center space-x-1.5">
+                  <Monitor className="w-4 h-4" />
+                  <span>Share Quran / Lesson Screen Now</span>
+                </button>
+              )}
+            </div>
+          )}
+        </main>
+
+        {/* COMPACT RIGHT SIDEBAR: Small Participants Strip + Compact Student Video + Live Chat */}
+        {isSidebarOpen && (
+          <aside
+            className={`w-64 sm:w-72 shrink-0 flex flex-col border-l z-20 transition-colors ${
+              isLight
+                ? 'bg-white border-[#DFDBD0] text-[#14231B]'
+                : 'bg-[#09100C] border-[#223D2E] text-white'
+            }`}
+          >
+            {/* 1. COMPACT PARTICIPANTS SECTION (Top of Sidebar) */}
+            <div className={`p-2.5 border-b ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className={`text-[10px] font-bold uppercase tracking-wider flex items-center space-x-1 ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
+                  <Users className="w-3 h-3 text-emerald-400" />
+                  <span>In Class ({activeVisibleParticipantsCount})</span>
+                </span>
+                <span className="text-[10px] font-bold text-emerald-400">
+                  Studio HD Audio
+                </span>
+              </div>
+
+              <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                {filteredParticipants.map((p) => (
+                  <div
+                    key={p.id}
+                    className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between text-xs transition-all ${
+                      p.isSpeaking && !p.isMuted
+                        ? isLight
+                          ? 'bg-emerald-50 border-emerald-400 shadow-2xs'
+                          : 'bg-emerald-950/90 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                        : isLight
+                          ? 'bg-white border-[#DFDBD0]'
+                          : 'bg-[#121F17] border-[#264232]'
+                    }`}
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="font-bold truncate text-[11px] leading-tight">{p.name}</div>
+                      <div className={`text-[9px] uppercase font-bold tracking-wider ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}>
+                        {p.role} {p.isScreenSharing ? '· Sharing' : ''}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1 shrink-0">
                       {p.isMuted ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center space-x-1">
-                          <MicOff className="w-3 h-3 text-rose-400" />
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center space-x-0.5">
+                          <MicOff className="w-2.5 h-2.5" />
                           <span>Muted</span>
                         </span>
                       ) : !p.hasAudioTrack ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center space-x-1">
-                          <AlertTriangle className="w-3 h-3 text-amber-400" />
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center space-x-0.5">
+                          <AlertTriangle className="w-2.5 h-2.5" />
                           <span>No Mic</span>
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center space-x-1">
-                          <Mic className={`w-3 h-3 ${p.isSpeaking ? 'text-emerald-400 animate-pulse' : 'text-emerald-300'}`} />
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center space-x-0.5">
+                          <Mic className={`w-2.5 h-2.5 ${p.isSpeaking ? 'animate-pulse text-emerald-300' : ''}`} />
                           <span>{p.isSpeaking ? 'Speaking' : 'Live'}</span>
                         </span>
                       )}
                     </div>
                   </div>
-
-                  <div className="text-sm font-bold text-white truncate">{p.name}</div>
-                  
-                  {/* Status & Camera/Screen Indicators */}
-                  <div className="flex items-center justify-between text-[11px] text-[#8AA393] font-mono mt-2 pt-2 border-t border-white/10">
-                    <span>
-                      {p.isMuted ? 'Microphone muted' : p.isSpeaking ? '● Voice active' : 'Connected'}
-                    </span>
-                    <div className="flex items-center space-x-1 text-[10px]">
-                      {p.hasVideoTrack && <Camera className="w-3.5 h-3.5 text-emerald-400" title="Student Camera Active" />}
-                      {p.isScreenSharing && <Monitor className="w-3.5 h-3.5 text-blue-400" title="Screen Sharing" />}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Student Camera Video Feed (Visible to Both Tutor & Student when Student Camera is Active) */}
-            {(isCameraActive || activeCameraParticipant) && (
-              <div className="pt-3 border-t border-white/10 text-left">
-                <div className="text-xs font-bold text-emerald-400 mb-2 flex items-center justify-between">
-                  <span className="flex items-center space-x-1.5">
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>{isCameraActive ? 'Your Student Camera Video' : `Student Camera (${activeCameraParticipant})`}</span>
-                  </span>
-                  <span className="text-[10px] text-white/60 font-mono">Live Video Stream</span>
-                </div>
-                <div className="w-48 h-36 bg-black rounded-xl overflow-hidden border border-emerald-500/40 shadow-lg">
-                  <video ref={studentCameraVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                </div>
-              </div>
-            )}
-          </div>
-        </main>
-
-        {/* COLLAPSIBLE DRAWER (Chat + Attendees List) */}
-        {isDrawerOpen && (
-          <aside className="w-80 bg-[#0C1510] border-l border-[#1A2E22] flex flex-col z-30 shadow-2xl animate-in slide-in-from-right">
-            <div className="p-3 border-b border-[#1A2E22] flex items-center justify-between">
-              <div className="flex items-center space-x-1 bg-black/40 p-1 rounded-xl border border-white/10">
-                <button
-                  type="button"
-                  onClick={() => setActiveDrawerTab('chat')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                    activeDrawerTab === 'chat' ? 'bg-[#1E3628] text-white' : 'text-[#8AA393] hover:text-white'
-                  }`}
-                >
-                  Chat
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveDrawerTab('participants')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                    activeDrawerTab === 'participants' ? 'bg-[#1E3628] text-white' : 'text-[#8AA393] hover:text-white'
-                  }`}
-                >
-                  Participants ({activeVisibleParticipantsCount})
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsDrawerOpen(false)}
-                className="text-[#8AA393] hover:text-white p-1 rounded cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {activeDrawerTab === 'chat' ? (
-              <div className="flex-1 flex flex-col justify-between p-3 overflow-hidden">
-                <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-                  {chatMessages.length === 0 ? (
-                    <div className="text-center py-10 text-xs text-[#8AA393]">
-                      No messages yet in classroom chat.
-                    </div>
-                  ) : (
-                    chatMessages.map(msg => (
-                      <div key={msg.id} className="bg-black/30 border border-white/10 rounded-xl p-2.5 text-xs">
-                        <div className="flex items-center justify-between text-[10px] text-[#8AA393] mb-1">
-                          <span className="font-bold text-emerald-400">{msg.sender} ({msg.role})</span>
-                          <span>{msg.timestamp}</span>
-                        </div>
-                        <p className="text-white/90 leading-relaxed">{msg.text}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                <div className="pt-2 border-t border-white/10 flex items-center space-x-2">
-                  <input
-                    type="text"
-                    value={chatInputText}
-                    onChange={e => setChatInputText(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
-                    placeholder="Type message..."
-                    className="flex-1 bg-black/50 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder-[#8AA393] focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSendChatMessage}
-                    className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 p-3 overflow-y-auto space-y-2">
-                {filteredParticipants.map(p => (
-                  <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-black/30 border border-white/10 text-xs">
-                    <div>
-                      <div className="font-bold text-white">{p.name}</div>
-                      <div className="text-[10px] text-emerald-400 flex items-center space-x-1">
-                        <span>{p.role}</span>
-                        {p.isScreenSharing && <span className="text-blue-400">• Screen Sharing</span>}
-                      </div>
-                    </div>
-                    <div>
-                      {p.isMuted ? (
-                        <span className="text-rose-400 flex items-center text-[10px] font-bold"><MicOff className="w-3.5 h-3.5 mr-1" /> Muted</span>
-                      ) : (
-                        <span className="text-emerald-400 flex items-center text-[10px] font-bold"><Mic className="w-3.5 h-3.5 mr-1" /> Live</span>
-                      )}
-                    </div>
-                  </div>
                 ))}
               </div>
+            </div>
+
+            {/* 2. COMPACT STUDENT CAMERA BOX INSIDE SIDEBAR (Only shown when Student turns on camera) */}
+            {hasActiveStudentCamera && (
+              <div className={`p-2.5 border-b ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+                <div className="flex items-center justify-between text-[10px] font-bold mb-1">
+                  <span className="flex items-center space-x-1 text-emerald-400">
+                    <Camera className="w-3 h-3" />
+                    <span className="truncate">
+                      {isCameraActive ? 'Your Camera (480p)' : `${activeCameraParticipant} Camera`}
+                    </span>
+                  </span>
+                </div>
+                <div className="w-full h-32 bg-black rounded-lg overflow-hidden border border-emerald-500/50 shadow-xs">
+                  <video
+                    ref={studentCameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
             )}
+
+            {/* 3. LIVE CLASSROOM CHAT SECTION INSIDE SIDEBAR */}
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div
+                className={`px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-bold ${
+                  isLight ? 'border-[#E8E4DA] text-[#14231B]' : 'border-[#223D2E] text-white'
+                }`}
+              >
+                <span className="flex items-center space-x-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Classroom Chat</span>
+                </span>
+                <span className={`text-[10px] font-normal ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}>
+                  {chatMessages.length} msg{chatMessages.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+                {chatMessages.length === 0 ? (
+                  <div className={`text-center py-8 text-[11px] ${isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}`}>
+                    Send a message or Surah/Ayah reference here during class.
+                  </div>
+                ) : (
+                  chatMessages.map(msg => (
+                    <div
+                      key={msg.id}
+                      className={`rounded-xl p-2 text-xs border ${
+                        isLight
+                          ? 'bg-[#FAF9F5] border-[#E2DDD2] text-[#14231B]'
+                          : 'bg-[#121F17] border-[#264232] text-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] mb-0.5">
+                        <span className="font-bold text-emerald-400">{msg.sender}</span>
+                        <span className={isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}>{msg.timestamp}</span>
+                      </div>
+                      <p className="leading-snug break-words text-[11px]">{msg.text}</p>
+                    </div>
+                  ))
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              <div className={`p-2 border-t flex items-center space-x-1.5 ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  value={chatInputText}
+                  onChange={e => setChatInputText(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
+                  placeholder="Write message..."
+                  className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs border focus:outline-none focus:border-emerald-500 ${
+                    isLight
+                      ? 'bg-white border-[#D5D0C6] text-[#14231B] placeholder-[#7A8A80]'
+                      : 'bg-[#070C09] border-[#284736] text-white placeholder-[#8AA393]'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={handleSendChatMessage}
+                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0"
+                  title="Send Chat Message"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
           </aside>
         )}
       </div>
 
-      {/* FOOTER CONTROLS PANEL */}
-      <footer className="px-6 py-3.5 bg-[#0F1A14] border-t border-[#1A2E22] flex flex-wrap items-center justify-center gap-3 z-20">
+      {/* ULTRA-SLIM BOTTOM CONTROLS BAR */}
+      <footer
+        className={`px-4 py-2 border-t flex flex-wrap items-center justify-center gap-2 sm:gap-3 z-20 shrink-0 ${
+          isLight
+            ? 'bg-white border-[#DFDBD0]'
+            : 'bg-[#0B130E] border-[#223D2E]'
+        }`}
+      >
         {/* Button 1: Mute / Unmute Audio */}
         <button
           type="button"
           onClick={handleToggleAudio}
-          className={`px-4 sm:px-5 py-2.5 sm:py-3 rounded-2xl flex items-center space-x-2 text-xs font-bold transition-all cursor-pointer shadow-lg ${
+          className={`px-4 py-2 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-xs ${
             isAudioMuted
-              ? 'bg-rose-600 hover:bg-rose-700 text-white ring-2 ring-rose-400/30'
+              ? 'bg-rose-600 hover:bg-rose-500 text-white'
               : 'bg-emerald-600 hover:bg-emerald-500 text-white'
           }`}
         >
           {isAudioMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          <span>{isAudioMuted ? 'Unmute' : 'Mute'}</span>
+          <span>{isAudioMuted ? 'Unmute Mic' : 'Mute'}</span>
         </button>
 
         {/* Button 2: Share Screen (Tutor & Admin Only - Hidden for Students) */}
@@ -1298,51 +1696,64 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <button
             type="button"
             onClick={handleToggleScreenShare}
-            className={`px-4 sm:px-5 py-2.5 sm:py-3 rounded-2xl flex items-center space-x-2 text-xs font-bold transition-all cursor-pointer shadow-lg ${
+            className={`px-4 py-2 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-xs border ${
               isScreenSharing
-                ? 'bg-blue-600 hover:bg-blue-500 text-white ring-2 ring-blue-400/30'
-                : 'bg-[#1B2F23] hover:bg-[#253F2F] text-white border border-white/15'
+                ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400'
+                : isLight
+                  ? 'bg-[#FAF9F5] hover:bg-gray-100 text-[#14231B] border-[#D5D0C6]'
+                  : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
             }`}
-            title="Share Quran Mushaf or Screen with Audio"
+            title="Share Quran Mushaf or Lesson Screen"
           >
-            <Monitor className="w-4 h-4 text-blue-400" />
+            <Monitor className={`w-4 h-4 ${isScreenSharing ? 'text-white' : 'text-blue-400'}`} />
             <span>{isScreenSharing ? 'Stop Screen' : 'Share Screen'}</span>
           </button>
         )}
 
-        {/* Button 3: Student Camera Toggle (Allowed for Students with Confirmation, blocked for Tutors) */}
+        {/* Button 3: Student Camera Toggle (Allowed for Students at 480p in Sidebar, blocked for Tutors) */}
         {isStudent && (
           <button
             type="button"
             onClick={handleToggleCamera}
-            className={`px-4 sm:px-5 py-2.5 sm:py-3 rounded-2xl flex items-center space-x-2 text-xs font-bold transition-all cursor-pointer shadow-lg ${
+            className={`px-4 py-2 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-xs border ${
               isCameraActive
-                ? 'bg-emerald-700 hover:bg-emerald-600 text-white ring-2 ring-emerald-400/30'
-                : 'bg-[#1B2F23] hover:bg-[#253F2F] text-white border border-white/15'
+                ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
+                : isLight
+                  ? 'bg-[#FAF9F5] hover:bg-gray-100 text-[#14231B] border-[#D5D0C6]'
+                  : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
             }`}
-            title="Open or close student video camera"
+            title="Turn on or off your student camera (appears in compact sidebar)"
           >
-            {isCameraActive ? <Camera className="w-4 h-4 text-emerald-400" /> : <CameraOff className="w-4 h-4 text-gray-400" />}
+            {isCameraActive ? <Camera className="w-4 h-4 text-white" /> : <CameraOff className="w-4 h-4 text-emerald-400" />}
             <span>{isCameraActive ? 'Turn Off Video' : 'Turn On Your Camera'}</span>
           </button>
         )}
 
-        {/* Button 4: Device Settings Matrix & 5-Sec Mic Test */}
+        {/* Button 4: Chat Button (Opens Chat in Sidebar!) */}
         <button
           type="button"
-          onClick={() => setShowDeviceSettingsModal(true)}
-          className="px-4 sm:px-5 py-2.5 sm:py-3 rounded-2xl bg-[#1B2F23] hover:bg-[#253F2F] text-white text-xs font-bold border border-white/15 flex items-center space-x-2 cursor-pointer transition-all shadow-lg"
-          title="Configure Microphone, Speaker and Test Voice"
+          onClick={handleOpenChatInSidebar}
+          className={`px-4 py-2 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs relative ${
+            isLight
+              ? 'bg-[#FAF9F5] hover:bg-emerald-50 text-[#14231B] border-[#D5D0C6]'
+              : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
+          }`}
+          title="Open Classroom Chat in Sidebar"
         >
-          <Settings className="w-4 h-4 text-emerald-400" />
-          <span>Device Settings</span>
+          <MessageSquare className="w-4 h-4 text-emerald-400" />
+          <span>Chat</span>
+          {(unreadChatCount > 0 || chatMessages.length > 0) && (
+            <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">
+              {unreadChatCount > 0 ? unreadChatCount : chatMessages.length}
+            </span>
+          )}
         </button>
 
-        {/* Button 5: Leave Room (With Zoom-Style Confirmation) */}
+        {/* Button 5: Leave Room */}
         <button
           type="button"
           onClick={() => setShowLeaveConfirmModal(true)}
-          className="px-4 sm:px-5 py-2.5 sm:py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center space-x-2 cursor-pointer transition-all shadow-lg active:scale-95"
+          className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs active:scale-95"
           title="Leave or End Class"
         >
           <PhoneOff className="w-4 h-4" />
@@ -1352,16 +1763,20 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* STUDENT CAMERA ACTIVATION CONFIRMATION MODAL */}
       {showCameraConfirmModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-[#0F1B15] border border-[#1D3327] rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
-            <div className="w-12 h-12 mx-auto rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div
+            className={`border rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center ${
+              isLight ? 'bg-white border-[#DFDBD0] text-[#14231B]' : 'bg-[#0F1B15] border-[#1D3327] text-white'
+            }`}
+          >
+            <div className="w-12 h-12 mx-auto rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[#2D8B5C]">
               <Camera className="w-6 h-6" />
             </div>
 
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Turn On Your Camera</h3>
-              <p className="text-xs text-[#8AA393]">
-                Are you sure you want to turn on your camera? Your video stream will be visible to your tutor during the lesson.
+              <h3 className="text-base font-bold">Turn On Your Camera</h3>
+              <p className={`text-xs ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
+                Your compact 480p video will appear in the small right-hand sidebar so the Quran lesson screen stays full-size.
               </p>
             </div>
 
@@ -1372,7 +1787,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   setShowCameraConfirmModal(false);
                   executeToggleCamera(true);
                 }}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-md"
+                className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-md"
               >
                 Turn On Camera
               </button>
@@ -1380,7 +1795,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               <button
                 type="button"
                 onClick={() => setShowCameraConfirmModal(false)}
-                className="w-full py-2 bg-transparent hover:bg-white/5 text-[#8AA393] hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                className={`w-full py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  isLight ? 'hover:bg-gray-100 text-[#5A6B61]' : 'hover:bg-white/5 text-[#8AA393]'
+                }`}
               >
                 Keep Camera Off
               </button>
@@ -1389,17 +1806,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       )}
 
-      {/* ZOOM-STYLE LEAVE ROOM CONFIRMATION MODAL */}
+      {/* LEAVE ROOM CONFIRMATION MODAL */}
       {showLeaveConfirmModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-[#0F1B15] border border-[#1D3327] rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
-            <div className="w-12 h-12 mx-auto rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div
+            className={`border rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center ${
+              isLight ? 'bg-white border-[#DFDBD0] text-[#14231B]' : 'bg-[#0F1B15] border-[#1D3327] text-white'
+            }`}
+          >
+            <div className="w-12 h-12 mx-auto rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-500">
               <PhoneOff className="w-6 h-6" />
             </div>
 
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Leave Classroom Session</h3>
-              <p className="text-xs text-[#8AA393]">
+              <h3 className="text-base font-bold">Leave Quran Classroom</h3>
+              <p className={`text-xs ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
                 {isTutor ? 'Choose whether to end class for everyone or just leave.' : 'Are you sure you want to leave the live class?'}
               </p>
             </div>
@@ -1432,7 +1853,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               <button
                 type="button"
                 onClick={() => setShowLeaveConfirmModal(false)}
-                className="w-full py-2 bg-transparent hover:bg-white/5 text-[#8AA393] hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                className={`w-full py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  isLight ? 'hover:bg-gray-100 text-[#5A6B61]' : 'hover:bg-white/5 text-[#8AA393]'
+                }`}
               >
                 Cancel / Stay in Class
               </button>
@@ -1441,14 +1864,18 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       )}
 
-      {/* DEVICE SETTINGS & 5-SEC MIC LOOPBACK TEST MODAL */}
+      {/* DEVICE SETTINGS & 5-SEC MIC TEST MODAL (Noise Filter & Auto-Gain Disable permanently active in background) */}
       {showDeviceSettingsModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-[#0D1812] border border-[#1A2E22] rounded-2xl p-6 max-w-lg w-full space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div
+            className={`border rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto ${
+              isLight ? 'bg-white border-[#DFDBD0] text-[#14231B]' : 'bg-[#0B140F] border-[#244030] text-white'
+            }`}
+          >
+            <div className={`flex items-center justify-between border-b pb-3 ${isLight ? 'border-[#E2DDD2]' : 'border-[#223D2E]'}`}>
+              <h3 className="text-sm font-bold flex items-center space-x-2">
                 <Sliders className="w-4 h-4 text-emerald-400" />
-                <span>Audio & Video Device Settings</span>
+                <span>Audio & Device Settings</span>
               </h3>
               <button
                 type="button"
@@ -1456,23 +1883,25 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   handleResetMicTest();
                   setShowDeviceSettingsModal(false);
                 }}
-                className="text-[#8AA393] hover:text-white cursor-pointer"
+                className={`cursor-pointer ${isLight ? 'text-[#5A6B61] hover:text-black' : 'text-[#A8C2B3] hover:text-white'}`}
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <div className="space-y-3.5 text-xs">
               {/* Device 1: Microphone */}
               <div className="space-y-1">
-                <label className="block text-[#8AA393] font-bold flex items-center space-x-1.5">
-                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                <label className={`block font-bold flex items-center space-x-1.5 ${isLight ? 'text-[#14231B]' : 'text-[#8AA393]'}`}>
+                  <Mic className="w-3.5 h-3.5 text-[#2D8B5C]" />
                   <span>Microphone Input Device</span>
                 </label>
                 <select
                   value={selectedAudioInput}
                   onChange={e => handleSelectAudioInput(e.target.value)}
-                  className="w-full bg-black/50 border border-white/15 rounded-xl p-2.5 text-white focus:outline-none focus:border-emerald-500"
+                  className={`w-full border rounded-xl p-2.5 focus:outline-none focus:border-[#2D8B5C] ${
+                    isLight ? 'bg-[#FAF9F5] border-[#D5D0C6] text-[#14231B]' : 'bg-black/50 border-white/15 text-white'
+                  }`}
                 >
                   {audioInputDevices.map(d => (
                     <option key={d.deviceId} value={d.deviceId}>
@@ -1484,14 +1913,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
               {/* Device 2: Speaker / Headphones */}
               <div className="space-y-1">
-                <label className="block text-[#8AA393] font-bold flex items-center space-x-1.5">
-                  <Headphones className="w-3.5 h-3.5 text-blue-400" />
+                <label className={`block font-bold flex items-center space-x-1.5 ${isLight ? 'text-[#14231B]' : 'text-[#8AA393]'}`}>
+                  <Headphones className="w-3.5 h-3.5 text-blue-500" />
                   <span>Speaker / Headphones Output</span>
                 </label>
                 <select
                   value={selectedAudioOutput}
                   onChange={e => setSelectedAudioOutput(e.target.value)}
-                  className="w-full bg-black/50 border border-white/15 rounded-xl p-2.5 text-white focus:outline-none focus:border-emerald-500"
+                  className={`w-full border rounded-xl p-2.5 focus:outline-none focus:border-[#2D8B5C] ${
+                    isLight ? 'bg-[#FAF9F5] border-[#D5D0C6] text-[#14231B]' : 'bg-black/50 border-white/15 text-white'
+                  }`}
                 >
                   {audioOutputDevices.length === 0 ? (
                     <option value="">System Default Audio Output</option>
@@ -1508,14 +1939,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               {/* Device 3: Camera (Students Only) */}
               {isStudent && (
                 <div className="space-y-1">
-                  <label className="block text-[#8AA393] font-bold flex items-center space-x-1.5">
-                    <Camera className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Student Camera (Optional)</span>
+                  <label className={`block font-bold flex items-center space-x-1.5 ${isLight ? 'text-[#14231B]' : 'text-[#8AA393]'}`}>
+                    <Camera className="w-3.5 h-3.5 text-purple-500" />
+                    <span>Student Camera (Optional - 480p Sidebar)</span>
                   </label>
                   <select
                     value={selectedVideoInput}
                     onChange={e => handleSelectVideoInput(e.target.value)}
-                    className="w-full bg-black/50 border border-white/15 rounded-xl p-2.5 text-white focus:outline-none focus:border-emerald-500"
+                    className={`w-full border rounded-xl p-2.5 focus:outline-none focus:border-[#2D8B5C] ${
+                      isLight ? 'bg-[#FAF9F5] border-[#D5D0C6] text-[#14231B]' : 'bg-black/50 border-white/15 text-white'
+                    }`}
                   >
                     {videoInputDevices.map(d => (
                       <option key={d.deviceId} value={d.deviceId}>
@@ -1527,21 +1960,23 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               )}
 
               {/* 5-SECOND IN-MEMORY VOICE RECORDER & PLAYBACK TEST */}
-              <div className="bg-black/40 border border-emerald-500/30 rounded-xl p-4 space-y-3">
+              <div
+                className={`border rounded-xl p-3.5 space-y-2.5 ${
+                  isLight ? 'bg-[#FAF9F5] border-[#DFDBD0]' : 'bg-black/40 border-emerald-500/30'
+                }`}
+              >
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-emerald-300 flex items-center space-x-1.5">
+                  <span className="font-bold text-[#2D8B5C] flex items-center space-x-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-[#E8A93E]" />
-                    <span>5-Second Voice Echo Test (Local & Private)</span>
+                    <span>5-Second Clean Voice Echo Test</span>
                   </span>
-                  <span className="text-[10px] text-[#8AA393] font-mono">0 server load</span>
+                  <span className={`text-[10px] font-mono ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
+                    Tests Noise Filter Live
+                  </span>
                 </div>
 
-                <p className="text-[11px] text-[#8AA393]">
-                  Speak for 5 seconds into your microphone, then listen to your own voice to verify crystal-clear sound quality before or during class.
-                </p>
-
                 {micTestError && (
-                  <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[11px]">
+                  <div className="p-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-500 text-[11px]">
                     {micTestError}
                   </div>
                 )}
@@ -1550,7 +1985,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   <button
                     type="button"
                     onClick={handleStart5SecMicTest}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center space-x-2 transition-colors cursor-pointer shadow-md"
+                    className="w-full py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl font-bold flex items-center justify-center space-x-2 transition-colors cursor-pointer shadow-xs"
                   >
                     <Mic className="w-4 h-4" />
                     <span>Record 5-Second Voice Sample</span>
@@ -1558,15 +1993,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 )}
 
                 {micTestState === 'recording' && (
-                  <div className="space-y-2 text-center p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl">
-                    <div className="flex items-center justify-center space-x-2 text-rose-300 font-bold">
-                      <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping" />
+                  <div className="space-y-2 text-center p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-xl">
+                    <div className="flex items-center justify-center space-x-2 text-rose-500 font-bold">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
                       <span>Recording... Speak now ({testCountdown}s remaining)</span>
                     </div>
-                    {/* Live Test Volume Bar */}
-                    <div className="w-full h-2 bg-black/60 rounded-full overflow-hidden">
+                    <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-emerald-500 to-rose-500 transition-all duration-75"
+                        className="h-full bg-[#2D8B5C] transition-all duration-75"
                         style={{ width: `${Math.max(5, testAudioLevel)}%` }}
                       />
                     </div>
@@ -1574,44 +2008,40 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 )}
 
                 {(micTestState === 'recorded' || micTestState === 'playing') && (
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={handlePlayBackTestVoice}
-                        disabled={micTestState === 'playing'}
-                        className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center space-x-2 cursor-pointer shadow-md transition-colors"
-                      >
-                        <Play className="w-4 h-4" />
-                        <span>{micTestState === 'playing' ? 'Playing Your Voice...' : 'Play Back My Voice'}</span>
-                      </button>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={handlePlayBackTestVoice}
+                      disabled={micTestState === 'playing'}
+                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center space-x-2 cursor-pointer transition-colors"
+                    >
+                      <Play className="w-4 h-4" />
+                      <span>{micTestState === 'playing' ? 'Playing Filtered Voice...' : 'Play Back My Voice'}</span>
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={handleResetMicTest}
-                        className="px-3 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold flex items-center justify-center cursor-pointer transition-colors"
-                        title="Record again"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <p className="text-[10px] text-emerald-400 font-mono text-center">
-                      ✓ Sample recorded in-memory. Audio is deleted when you close this window.
-                    </p>
+                    <button
+                      type="button"
+                      onClick={handleResetMicTest}
+                      className={`px-3 py-2 rounded-xl font-bold flex items-center justify-center cursor-pointer transition-colors ${
+                        isLight ? 'bg-gray-200 hover:bg-gray-300 text-slate-800' : 'bg-white/10 hover:bg-white/20 text-white'
+                      }`}
+                      title="Record again"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="pt-3 border-t border-white/10 text-right">
+            <div className={`pt-3 border-t text-right ${isLight ? 'border-[#E2DDD2]' : 'border-white/10'}`}>
               <button
                 type="button"
                 onClick={() => {
                   handleResetMicTest();
                   setShowDeviceSettingsModal(false);
                 }}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-md"
+                className="px-5 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-xs"
               >
                 Done
               </button>
@@ -1622,30 +2052,39 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* TUTOR INTERCEPTS MODAL: PASSCODE WAITING ROOM ADMIT/REJECT TRIGGERS */}
       {showWaitingRoomModal && isTutor && waitingQueue.length > 0 && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-[#0D1812] border border-amber-500/40 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
-                <ShieldCheck className="w-4 h-4 text-amber-400" />
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div
+            className={`border rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl ${
+              isLight ? 'bg-white border-amber-300 text-[#14231B]' : 'bg-[#0D1812] border-amber-500/40 text-white'
+            }`}
+          >
+            <div className={`flex items-center justify-between border-b pb-3 ${isLight ? 'border-[#E2DDD2]' : 'border-white/10'}`}>
+              <h3 className="text-sm font-bold flex items-center space-x-2">
+                <ShieldCheck className="w-4 h-4 text-amber-500" />
                 <span>Passcode Waiting Room Request</span>
               </h3>
-              <button type="button" onClick={() => setShowWaitingRoomModal(false)} className="text-[#8AA393] hover:text-white cursor-pointer">
+              <button type="button" onClick={() => setShowWaitingRoomModal(false)} className="cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {waitingQueue.map(w => (
-                <div key={w.id} className="bg-black/40 border border-white/10 rounded-xl p-3 flex items-center justify-between">
+                <div
+                  key={w.id}
+                  className={`border rounded-xl p-3 flex items-center justify-between ${
+                    isLight ? 'bg-[#FAF9F5] border-[#DFDBD0]' : 'bg-black/40 border-white/10'
+                  }`}
+                >
                   <div>
-                    <div className="text-xs font-bold text-white">{w.guest_name}</div>
-                    <div className="text-[10px] text-[#8AA393]">Waiting for admittance</div>
+                    <div className="text-xs font-bold">{w.guest_name}</div>
+                    <div className={`text-[10px] ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>Waiting for admittance</div>
                   </div>
                   <div className="flex items-center space-x-2">
                     <button
                       type="button"
                       onClick={() => handleWaitingRoomAction(w.id, 'ADMIT')}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
+                      className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
                     >
                       <UserCheck className="w-3.5 h-3.5" />
                       <span>Admit</span>

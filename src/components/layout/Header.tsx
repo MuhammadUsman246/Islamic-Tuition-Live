@@ -347,10 +347,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={() => setIsZoomJoinModalOpen(true)}
             className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 shrink-0"
-            title="Join Live Class via Tutor ID & Passcode"
+            title={activeRole === 'parent' ? 'Observe Live Class' : 'Join Live Class via Tutor ID & Passcode'}
           >
             <Video className="w-3.5 h-3.5 text-emerald-200" />
-            <span className="hidden xs:inline">Join Class</span>
+            <span className="hidden xs:inline">{activeRole === 'parent' ? 'Observe Live Class' : 'Join Class'}</span>
           </button>
         )}
 

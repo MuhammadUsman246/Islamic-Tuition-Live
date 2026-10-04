@@ -473,16 +473,26 @@ export async function checkLiveKitServerStatus(): Promise<{
  * - Optimized screen share for sharp Quranic typography & Tajweed marks
  * - Low-bandwidth adaptive degradation so calls NEVER drop on 4G or school Wi-Fi
  */
-export function createOptimizedLiveKitRoom(): Room {
+export function createOptimizedLiveKitRoom(enableAutoGain = false): Room {
   return new Room({
     adaptiveStream: true,
     dynacast: true,
     stopLocalTrackOnUnpublish: true,
     disconnectOnPageLeave: true,
     audioCaptureDefaults: {
-      autoGainControl: true,
+      // Disable autoGainControl by default so laptop fans / AC / machine hum are NEVER boosted during pauses
+      autoGainControl: enableAutoGain,
       echoCancellation: true,
       noiseSuppression: true,
+      // Chrome/Edge/WebKit AI Voice Isolation & low-latency constraints
+      ...({
+        voiceIsolation: true,
+        googEchoCancellation: true,
+        googNoiseSuppression: true,
+        googHighpassFilter: true,
+        googAutoGainControl: enableAutoGain,
+        latency: 0.01,
+      } as any),
       channelCount: 1,
       sampleRate: 48000,
     },
@@ -494,13 +504,14 @@ export function createOptimizedLiveKitRoom(): Room {
       },
     },
     publishDefaults: {
-      // Voice audio is #1 network priority with RED packet-loss recovery (prevents robotic/breaking voice on slow networks)
+      // Continuous 48kbps Fullband Speech with dtx: false & RED packet recovery:
+      // Prevents voice breaking, late syllables, and wake-up lag during Quran recitation
       audioPreset: {
-        maxBitrate: 32_000,
+        maxBitrate: 48_000,
         priority: 'high',
       },
       red: true,
-      dtx: true,
+      dtx: false,
       // Student camera capped at compact 480p (180 kbps max, low network priority) to save bandwidth & resources
       videoEncoding: {
         maxBitrate: 180_000,

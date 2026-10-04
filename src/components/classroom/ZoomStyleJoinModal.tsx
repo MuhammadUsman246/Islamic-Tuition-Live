@@ -368,7 +368,13 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
               className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm shadow-lg transition-all cursor-pointer flex items-center justify-center space-x-2"
             >
               <Video className="w-4 h-4" />
-              <span>{isLoading ? 'Connecting to Classroom...' : `Join ${meetingIdOrSlug.trim() || initialSlug} Classroom`}</span>
+              <span>
+                {isLoading
+                  ? 'Connecting to Classroom...'
+                  : currentUserRole === 'parent'
+                    ? 'Observe Live Class'
+                    : `Join ${meetingIdOrSlug.trim() || initialSlug} Classroom`}
+              </span>
             </button>
           </form>
         )}

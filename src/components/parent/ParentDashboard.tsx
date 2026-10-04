@@ -436,10 +436,10 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               onClick={() => handleJoinLiveKitClass(activeChild, resolvedChildTutorDisplayId)}
               disabled={isJoiningLiveKit}
               className="px-4 py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-xs cursor-pointer disabled:opacity-50"
-              title={`Join or observe ${activeChild.name}'s assigned classroom (${resolvedChildTutorSlug})`}
+              title={`Observe ${activeChild.name}'s live classroom (${resolvedChildTutorSlug})`}
             >
               <Radio className="w-4 h-4 text-[#E8A93E] animate-pulse" />
-              <span>{isJoiningLiveKit ? 'Connecting...' : `Join ${resolvedChildTutorDisplayId} Classroom (${resolvedChildTutorSlug})`}</span>
+              <span>{isJoiningLiveKit ? 'Connecting...' : 'Observe Live Class'}</span>
             </button>
 
             {activeTutor?.zoomLink && (
@@ -557,9 +557,10 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                         onClick={() => handleJoinLiveKitClass(activeChild, cls.tutorId)}
                         disabled={isJoiningLiveKit}
                         className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-lg flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+                        title={`Observe ${activeChild.name}'s live class with ${getTutorDisplayId(cls.tutorId)}`}
                       >
                         <Radio className="w-3.5 h-3.5 text-[#E8A93E]" />
-                        <span>Join {getTutorDisplayId(cls.tutorId)} Classroom ({getTutorSlug(cls.tutorId)})</span>
+                        <span>{isJoiningLiveKit ? 'Connecting...' : 'Observe Live Class'}</span>
                       </button>
                     )}
                   </div>
