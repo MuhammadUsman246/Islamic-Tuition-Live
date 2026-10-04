@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { LogOut, Eye, Menu, PanelLeftClose, Bell, Video } from 'lucide-react';
+import { LogOut, Eye, Menu, PanelLeftClose, Bell, Video, HelpCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Tutor, Student, Announcement, StudentFee, TimetableClass, Lesson } from '../../types';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 import { NotificationCenterModal } from '../common/NotificationCenterModal';
 import { ZoomStyleJoinModal, AssignedTutorRoomOption } from '../classroom/ZoomStyleJoinModal';
+import { StudentParentTourModal } from '../modals/StudentParentTourModal';
 import { getTutorSlug, getTutorDisplayId } from '../../services/livekitService';
 
 interface HeaderProps {
@@ -46,6 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
   const [isZoomJoinModalOpen, setIsZoomJoinModalOpen] = useState(false);
+  const [isTourModalOpen, setIsTourModalOpen] = useState(false);
 
   const handlePersonaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -354,6 +356,19 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
+        {/* Quick Tour & Help Guide Button for Students & Parents */}
+        {(activeRole === 'student' || activeRole === 'parent') && (
+          <button
+            type="button"
+            onClick={() => setIsTourModalOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-[#FAF9F7] hover:bg-emerald-50 text-[#2D8B5C] hover:text-[#1E5C3D] border border-[#D5D0C6] hover:border-emerald-300 rounded-xl text-xs font-bold shadow-2xs transition-all cursor-pointer shrink-0"
+            title="Open interactive Dashboard Tour & Feature Guide"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-[#2D8B5C]" />
+            <span className="hidden sm:inline">Tour & Guide</span>
+          </button>
+        )}
+
         {/* Notification Bell Center */}
         {(() => {
           const pendingFeesCount = (activeRole === 'student' || activeRole === 'parent')
@@ -450,6 +465,16 @@ export const Header: React.FC<HeaderProps> = ({
         currentUserId={adminViewingTargetId || userProfile?.uid || ''}
         defaultTutorSlug={assignedTutorsForModal[0]?.slug}
         assignedTutors={assignedTutorsForModal}
+      />
+
+      {/* Interactive Tour & Guide Modal for Students & Parents */}
+      <StudentParentTourModal
+        isOpen={isTourModalOpen}
+        onClose={() => setIsTourModalOpen(false)}
+        userRole={activeRole === 'parent' ? 'parent' : 'student'}
+        userName={userProfile?.displayName || (activeRole === 'parent' ? 'Respected Parent' : 'Student')}
+        onNavigateTab={onNavigateTab}
+        storageKeyPrefix={adminViewingTargetId || userProfile?.uid || userProfile?.email || 'user_guest'}
       />
     </header>
   );

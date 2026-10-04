@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Lesson, CourseType, AttendanceStatus, LessonPerformance } from '../../types';
 import { updateLesson } from '../../services/dataService';
+import { SmartTextCorrectionInput } from '../common/SmartTextCorrectionInput';
 
 interface LessonEditModalProps {
   isOpen: boolean;
@@ -205,12 +206,11 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
           {attendanceStatus === 'Absent' && (
             <div>
               <label className="block text-xs font-bold text-rose-800 mb-1">Reason for Absence</label>
-              <input
-                type="text"
+              <SmartTextCorrectionInput
                 value={absentReason}
-                onChange={(e) => setAbsentReason(e.target.value)}
+                onChange={setAbsentReason}
                 placeholder="e.g., Illness, family emergency, travel"
-                className="w-full text-xs border border-rose-300 rounded-lg px-2.5 py-1.5 bg-rose-50/40"
+                fieldLabel="Absent Reason"
               />
             </div>
           )}
@@ -223,13 +223,12 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
                   <label className="block text-xs font-bold text-[#161F1A] mb-1">
                     Lesson Covered / Portion Recited
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={lessonCovered}
-                    onChange={(e) => setLessonCovered(e.target.value)}
+                    onChange={setLessonCovered}
                     required
                     placeholder="e.g. Surah Al-Baqarah Ayah 255-257 or Qaida Page 6 Line 1-4"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    fieldLabel="Lesson Covered"
                   />
                 </div>
                 <div>
@@ -250,24 +249,22 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
                   <label className="block text-xs font-bold text-[#B87314] mb-1">
                     Memorization / Kalimas / Duas
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={memorization}
-                    onChange={(e) => setMemorization(e.target.value)}
+                    onChange={setMemorization}
                     placeholder="e.g. 3rd Kalima, Dua before sleep"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    fieldLabel="Memorization"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-[#2D8B5C] mb-1">
                     Adaab, Akhlaaq & Manners
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={adaabManners}
-                    onChange={(e) => setAdaabManners(e.target.value)}
+                    onChange={setAdaabManners}
                     placeholder="e.g. Etiquettes of greeting, respecting parents"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    fieldLabel="Adaab & Manners"
                   />
                 </div>
               </div>
@@ -276,22 +273,20 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-[#161F1A] mb-1">Revision (Sabaq)</label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={revision}
-                    onChange={(e) => setRevision(e.target.value)}
+                    onChange={setRevision}
                     placeholder="Previous lesson revision details"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    fieldLabel="Revision"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-[#161F1A] mb-1">Homework</label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={homework}
-                    onChange={(e) => setHomework(e.target.value)}
+                    onChange={setHomework}
                     placeholder="Daily practice assignment"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    fieldLabel="Homework"
                   />
                 </div>
               </div>
@@ -313,12 +308,11 @@ export const LessonEditModal: React.FC<LessonEditModalProps> = ({
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-[#161F1A] mb-1">Teacher Remarks / Notes</label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={teacherRemarks}
-                    onChange={(e) => setTeacherRemarks(e.target.value)}
-                    placeholder="Tutor evaluation remarks"
-                    className="w-full text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-[#2D8B5C]"
+                    onChange={setTeacherRemarks}
+                    placeholder="General observations on recitation, rhythm, and focus"
+                    fieldLabel="Teacher Remarks"
                   />
                 </div>
               </div>

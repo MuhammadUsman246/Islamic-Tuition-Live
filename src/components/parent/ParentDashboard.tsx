@@ -43,6 +43,7 @@ import { convertPKTToStudentTime, getTimezoneShortCode } from '../../utils/timez
 import { generateInvoicePDF, generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
+import { StudentParentTourModal } from '../modals/StudentParentTourModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { updateFee, loadOlderLessonsArchive } from '../../services/dataService';
@@ -95,6 +96,20 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [expandedMonths, setExpandedMonths] = useState<{ [key: string]: boolean }>({});
   const [expandedWeeks, setExpandedWeeks] = useState<{ [key: string]: boolean }>({});
+  const [isTourModalOpen, setIsTourModalOpen] = useState<boolean>(false);
+
+  // Automatically trigger Tour modal on first login for parent
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const targetKey = userProfile?.uid || userProfile?.email || 'parent_guest';
+    const seen = localStorage.getItem(`has_seen_portal_tour_parent_${targetKey}`);
+    if (!seen) {
+      const timer = setTimeout(() => {
+        setIsTourModalOpen(true);
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [userProfile?.uid, userProfile?.email]);
 
   const parentEmailNorm = userProfile?.email?.toLowerCase().trim() || '';
   const parentUid = userProfile?.uid || '';
@@ -337,6 +352,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         {/* Child & Self Selector Pill Switcher */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsTourModalOpen(true)}
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 hover:text-white font-bold text-xs transition-colors flex items-center space-x-1.5 border border-emerald-400/30 shadow-xs cursor-pointer"
+            title="Open interactive Parents Portal Help & Features Tour"
+          >
+            <Sparkles className="w-4 h-4 text-[#E8A93E]" />
+            <span>🎓 Dashboard Tour</span>
+          </button>
+
           {selfStudentProfile && (
             <button
               type="button"
@@ -1593,6 +1618,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             await onRefreshData();
           }
         }}
+      />
+
+      {/* Parents Onboarding & Dashboard Tour Modal */}
+      <StudentParentTourModal
+        isOpen={isTourModalOpen}
+        onClose={() => setIsTourModalOpen(false)}
+        userRole="parent"
+        userName={userProfile?.displayName || 'Respected Parent'}
+        onNavigateTab={setCurrentTab}
+        storageKeyPrefix={userProfile?.uid || userProfile?.email || 'parent_guest'}
       />
     </div>
   );

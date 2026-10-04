@@ -43,6 +43,7 @@ import { generateInvoicePDF, generateLessonReportPDF, generateStudentReportPDF }
 import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
 import { StudentProfileCustomizerModal } from '../modals/StudentProfileCustomizerModal';
+import { StudentParentTourModal } from '../modals/StudentParentTourModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { findStudentByEmailOrId, loadOlderLessonsArchive } from '../../services/dataService';
@@ -65,6 +66,7 @@ interface StudentDashboardProps {
 
 export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   currentTab,
+  setCurrentTab,
   currentStudentId,
   students,
   tutors,
@@ -91,6 +93,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const [expandedMonths, setExpandedMonths] = useState<{ [key: string]: boolean }>({});
   const [expandedWeeks, setExpandedWeeks] = useState<{ [key: string]: boolean }>({});
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isTourModalOpen, setIsTourModalOpen] = useState(false);
 
   const getMonday = (dateStr: string) => {
     try {
@@ -176,6 +179,19 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   }, [matchedStudent, fetchedStudent, userProfile]);
 
   const student = matchedStudent || fetchedStudent || synthesizedStudent;
+
+  // Automatically trigger Tour modal on first login for student
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const targetKey = student?.studentId || userProfile?.studentId || userProfile?.uid || 'student_guest';
+    const seen = localStorage.getItem(`has_seen_portal_tour_student_${targetKey}`);
+    if (!seen) {
+      const timer = setTimeout(() => {
+        setIsTourModalOpen(true);
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [student?.studentId, userProfile?.studentId, userProfile?.uid]);
 
   const isMatchCurrentStudent = (targetIdOrName?: string) => {
     if (!targetIdOrName || !student) return false;
@@ -409,6 +425,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsTourModalOpen(true)}
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 hover:text-white font-bold text-xs transition-colors flex items-center space-x-1.5 border border-emerald-400/30 shadow-xs cursor-pointer"
+              title="Open interactive Student Portal Help & Features Tour"
+            >
+              <Sparkles className="w-4 h-4 text-[#E8A93E]" />
+              <span>🎓 Dashboard Tour</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setIsProfileModalOpen(true)}
@@ -1417,6 +1443,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
         onClose={() => setIsProfileModalOpen(false)}
         student={student}
         assignedTutor={assignedTutor}
+      />
+
+      {/* Student Onboarding & Dashboard Tour Modal */}
+      <StudentParentTourModal
+        isOpen={isTourModalOpen}
+        onClose={() => setIsTourModalOpen(false)}
+        userRole="student"
+        userName={userProfile?.displayName || student?.name || 'Student'}
+        onNavigateTab={setCurrentTab}
+        storageKeyPrefix={student?.studentId || userProfile?.studentId || userProfile?.uid || 'student_guest'}
       />
 
       {/* Payment Notice Modal */}

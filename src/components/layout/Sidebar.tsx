@@ -79,6 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           // Admin Navigation & Security
           { id: 'classroom_lab', label: 'Classroom Lab (LiveKit)', icon: Radio },
           { id: 'chat_safety', label: 'Classroom Chat Safety', icon: Lock },
+          { id: 'lesson_dictionary', label: 'Lesson Dictionary & Spellcheck', icon: BookOpen },
           { id: 'security', label: 'Academy Security', icon: ShieldCheck },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Internal Messages', icon: MessageSquare },

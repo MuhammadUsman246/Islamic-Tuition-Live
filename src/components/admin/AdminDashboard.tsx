@@ -95,6 +95,7 @@ import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
 import { ClassroomLab } from './ClassroomLab';
 import { ChatSafetySettingsView } from './ChatSafetySettingsView';
+import { LessonDictionaryManager } from './LessonDictionaryManager';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, LiveRoomStatusItem } from '../../services/livekitService';
 import { computeTutorClassroomStatus, DynamicClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
@@ -6354,6 +6355,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* 14. CHAT SAFETY & PRIVACY TAB */}
       {currentTab === 'chat_safety' && (
         <ChatSafetySettingsView />
+      )}
+
+      {/* 15. LESSON DICTIONARY & SMART TEXT CORRECTION TAB */}
+      {currentTab === 'lesson_dictionary' && (
+        <LessonDictionaryManager />
       )}
 
       {/* Modals */}

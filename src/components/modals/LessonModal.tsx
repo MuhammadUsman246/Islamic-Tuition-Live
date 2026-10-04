@@ -12,6 +12,7 @@ import {
 import { loadCachedCollection, updateLesson, isSameTutor } from '../../services/dataService';
 import { compressAndConvertToWebP } from '../../utils/chatMediaUtils';
 import { getCurrentOperationalDate } from '../../utils/timezone';
+import { SmartTextCorrectionInput } from '../common/SmartTextCorrectionInput';
 
 // Helper to get current operational date aligned with Academy shift
 // (e.g. before 12:00 PM PKT corresponds to previous calendar date, matching student US working day)
@@ -1192,12 +1193,11 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                   <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">
                     Reason for Absence / Notes (Optional)
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={absentReason}
-                    onChange={(e) => setAbsentReason(e.target.value)}
+                    onChange={setAbsentReason}
                     placeholder="e.g. Uninformed absence, sick, family travel, power outage..."
-                    className="w-full border border-[#D5D0C6] rounded-md px-3 py-1.5 text-xs focus:ring-1 focus:ring-red-400 focus:outline-none bg-white"
+                    fieldLabel="Absent Reason"
                   />
                 </div>
               </div>
@@ -1460,13 +1460,12 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                   </div>
                 </div>
 
-                <input
-                  type="text"
+                <SmartTextCorrectionInput
                   value={memorization}
-                  onChange={(e) => setMemorization(e.target.value)}
+                  onChange={setMemorization}
                   placeholder="e.g. 4th Kalma, Dua e Qunoot, Salah steps (or type 'Not Applicable')..."
-                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
                   required
+                  fieldLabel="Memorization / Duas"
                 />
               </div>
 
@@ -1490,13 +1489,12 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                   </div>
                 </div>
 
-                <input
-                  type="text"
+                <SmartTextCorrectionInput
                   value={adaabManners}
-                  onChange={(e) => setAdaabManners(e.target.value)}
+                  onChange={setAdaabManners}
                   placeholder="e.g. Manners of drinking, respect to parents, steps of wudu (or type 'Not Applicable')..."
-                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white font-medium"
                   required
+                  fieldLabel="Adaab & Manners"
                 />
               </div>
 
@@ -1506,12 +1504,11 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                   <label className="block text-xs font-semibold text-[#161F1A] mb-1">
                     Lesson Covered / Summary (Optional custom override)
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={lessonCovered}
-                    onChange={(e) => setLessonCovered(e.target.value)}
+                    onChange={setLessonCovered}
                     placeholder="Auto-generated from Quran/Qaida selection if blank..."
-                    className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white"
+                    fieldLabel="Lesson Covered"
                   />
                 </div>
 
@@ -1519,12 +1516,11 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                   <label className="block text-xs font-semibold text-[#161F1A] mb-1">
                     Revision (Sabaq / Dhor)
                   </label>
-                  <input
-                    type="text"
+                  <SmartTextCorrectionInput
                     value={revision}
-                    onChange={(e) => setRevision(e.target.value)}
+                    onChange={setRevision}
                     placeholder="e.g. Previous portions, Surah Al-Fatihah, or last 5 pages..."
-                    className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none bg-white"
+                    fieldLabel="Revision"
                   />
                 </div>
               </div>
