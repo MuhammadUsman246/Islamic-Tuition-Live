@@ -822,6 +822,8 @@ const MainPortal: React.FC = () => {
 
 import { PermanentSlugRoute } from './components/classroom/PermanentSlugRoute';
 import { GuestLinkRoute } from './components/classroom/GuestLinkRoute';
+import { ClassroomProvider } from './context/ClassroomContext';
+import { PersistentClassroomOverlay } from './components/classroom/PersistentClassroomOverlay';
 
 export default function App() {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
@@ -829,7 +831,10 @@ export default function App() {
   if (pathname.startsWith('/c/') || pathname.startsWith('/class/')) {
     return (
       <AuthProvider>
-        <PermanentSlugRoute />
+        <ClassroomProvider>
+          <PermanentSlugRoute />
+          <PersistentClassroomOverlay />
+        </ClassroomProvider>
       </AuthProvider>
     );
   }
@@ -837,14 +842,20 @@ export default function App() {
   if (pathname.startsWith('/guest/')) {
     return (
       <AuthProvider>
-        <GuestLinkRoute />
+        <ClassroomProvider>
+          <GuestLinkRoute />
+          <PersistentClassroomOverlay />
+        </ClassroomProvider>
       </AuthProvider>
     );
   }
 
   return (
     <AuthProvider>
-      <MainPortal />
+      <ClassroomProvider>
+        <MainPortal />
+        <PersistentClassroomOverlay />
+      </ClassroomProvider>
     </AuthProvider>
   );
 }

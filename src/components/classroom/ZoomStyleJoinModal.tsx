@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useClassroom } from '../../context/ClassroomContext';
 import { Video, Lock, User, AlertCircle, X, Sparkles, ExternalLink, Copy, Check } from 'lucide-react';
 import { IslamicTuitionClassroom } from './IslamicTuitionClassroom';
 import { LiveKitRoomTokenResponse, UserRole } from '../../types';
@@ -93,6 +94,8 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
 
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
+  const { joinClassroomSession } = useClassroom();
+
   const submitJoinRequest = async (admittedId?: string) => {
     if (!meetingIdOrSlug.trim()) {
       setErrorMessage('Please enter a Tutor ID or Classroom Link');
@@ -107,7 +110,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
         roomSlug: meetingIdOrSlug.trim(),
         passcode: passcode.trim(),
         sessionUserId: currentUserId,
-        userRole: currentUserRole,
+        userRole: (currentUserRole || 'guest') as UserRole,
         guestName: displayName || currentUserName,
         admittedWaitingId: admittedId
       });
@@ -123,6 +126,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
       if (data.token) {
         setInWaitingRoom(false);
         setTokenData(data as LiveKitRoomTokenResponse);
+        await joinClassroomSession(data as LiveKitRoomTokenResponse, currentUserRole, displayName || currentUserName);
       } else {
         setErrorMessage('Failed to issue access token');
       }

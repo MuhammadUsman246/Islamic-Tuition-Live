@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'supervisor' | 'tutor' | 'student' | 'parent';
+export type UserRole = 'admin' | 'supervisor' | 'tutor' | 'student' | 'parent' | 'guest';
 export type UserAccountStatus = 'active' | 'pending_approval' | 'inactive' | 'suspended';
 
 export interface UserProfile {
@@ -645,6 +645,26 @@ export interface WaitingRoomParticipant {
   guest_name: string;
   joined_at: string;
   status: 'WAITING' | 'ADMITTED' | 'REJECTED';
+}
+
+export interface ChatMessageItem {
+  id: string;
+  sender: string;
+  role: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface ParticipantInfo {
+  id: string;
+  name: string;
+  role: string;
+  isSpeaking?: boolean;
+  isMuted?: boolean;
+  hasAudioTrack?: boolean;
+  hasVideoTrack?: boolean;
+  isScreenSharing?: boolean;
+  audioLevel?: number;
 }
 
 export interface SummaryMetrics {

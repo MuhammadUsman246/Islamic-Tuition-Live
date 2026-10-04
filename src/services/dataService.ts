@@ -2371,10 +2371,18 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
  * keeping everyday page loads strictly scoped to the last 7 days.
  */
 export async function loadOlderLessonsArchive(
-  daysOrAll: 30 | 'all' = 30,
+  daysOrAll: 30 | 'all' | { daysBack?: number; tutorId?: string; studentIds?: string[] } = 30,
   filterTutorId?: string,
   filterStudentIds?: string[]
 ): Promise<Lesson[]> {
+  let resolvedDaysOrAll: 30 | 'all' = 30;
+  if (typeof daysOrAll === 'object' && daysOrAll !== null) {
+    if (daysOrAll.tutorId) filterTutorId = daysOrAll.tutorId;
+    if (daysOrAll.studentIds) filterStudentIds = daysOrAll.studentIds;
+    resolvedDaysOrAll = 'all';
+  } else if (daysOrAll === 'all' || daysOrAll === 30) {
+    resolvedDaysOrAll = daysOrAll;
+  }
   const localItems = CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || [];
   if (isFirestoreQuotaExceeded()) {
     return deduplicateLessons(localItems);
@@ -2386,15 +2394,15 @@ export async function loadOlderLessonsArchive(
       q = query(
         collection(db, LESSONS_COL),
         where('studentId', 'in', validStudentIds),
-        limit(daysOrAll === 'all' ? 300 : 100)
+        limit(resolvedDaysOrAll === 'all' ? 300 : 100)
       );
     } else if (filterTutorId) {
       q = query(
         collection(db, LESSONS_COL),
         where('tutorId', '==', filterTutorId),
-        limit(daysOrAll === 'all' ? 400 : 150)
+        limit(resolvedDaysOrAll === 'all' ? 400 : 150)
       );
-    } else if (daysOrAll === 30) {
+    } else if (resolvedDaysOrAll === 30) {
       const cutoff30 = getRecentLessonCutoffDate(31);
       q = query(
         collection(db, LESSONS_COL),
@@ -2407,7 +2415,7 @@ export async function loadOlderLessonsArchive(
 
     const snap = await getDocs(q);
     if (!snap.empty) {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
+      const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Lesson));
       const cleaned = cleanExpiredScreenshots(items);
       const mergedMap = new Map<string, Lesson>();
       cleaned.forEach(l => mergedMap.set(l.id, l));

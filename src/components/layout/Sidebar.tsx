@@ -20,7 +20,8 @@ import {
   User,
   FileSpreadsheet,
   Radio,
-  Eye
+  Eye,
+  Lock
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, Tutor } from '../../types';
@@ -75,7 +76,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'fees', label: 'Student Fees & Invoices', icon: DollarSign },
           { id: 'salaries', label: 'Tutor Salaries (PKR)', icon: Briefcase },
           { id: 'referrals', label: 'Referral Rewards', icon: Share2 },
+          // Admin Navigation & Security
           { id: 'classroom_lab', label: 'Classroom Lab (LiveKit)', icon: Radio },
+          { id: 'chat_safety', label: 'Classroom Chat Safety', icon: Lock },
           { id: 'security', label: 'Academy Security', icon: ShieldCheck },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Internal Messages', icon: MessageSquare },

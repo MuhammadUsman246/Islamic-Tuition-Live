@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useClassroom } from '../../context/ClassroomContext';
 import { AnnouncementsList } from '../common/AnnouncementsList';
 import {
   Video,
@@ -38,7 +39,7 @@ import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
-import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
+import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName, getTutorSlug } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId, loadOlderLessonsArchive } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
@@ -367,6 +368,8 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     return classroomSettings.allowedTestTutorIds.includes(currentId);
   }, [classroomSettings, tutor?.tutorId, currentTutorId]);
 
+  const { joinClassroomSession } = useClassroom();
+
   const handleJoinLiveKitTestClass = async (targetStudentId?: string, overrideRoomCode?: string) => {
     try {
       setIsJoiningLiveKit(true);
@@ -374,13 +377,14 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       const roomName = getCanonicalRoomName(activeTutorId, targetStudentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
-        identity: `tutor_${activeTutorId}_${Date.now()}`,
+        identity: `tutor_${getTutorSlug(activeTutorId)}`,
         participantName: tutor?.realName || tutor?.displayName || activeTutorId,
         role: 'tutor',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
       setLiveKitTokenData(tokenRes);
       setIsLiveKitModalOpen(true);
+      await joinClassroomSession(tokenRes, 'tutor', tutor?.realName || tutor?.displayName || activeTutorId);
     } catch (err: any) {
       alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
     } finally {

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useClassroom } from '../../context/ClassroomContext';
 import {
   Users,
   Video,
@@ -277,6 +278,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
   const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
 
+  const { joinClassroomSession } = useClassroom();
+
   const handleJoinLiveKitClass = async (childObj: Student, overrideTutorId?: string) => {
     try {
       setIsJoiningLiveKit(true);
@@ -284,13 +287,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       const roomName = getCanonicalRoomName(activeTutorId, childObj.studentId);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
-        identity: `parent_${childObj.studentId}_${Date.now()}`,
+        identity: `parent_${childObj.studentId}`,
         participantName: `Parent (${userProfile?.displayName || 'Guardian'})`,
         role: 'student',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
       setLiveKitTokenData(tokenRes);
       setIsLiveKitModalOpen(true);
+      await joinClassroomSession(tokenRes, 'student', `Parent (${userProfile?.displayName || 'Guardian'})`);
     } catch (err: any) {
       alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
     } finally {

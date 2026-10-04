@@ -72,6 +72,14 @@ export const PRESET_USERS: Record<UserRole, UserProfile> = {
     role: 'parent',
     status: 'active',
     createdAt: new Date().toISOString()
+  },
+  guest: {
+    uid: 'guest_user',
+    email: 'guest@islamictuition.us',
+    displayName: 'Guest Student',
+    role: 'guest',
+    status: 'active',
+    createdAt: new Date().toISOString()
   }
 };
 

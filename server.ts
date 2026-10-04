@@ -6,6 +6,13 @@ import dotenv from 'dotenv';
 dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { createServer as createViteServer } from 'vite';
+import {
+  checkMessageSafety,
+  getCodeTitle,
+  DEFAULT_CHAT_SAFETY_SETTINGS,
+  ChatSafetySettings,
+  ChatSafetyErrorCode
+} from './src/utils/chatSafetyFilter';
 
 const app = express();
 const PORT = 3000;
@@ -934,6 +941,125 @@ app.get('/api/livekit/active-rooms', (req: Request, res: Response) => {
   });
 
   res.json({ activeRooms });
+});
+
+// SECTION 7: Chat Safety & Contact Protection API
+interface ServerBlockedAttemptLog {
+  id: string;
+  timestamp: string;
+  code: string;
+  codeTitle: string;
+  senderId: string;
+  senderName: string;
+  senderRole: string;
+  roomSlug: string;
+  rawTextSnippet: string;
+  actionTaken: string;
+}
+
+let SERVER_CHAT_SAFETY_SETTINGS = {
+  enabled: true,
+  detectPhone: true,
+  detectEmail: true,
+  detectLinks: true,
+  detectHandles: true,
+  detectObfuscation: true,
+  detectSpamRateLimit: true,
+  logBlockedAttempts: true,
+  temporaryRestriction: true,
+  adminAlertsEnabled: false,
+  showPrivacyBadge: true,
+  badgeText: '🔒 Privacy Protected',
+  badgeTooltip: 'Classroom chat includes automatic privacy and safety protection to help keep communication secure.'
+};
+
+const SERVER_BLOCKED_CHAT_LOGS: ServerBlockedAttemptLog[] = [];
+
+// Helper to sanitize snippet for log preview
+function sanitizeSnippetForLog(text: string): string {
+  if (!text) return '';
+  const trimmed = text.trim();
+  if (trimmed.length <= 40) return trimmed;
+  return trimmed.substring(0, 37) + '...';
+}
+
+// 1. Get Chat Safety Settings
+app.get('/api/chat/safety-settings', (req: Request, res: Response) => {
+  res.json({ settings: SERVER_CHAT_SAFETY_SETTINGS });
+});
+
+// 2. Update Chat Safety Settings (Admin)
+app.post('/api/chat/safety-settings', (req: Request, res: Response) => {
+  try {
+    const { settings } = req.body;
+    if (settings && typeof settings === 'object') {
+      SERVER_CHAT_SAFETY_SETTINGS = {
+        ...SERVER_CHAT_SAFETY_SETTINGS,
+        ...settings
+      };
+      console.log('[Chat Safety Settings Updated]:', SERVER_CHAT_SAFETY_SETTINGS);
+    }
+    res.json({ success: true, settings: SERVER_CHAT_SAFETY_SETTINGS });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 3. Get Blocked Chat Logs (Admin)
+app.get('/api/chat/blocked-logs', (req: Request, res: Response) => {
+  res.json({ logs: SERVER_BLOCKED_CHAT_LOGS });
+});
+
+// 4. Clear Blocked Chat Logs (Admin)
+app.delete('/api/chat/blocked-logs', (req: Request, res: Response) => {
+  SERVER_BLOCKED_CHAT_LOGS.length = 0;
+  res.json({ success: true, logs: [] });
+});
+
+// 5. Server-Side Chat Message Validation Endpoint (`/api/chat/validate`)
+app.post('/api/chat/validate', (req: Request, res: Response) => {
+  try {
+    const { text, senderId, senderName, senderRole, roomSlug, clientSettings } = req.body;
+
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'Text string is required' });
+    }
+
+    const settingsToUse = clientSettings || SERVER_CHAT_SAFETY_SETTINGS;
+
+    // Use our imported chat safety filter logic
+    const result = checkMessageSafety(text, senderId || 'user_anon', settingsToUse);
+
+    if (!result.isAllowed && settingsToUse.logBlockedAttempts) {
+      const code = result.blockedCode || 'CHAT-01';
+      const logEntry: ServerBlockedAttemptLog = {
+        id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        code,
+        codeTitle: getCodeTitle(code),
+        senderId: senderId || 'unknown',
+        senderName: senderName || 'Classroom User',
+        senderRole: senderRole || 'student',
+        roomSlug: roomSlug || 'live_room',
+        rawTextSnippet: sanitizeSnippetForLog(text),
+        actionTaken: result.isRestrictedUser ? 'Blocked & User Restricted' : 'Blocked & Logged'
+      };
+
+      // Add to server log (keep max 200 logs)
+      SERVER_BLOCKED_CHAT_LOGS.unshift(logEntry);
+      if (SERVER_BLOCKED_CHAT_LOGS.length > 200) {
+        SERVER_BLOCKED_CHAT_LOGS.pop();
+      }
+
+      console.warn(`[CHAT SAFETY ENFORCED]: Blocked ${code} (${logEntry.codeTitle}) from ${logEntry.senderName} (${logEntry.senderRole}) in room ${logEntry.roomSlug}`);
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Chat Validate Error]:', err);
+    // Fail-safe fallback if filter error occurs
+    res.json({ isAllowed: true });
+  }
 });
 
 // Explicit 404 handler for API routes to prevent falling through to SPA HTML fallback

@@ -52,6 +52,11 @@ import {
   WaitingRoomParticipant
 } from '../../types';
 import { createOptimizedLiveKitRoom } from '../../services/livekitService';
+import {
+  ChatSafetySettings,
+  DEFAULT_CHAT_SAFETY_SETTINGS,
+  checkMessageSafety
+} from '../../utils/chatSafetyFilter';
 
 interface IslamicTuitionClassroomProps {
   roomName: string;
@@ -256,17 +261,67 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [selectedVideoInput, setSelectedVideoInput] = useState<string>('');
   const selectedAudioOutputRef = useRef<string>('');
 
-  // Right Sidebar & Chat: Chat is CLOSED by default; clicking Chat opens it, clicking Chat again closes it!
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  // Right Sidebar & Chat: BOTH CLOSED by default for clean full-screen stage presentation!
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
   const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
   const [chatInputText, setChatInputText] = useState<string>('');
+  const [chatSafetySettings, setChatSafetySettings] = useState<ChatSafetySettings>(DEFAULT_CHAT_SAFETY_SETTINGS);
+  const [chatWarningMessage, setChatWarningMessage] = useState<string | null>(null);
+  const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Always-On-Top Floating Mini Control Bar (Document Picture-in-Picture) for PDFs & Other Browser Tabs
+  // Load Admin Classroom Chat Safety Settings
+  useEffect(() => {
+    fetch('/api/chat/safety-settings')
+      .then(r => r.json())
+      .then(data => {
+        if (data?.settings) {
+          setChatSafetySettings(data.settings);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Always-On-Top Floating Mini Control Bar (Document Picture-in-Picture & Canvas PiP Fallback for Iframes)
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
   const pipWindowRef = useRef<Window | null>(null);
+  const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pipFallbackVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [isLocalBrowserSharingScreen, setIsLocalBrowserSharingScreen] = useState<boolean>(false);
+  const [embeddedPdfUrl, setEmbeddedPdfUrl] = useState<string | null>(null);
+  const [embeddedPdfPage, setEmbeddedPdfPage] = useState<number>(1);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Single-Instance Browser BroadcastChannel & LocalStorage Guard
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('islamic_tuition_single_instance');
+        bc.onmessage = (e) => {
+          if (e.data?.type === 'CLASSROOM_OPENED' && e.data?.role === userRole && e.data?.roomName === roomName && e.data?.tabId !== instanceTabIdRef.current) {
+            // Newer tab opened same classroom for same role - cleanly disconnect background duplicate
+            if (roomRef.current) {
+              try { roomRef.current.disconnect(); } catch {}
+            }
+          } else if (e.data?.type === 'SCREEN_SHARE_ACTIVE') {
+            if (e.data?.roomName === roomName) {
+              setIsLocalBrowserSharingScreen(e.data?.isSharing);
+            }
+          }
+        };
+        bc.postMessage({ type: 'CLASSROOM_OPENED', role: userRole, roomName, tabId: instanceTabIdRef.current });
+      }
+    } catch {}
+
+    return () => {
+      if (bc) bc.close();
+    };
+  }, [userRole, roomName]);
+
+  const instanceTabIdRef = useRef<string>(`tab_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
 
   useEffect(() => {
     pipWindowRef.current = pipWindow;
@@ -878,53 +933,71 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     };
   }, [tokenData.token, tokenData.serverUrl, tokenData.isMockSession, roomName]);
 
-  // Open Always-On-Top Floating Mini Control Bar (Stays visible on top of PDFs & other browser tabs!)
+  // Open Always-On-Top Floating Mini Control Bar (Works in top-level windows AND inside iframes!)
   const openFloatingControlBar = useCallback(async () => {
     try {
+      // 1. Try Document Picture-in-Picture if top-level window
       const docPip = (window as any).documentPictureInPicture;
-      if (!docPip || typeof docPip.requestWindow !== 'function') return;
-      if (pipWindowRef.current && !pipWindowRef.current.closed) {
-        pipWindowRef.current.focus();
+      const isTopLevel = typeof window !== 'undefined' && window.self === window.top;
+
+      if (isTopLevel && docPip && typeof docPip.requestWindow === 'function') {
+        if (pipWindowRef.current && !pipWindowRef.current.closed) {
+          pipWindowRef.current.focus();
+          return;
+        }
+
+        const pipWin: Window = await docPip.requestWindow({
+          width: 500,
+          height: isChatOpen ? 340 : 66,
+        });
+
+        pipWin.document.title = 'Islamic Tuition Classroom';
+        pipWin.document.body.style.margin = '0';
+        pipWin.document.body.style.padding = '0';
+        pipWin.document.body.style.backgroundColor = '#050806';
+        pipWin.document.body.style.color = '#FFFFFF';
+        pipWin.document.body.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+        pipWin.document.body.style.overflow = 'hidden';
+
+        Array.from(document.styleSheets).forEach((styleSheet) => {
+          try {
+            if (styleSheet.cssRules) {
+              const newStyleEl = pipWin.document.createElement('style');
+              Array.from(styleSheet.cssRules).forEach((rule) => {
+                newStyleEl.appendChild(pipWin.document.createTextNode(rule.cssText));
+              });
+              pipWin.document.head.appendChild(newStyleEl);
+            } else if (styleSheet.href) {
+              const newLinkEl = pipWin.document.createElement('link');
+              newLinkEl.rel = 'stylesheet';
+              newLinkEl.href = styleSheet.href;
+              pipWin.document.head.appendChild(newLinkEl);
+            }
+          } catch {}
+        });
+
+        pipWin.addEventListener('pagehide', () => {
+          setPipWindow(null);
+        });
+
+        setPipWindow(pipWin);
         return;
       }
-
-      const pipWin: Window = await docPip.requestWindow({
-        width: 500,
-        height: isChatOpen ? 340 : 66,
-      });
-
-      pipWin.document.title = 'Islamic Tuition Classroom';
-      pipWin.document.body.style.margin = '0';
-      pipWin.document.body.style.padding = '0';
-      pipWin.document.body.style.backgroundColor = '#050806';
-      pipWin.document.body.style.color = '#FFFFFF';
-      pipWin.document.body.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-      pipWin.document.body.style.overflow = 'hidden';
-
-      Array.from(document.styleSheets).forEach((styleSheet) => {
-        try {
-          if (styleSheet.cssRules) {
-            const newStyleEl = pipWin.document.createElement('style');
-            Array.from(styleSheet.cssRules).forEach((rule) => {
-              newStyleEl.appendChild(pipWin.document.createTextNode(rule.cssText));
-            });
-            pipWin.document.head.appendChild(newStyleEl);
-          } else if (styleSheet.href) {
-            const newLinkEl = pipWin.document.createElement('link');
-            newLinkEl.rel = 'stylesheet';
-            newLinkEl.href = styleSheet.href;
-            pipWin.document.head.appendChild(newLinkEl);
-          }
-        } catch {}
-      });
-
-      pipWin.addEventListener('pagehide', () => {
-        setPipWindow(null);
-      });
-
-      setPipWindow(pipWin);
     } catch (e) {
-      // Browser may not support Document PiP or lacked direct gesture
+      console.warn('Doc PiP notice, falling back to Video Canvas PiP:', e);
+    }
+
+    // 2. Fallback for IFrames & Browsers without Document PiP: Canvas Video Picture-in-Picture
+    try {
+      if (pipFallbackVideoRef.current && document.pictureInPictureEnabled) {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        } else {
+          await pipFallbackVideoRef.current.requestPictureInPicture();
+        }
+      }
+    } catch (err) {
+      console.warn('Fallback Video PiP notice:', err);
     }
   }, [isChatOpen]);
 
@@ -936,16 +1009,144 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     } catch {}
   }, [isChatOpen, pipWindow]);
 
-  // Register Chrome automatic Picture-in-Picture handler when switching tabs
+  // Continuous Canvas Drawing for Floating Video Picture-in-Picture Fallback (Works inside IFrames & On Top of PDFs)
   useEffect(() => {
+    const canvas = pipCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animId: number;
+    const renderPipFrame = () => {
+      // Dark emerald studio canvas background
+      ctx.fillStyle = '#070D0A';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#223D2E';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+      // Header: Brand & Room
+      ctx.fillStyle = '#34D399';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText('Islamic Tuition Classroom', 12, 22);
+
+      ctx.fillStyle = '#9CA3AF';
+      ctx.font = '11px monospace';
+      ctx.fillText(`Timer: ${formatChronometerTime(elapsedSeconds)}`, 360, 22);
+
+      // Divider
+      ctx.strokeStyle = '#1E3A2B';
+      ctx.beginPath();
+      ctx.moveTo(12, 32);
+      ctx.lineTo(468, 32);
+      ctx.stroke();
+
+      // Row 1: Mic Status Pill
+      if (isAudioMuted) {
+        ctx.fillStyle = '#991B1B';
+        ctx.beginPath();
+        ctx.roundRect(12, 42, 130, 26, 6);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.fillText('🔇 MIC: MUTED', 22, 59);
+      } else {
+        ctx.fillStyle = '#065F46';
+        ctx.beginPath();
+        ctx.roundRect(12, 42, 130, 26, 6);
+        ctx.fill();
+        ctx.fillStyle = '#34D399';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.fillText('🎙️ MIC: LIVE HD', 22, 59);
+      }
+
+      // Row 1: Screen Share Pill
+      if (isScreenSharing) {
+        ctx.fillStyle = '#1E40AF';
+        ctx.beginPath();
+        ctx.roundRect(152, 42, 150, 26, 6);
+        ctx.fill();
+        ctx.fillStyle = '#93C5FD';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.fillText('🖥️ SCREEN: LIVE', 162, 59);
+      } else {
+        ctx.fillStyle = '#1F2937';
+        ctx.beginPath();
+        ctx.roundRect(152, 42, 150, 26, 6);
+        ctx.fill();
+        ctx.fillStyle = '#9CA3AF';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.fillText('🖥️ SCREEN: READY', 162, 59);
+      }
+
+      // Row 1: In Class Count Pill
+      ctx.fillStyle = '#064E3B';
+      ctx.beginPath();
+      ctx.roundRect(312, 42, 156, 26, 6);
+      ctx.fill();
+      ctx.fillStyle = '#A7F3D0';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(`👥 IN CLASS: ${activeVisibleParticipantsCount}`, 322, 59);
+
+      // Row 2: Chat Ticker
+      ctx.fillStyle = '#111C15';
+      ctx.beginPath();
+      ctx.roundRect(12, 78, 456, 32, 6);
+      ctx.fill();
+
+      const lastMsg = chatMessages[chatMessages.length - 1];
+      if (lastMsg) {
+        ctx.fillStyle = '#34D399';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.fillText(`💬 ${lastMsg.sender}:`, 20, 93);
+        ctx.fillStyle = '#E5E7EB';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.fillText(lastMsg.text.slice(0, 52) + (lastMsg.text.length > 52 ? '...' : ''), 20, 105);
+      } else {
+        ctx.fillStyle = '#6B7280';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.fillText('💬 Classroom Chat: No messages yet. Click Chat to send message.', 20, 98);
+      }
+
+      // Footer
+      ctx.fillStyle = '#4B5563';
+      ctx.font = '9px system-ui, sans-serif';
+      ctx.fillText('Islamic Tuition Floating Control Bar · Works on PDFs & All Screen Tabs', 12, 126);
+
+      animId = requestAnimationFrame(renderPipFrame);
+    };
+
+    renderPipFrame();
+
+    // Stream Canvas to Fallback Video Element
+    try {
+      if (pipFallbackVideoRef.current && !pipFallbackVideoRef.current.srcObject) {
+        const stream = canvas.captureStream(15);
+        pipFallbackVideoRef.current.srcObject = stream;
+        (pipFallbackVideoRef.current as any).autoPictureInPicture = true;
+        pipFallbackVideoRef.current.play().catch(() => {});
+      }
+    } catch (e) {}
+
+    // Register MediaSession Handlers for PiP Window Hardware/OS Controls
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       try {
-        (navigator.mediaSession as any).setActionHandler('enterpictureinpicture', () => {
-          openFloatingControlBar();
-        });
-      } catch {}
+        const ms = navigator.mediaSession as any;
+        if (ms.setActionHandler) {
+          ms.setActionHandler('togglemicrophone', () => handleToggleAudio());
+          ms.setActionHandler('togglecamera', () => isStudent ? handleToggleCamera() : handleToggleScreenShare());
+          ms.setActionHandler('hangup', () => setShowLeaveConfirmModal(true));
+          ms.setActionHandler('play', () => { if (isAudioMutedRef.current) handleToggleAudio(); });
+          ms.setActionHandler('pause', () => { if (!isAudioMutedRef.current) handleToggleAudio(); });
+        }
+      } catch (e) {}
     }
-  }, [openFloatingControlBar]);
+
+    return () => {
+      cancelAnimationFrame(animId);
+    };
+  }, [elapsedSeconds, isAudioMuted, isScreenSharing, activeVisibleParticipantsCount, chatMessages, isStudent]);
 
   // Switch active microphone device on the fly without disconnecting room (Noise Filter permanently active)
   const handleSelectAudioInput = async (deviceId: string) => {
@@ -1005,7 +1206,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  // Control 2: Share Screen (Optimized for Full HD Quran Mushaf with zero self-mirroring & automatic floating bar)
+  // Control 2: Share Screen (Exclude Entire Screen & Classroom Tab to prevent Hall of Mirrors and eliminate Chrome's bottom popup bar)
   const handleToggleScreenShare = async () => {
     try {
       if (isScreenSharing) {
@@ -1016,56 +1217,72 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           screenShareVideoRef.current.srcObject = null;
         }
         setIsScreenSharing(false);
+        setIsLocalBrowserSharingScreen(false);
+
+        try {
+          if (typeof BroadcastChannel !== 'undefined') {
+            const bc = new BroadcastChannel('islamic_tuition_single_instance');
+            bc.postMessage({ type: 'SCREEN_SHARE_ACTIVE', roomName, isSharing: false });
+            bc.close();
+          }
+        } catch {}
       } else {
+        // Broadcast local screen share active state
+        setIsLocalBrowserSharingScreen(true);
+        try {
+          if (typeof BroadcastChannel !== 'undefined') {
+            const bc = new BroadcastChannel('islamic_tuition_single_instance');
+            bc.postMessage({ type: 'SCREEN_SHARE_ACTIVE', roomName, isSharing: true });
+            bc.close();
+          }
+        } catch {}
+
+        const displayConstraints: any = {
+          audio: false,
+          selfBrowserSurface: 'exclude', // Excludes the classroom tab itself
+          surfaceSwitching: 'include',
+          systemAudio: 'exclude',
+          monitorTypeSurfaces: 'exclude', // Excludes "Entire Screen" option to prevent Hall of Mirrors and eliminate Chrome's bottom popup bar!
+          video: {
+            displaySurface: 'browser', // Defaults Chrome picker to "Chrome Tab" (zero floating bottom desktop box)
+            width: 1920,
+            height: 1080,
+            frameRate: 10,
+          }
+        };
+
         if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
-          await roomRef.current.localParticipant.setScreenShareEnabled(
-            true,
-            {
-              // Keep system audio off by default so student voice playing on tutor speakers never echoes back into the room!
-              audio: false,
-              selfBrowserSurface: 'exclude',
-              surfaceSwitching: 'include',
-              systemAudio: 'exclude',
-              contentHint: 'detail',
-              resolution: {
-                width: 1920,
-                height: 1080,
-                frameRate: 10,
-              },
-            } as any,
-            {
-              simulcast: true,
-              degradationPreference: 'maintain-resolution',
-              screenShareSimulcastLayers: [
-                VideoPresets.h720,
-              ],
-              screenShareEncoding: {
-                maxBitrate: 850_000,
-                maxFramerate: 10,
-                priority: 'medium',
-              },
-            }
-          );
-          setIsScreenSharing(true);
-          openFloatingControlBar();
+          try {
+            await roomRef.current.localParticipant.setScreenShareEnabled(
+              true,
+              displayConstraints,
+              {
+                simulcast: true,
+                degradationPreference: 'maintain-resolution',
+                screenShareEncoding: {
+                  maxBitrate: 850_000,
+                  maxFramerate: 10,
+                  priority: 'medium',
+                },
+              }
+            );
+            setIsScreenSharing(true);
+          } catch (err: any) {
+            // Fallback if browser rejected monitorTypeSurfaces
+            delete displayConstraints.monitorTypeSurfaces;
+            await roomRef.current.localParticipant.setScreenShareEnabled(true, displayConstraints as any);
+            setIsScreenSharing(true);
+          }
         } else if (navigator.mediaDevices?.getDisplayMedia) {
-          await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              displaySurface: 'window',
-            } as any,
-            audio: false,
-            selfBrowserSurface: 'exclude',
-            surfaceSwitching: 'include',
-            systemAudio: 'exclude',
-          } as any);
+          await navigator.mediaDevices.getDisplayMedia(displayConstraints);
           setIsScreenSharing(true);
-          openFloatingControlBar();
         }
       }
       if (roomRef.current) syncParticipantsState(roomRef.current);
     } catch (e) {
       console.warn('Screen share toggle notice:', e);
       setIsScreenSharing(false);
+      setIsLocalBrowserSharingScreen(false);
     }
   };
 
@@ -1263,15 +1480,64 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     setTestCountdown(5);
   };
 
-  // Send Live Room Chat Message
-  const handleSendChatMessage = () => {
-    if (!chatInputText.trim()) return;
+  // Send Live Room Chat Message with Safety & Contact-Sharing Protection
+  const handleSendChatMessage = async () => {
+    const rawText = chatInputText.trim();
+    if (!rawText || isSendingChat) return;
+
+    setChatWarningMessage(null);
+
+    // 1. Client-Side Instant Rule Validation
+    const clientCheck = checkMessageSafety(rawText, participantName || 'user', chatSafetySettings);
+    if (!clientCheck.isAllowed) {
+      setChatWarningMessage(
+        clientCheck.userFacingError ||
+        "For everyone's privacy and safety, personal contact information can't be shared in classroom chat. Please keep communication within the academy platform."
+      );
+      setTimeout(() => setChatWarningMessage(null), 8000);
+      return;
+    }
+
+    setIsSendingChat(true);
+
+    // 2. Server-Side Validation Endpoint
+    try {
+      const res = await fetch('/api/chat/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: rawText,
+          senderId: participantName || 'user',
+          senderName: participantName,
+          senderRole: isTutor ? 'tutor' : 'student',
+          roomSlug: roomName || 'live_room',
+          clientSettings: chatSafetySettings
+        })
+      });
+
+      if (res.ok) {
+        const serverCheck = await res.json();
+        if (!serverCheck.isAllowed) {
+          setIsSendingChat(false);
+          setChatWarningMessage(
+            serverCheck.userFacingError ||
+            "For everyone's privacy and safety, personal contact information can't be shared in classroom chat. Please keep communication within the academy platform."
+          );
+          setTimeout(() => setChatWarningMessage(null), 8000);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('[Classroom Chat Validation Warning]:', e);
+    } finally {
+      setIsSendingChat(false);
+    }
 
     const newMsg: ChatMessageItem = {
       id: `msg_${Date.now()}`,
       sender: participantName,
       role: isTutor ? 'Tutor' : 'Student',
-      text: chatInputText.trim(),
+      text: rawText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -1284,7 +1550,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         type: 'CHAT',
         sender: participantName,
         role: isTutor ? 'Tutor' : 'Student',
-        text: chatInputText.trim()
+        text: rawText
       }));
       roomRef.current.localParticipant.publishData(payload, { reliable: true });
     }
@@ -1324,11 +1590,33 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
-  // Only render the full-screen <video> element when viewing a REMOTE participant's screen share.
-  // When the local user is the one sharing their screen (isScreenSharing === true), we keep the browser tab
-  // calm and static so it never creates recursive "Hall of Mirrors" nested screen views!
-  const isViewingRemoteScreenShare = Boolean(activeScreenShareParticipant && !isScreenSharing);
+  // Only render remote screen share video on STUDENT / VIEWER tabs when NOT on the presenter's browser/device!
+  // Tutors NEVER render screenShareVideoRef because Tutors are always the presenter (students don't share screen).
+  // This completely eliminates the recursive Hall of Mirrors when in the browser!
+  const isViewingRemoteScreenShare = Boolean(activeScreenShareParticipant && !isScreenSharing && !isTutor && !isLocalBrowserSharingScreen);
   const hasActiveStudentCamera = Boolean(isCameraActive || activeCameraParticipant);
+
+  // Hidden Canvas & Video Elements for Video Picture-in-Picture Fallback (Works inside IFrames & On Top of PDFs)
+  const renderFallbackPipElements = (
+    <div className="fixed -bottom-96 -right-96 w-1 h-1 opacity-0 pointer-events-none overflow-hidden" aria-hidden="true">
+      <canvas ref={pipCanvasRef} width={480} height={140} />
+      <video ref={pipFallbackVideoRef} muted autoPlay playsInline />
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept="application/pdf,image/*"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            const url = URL.createObjectURL(file);
+            setEmbeddedPdfUrl(url);
+            setEmbeddedPdfPage(1);
+          }
+        }}
+        className="hidden"
+      />
+    </div>
+  );
 
   return (
     <div
@@ -1339,6 +1627,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           : 'bg-[#050806] text-[#F8FAFC] border-[#1F3A2C]'
       } ${className}`}
     >
+      {renderFallbackPipElements}
       {/* Dedicated Multi-Track Audio Container for Remote Participants */}
       <div ref={remoteAudioContainerRef} className="hidden" />
 
@@ -1545,7 +1834,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           ) : (
             /* CLEAN STATIC QURAN CLASSROOM STAGE (Eliminates recursive mirror views when Tutor is in browser tab!) */
             <div
-              className={`flex-1 w-full h-full rounded-xl border flex flex-col items-center justify-center p-6 text-center transition-colors ${
+              className={`flex-1 w-full h-full rounded-xl border flex flex-col items-center justify-center p-6 text-center transition-colors relative overflow-hidden ${
                 isLight
                   ? 'bg-white border-[#DFDBD0] shadow-xs'
                   : 'bg-gradient-to-b from-[#0D1812] to-[#08100C] border-[#233F2F] shadow-inner'
@@ -1608,24 +1897,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     }`}
                   >
                     <Monitor className="w-4 h-4" />
-                    <span>{isScreenSharing ? 'Stop Screen Share' : 'Share Quran / Lesson Screen Now'}</span>
+                    <span>{isScreenSharing ? 'Stop Screen Share' : 'Share Quran Window / Tab'}</span>
                   </button>
-
-                  {typeof window !== 'undefined' && 'documentPictureInPicture' in window && (
-                    <button
-                      type="button"
-                      onClick={openFloatingControlBar}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 border cursor-pointer transition-all ${
-                        isLight
-                          ? 'bg-[#FAF9F5] hover:bg-emerald-50 border-[#D5D0C6] text-[#1E5C3D]'
-                          : 'bg-[#15241B] hover:bg-[#1E3327] border-[#2B4B39] text-emerald-300'
-                      }`}
-                      title="Open compact floating control bar that stays visible on top of PDFs and other browser tabs"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>{pipWindow ? 'Floating Controls Active' : 'Floating Controls for PDF / Tabs'}</span>
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -1726,18 +1999,32 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             {isChatOpen && (
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                 <div
-                  className={`px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-bold ${
+                  className={`px-3 py-2 border-b flex items-center justify-between text-[11px] font-bold ${
                     isLight ? 'border-[#E8E4DA] text-[#14231B]' : 'border-[#223D2E] text-white'
                   }`}
                 >
-                  <span className="flex items-center space-x-1.5">
-                    <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Classroom Chat</span>
-                  </span>
+                  <div className="flex items-center space-x-2 min-w-0">
+                    <span className="flex items-center space-x-1.5 shrink-0">
+                      <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Classroom Chat</span>
+                    </span>
+
+                    {/* Subtle Privacy Protection Badge (Admin Configurable) */}
+                    {chatSafetySettings.showPrivacyBadge && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-950/70 text-emerald-300 border border-emerald-500/30 shadow-2xs select-none cursor-help hover:bg-emerald-900/80 transition-colors truncate"
+                        title={chatSafetySettings.badgeTooltip || 'Classroom chat includes automatic privacy and safety protection to help keep communication secure.'}
+                      >
+                        <Lock className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                        <span className="truncate">{chatSafetySettings.badgeText || '🔒 Privacy Protected'}</span>
+                      </span>
+                    )}
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => setIsChatOpen(false)}
-                    className={`p-0.5 rounded hover:bg-white/10 cursor-pointer ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}
+                    className={`p-0.5 rounded hover:bg-white/10 cursor-pointer shrink-0 ml-1 ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}
                     title="Close Chat"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -1770,6 +2057,24 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   <div ref={chatEndRef} />
                 </div>
 
+                {/* Friendly Safety Notice Banner when Message is Blocked */}
+                {chatWarningMessage && (
+                  <div className="mx-2 mb-1.5 p-2.5 rounded-lg bg-rose-950/90 border border-rose-500/50 text-rose-200 text-[11px] flex items-start gap-2 shadow-md animate-in fade-in">
+                    <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 leading-tight space-y-0.5">
+                      <p className="font-bold text-rose-300">Privacy Notice</p>
+                      <p className="text-[10px] text-rose-200">{chatWarningMessage}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setChatWarningMessage(null)}
+                      className="text-rose-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 <div className={`p-2 border-t flex items-center space-x-1.5 ${isLight ? 'border-[#E8E4DA] bg-[#FAF9F5]' : 'border-[#223D2E] bg-[#0D1712]'}`}>
                   <input
                     ref={chatInputRef}
@@ -1786,8 +2091,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   />
                   <button
                     type="button"
+                    disabled={isSendingChat}
                     onClick={handleSendChatMessage}
-                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0"
+                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0 disabled:opacity-50"
                     title="Send Chat Message"
                   >
                     <Send className="w-3.5 h-3.5" />
