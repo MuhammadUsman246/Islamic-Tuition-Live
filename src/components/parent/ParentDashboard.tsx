@@ -23,7 +23,9 @@ import {
   Receipt,
   Send,
   Palmtree,
-  Radio
+  Radio,
+  Copy,
+  Check
 } from 'lucide-react';
 import {
   Student,
@@ -42,8 +44,8 @@ import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
-import { updateFee } from '../../services/dataService';
-import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
+import { updateFee, loadOlderLessonsArchive } from '../../services/dataService';
+import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName, getTutorSlug, getTutorDisplayId } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 
 interface ParentDashboardProps {
@@ -88,7 +90,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     return d.toISOString().slice(0, 10);
   });
   const [endDateReport, setEndDateReport] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [reportViewMode, setReportViewMode] = useState<'monthly' | 'weekly' | 'all'>('monthly');
+  const [reportViewMode, setReportViewMode] = useState<'monthly' | 'weekly' | 'all'>('weekly');
+  const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [expandedMonths, setExpandedMonths] = useState<{ [key: string]: boolean }>({});
   const [expandedWeeks, setExpandedWeeks] = useState<{ [key: string]: boolean }>({});
 
@@ -179,11 +182,22 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   }, [myChildren, selectedChildId]);
 
   const activeChild = myChildren.find(c => c.studentId === selectedChildId) || myChildren[0] || null;
-  const activeTutor = tutors.find(t => t.tutorId === activeChild?.assignedTutorId) || null;
 
-  const childClasses = activeChild ? classes.filter(c => c.studentId === activeChild.studentId) : [];
-  const childLessons = activeChild ? lessons.filter(l => l.studentId === activeChild.studentId) : [];
-  const childAttendance = activeChild ? attendance.filter(a => a.studentId === activeChild.studentId) : [];
+  const childClasses = activeChild ? classes.filter(c => c.studentId === activeChild.studentId || c.studentName === activeChild.name) : [];
+  const childLessons = activeChild ? lessons.filter(l => l.studentId === activeChild.studentId || l.studentName === activeChild.name) : [];
+  const childAttendance = activeChild ? attendance.filter(a => a.studentId === activeChild.studentId || a.studentName === activeChild.name) : [];
+
+  const rawChildTutorId = activeChild?.assignedTutorId || childClasses[0]?.tutorId || 'Tutor 1';
+  const activeTutor = activeChild
+    ? tutors.find(
+        t =>
+          t.tutorId === rawChildTutorId ||
+          getTutorSlug(t.tutorId) === getTutorSlug(rawChildTutorId)
+      ) || null
+    : null;
+  const resolvedChildTutorDisplayId = activeTutor?.tutorId || getTutorDisplayId(rawChildTutorId);
+  const resolvedChildTutorSlug = getTutorSlug(resolvedChildTutorDisplayId);
+  const [copiedChildClassroomLink, setCopiedChildClassroomLink] = useState(false);
 
   const childLessonsByMonth = useMemo(() => {
     const grouped: { [key: string]: Lesson[] } = {};
@@ -263,10 +277,10 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [isJoiningLiveKit, setIsJoiningLiveKit] = useState<boolean>(false);
   const classroomSettings = useMemo(() => getLocalClassroomSettings(), []);
 
-  const handleJoinLiveKitClass = async (childObj: Student) => {
+  const handleJoinLiveKitClass = async (childObj: Student, overrideTutorId?: string) => {
     try {
       setIsJoiningLiveKit(true);
-      const activeTutorId = childObj.assignedTutorId || 'Tutor 1';
+      const activeTutorId = overrideTutorId || resolvedChildTutorDisplayId || childObj.assignedTutorId || 'Tutor 1';
       const roomName = getCanonicalRoomName(activeTutorId, childObj.studentId);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
@@ -384,33 +398,62 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 )}
               </div>
               <p className="text-xs text-[#5A6B61] mt-0.5">
-                Course: <strong>{activeChild.courseType}</strong> • Tutor: <strong>{activeTutor?.tutorId} ({activeTutor?.realName})</strong>
+                Course: <strong>{activeChild.courseType}</strong> • Assigned Tutor: <strong>{resolvedChildTutorDisplayId} {activeTutor?.realName ? `(${activeTutor.realName})` : ''}</strong>
               </p>
+              {/* Assigned Tutor Classroom ID & Direct Link for Parent */}
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 font-mono text-emerald-900 flex items-center gap-1">
+                  <span>Classroom ID:</span>
+                  <strong>{resolvedChildTutorSlug}</strong>
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-[#FAF9F7] border border-[#E3DFD7] font-mono text-[#5A6B61] flex items-center gap-1.5">
+                  <span className="truncate max-w-[190px] sm:max-w-[250px] text-[#1E5C3D]">
+                    {window.location.origin}/class/{resolvedChildTutorSlug}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = `${window.location.origin}/class/${resolvedChildTutorSlug}`;
+                      navigator.clipboard.writeText(url).then(() => {
+                        setCopiedChildClassroomLink(true);
+                        setTimeout(() => setCopiedChildClassroomLink(false), 2000);
+                      });
+                    }}
+                    className="ml-1 text-[#2D8B5C] hover:text-[#1E5C3D] font-sans font-bold flex items-center gap-1 cursor-pointer"
+                    title="Copy direct link to child's assigned classroom"
+                  >
+                    {copiedChildClassroomLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedChildClassroomLink ? 'Copied' : 'Copy Link'}</span>
+                  </button>
+                </span>
+              </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <a
-              href={activeTutor?.zoomLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs"
-            >
-              <Video className="w-4 h-4" />
-              <span>Launch {activeChild.name}'s Zoom Class</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-
             <button
               type="button"
-              onClick={() => handleJoinLiveKitClass(activeChild)}
+              onClick={() => handleJoinLiveKitClass(activeChild, resolvedChildTutorDisplayId)}
               disabled={isJoiningLiveKit}
-              className="px-4 py-2 bg-[#E8A93E] hover:bg-[#C98A1E] text-slate-900 font-bold text-xs rounded-lg flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
-              title="Observe or join child's live integrated Quran classroom"
+              className="px-4 py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              title={`Join or observe ${activeChild.name}'s assigned classroom (${resolvedChildTutorSlug})`}
             >
-              <Radio className="w-4 h-4 text-emerald-950 animate-pulse" />
-              <span>{isJoiningLiveKit ? 'Connecting...' : `Observe Live Class`}</span>
+              <Radio className="w-4 h-4 text-[#E8A93E] animate-pulse" />
+              <span>{isJoiningLiveKit ? 'Connecting...' : `Join ${resolvedChildTutorDisplayId} Classroom (${resolvedChildTutorSlug})`}</span>
             </button>
+
+            {activeTutor?.zoomLink && (
+              <a
+                href={activeTutor?.zoomLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-[#FAF9F7] hover:bg-gray-100 text-[#5A6B61] border border-[#E3DFD7] text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition-colors shadow-2xs"
+              >
+                <Video className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                <span>Zoom (Fallback)</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
       </div>
     )}
@@ -494,13 +537,31 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                     </div>
 
                     <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] text-xs space-y-1">
-                      <p className="text-[#5A6B61]">
-                        Assigned Tutor: <strong className="text-[#2D8B5C]">{cls.tutorId}</strong>
+                      <p className="text-[#5A6B61] flex items-center justify-between">
+                        <span>Assigned Tutor: <strong className="text-[#2D8B5C]">{cls.tutorId}</strong></span>
+                        <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          {getTutorSlug(cls.tutorId)}
+                        </span>
                       </p>
                       <p className="text-[#5A6B61]">
                         Weekly Class: <span className="font-medium text-[#161F1A]">{conv.localDay}s at {conv.localTime}</span>
                       </p>
+                      <p className="text-[#5A6B61] font-mono text-[11px] truncate">
+                        Link: <span className="text-[#1E5C3D]">{window.location.origin}/class/{getTutorSlug(cls.tutorId)}</span>
+                      </p>
                     </div>
+
+                    {activeChild && (
+                      <button
+                        type="button"
+                        onClick={() => handleJoinLiveKitClass(activeChild, cls.tutorId)}
+                        disabled={isJoiningLiveKit}
+                        className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-lg flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+                      >
+                        <Radio className="w-3.5 h-3.5 text-[#E8A93E]" />
+                        <span>Join {getTutorDisplayId(cls.tutorId)} Classroom ({getTutorSlug(cls.tutorId)})</span>
+                      </button>
+                    )}
                   </div>
                 );
               });
@@ -597,7 +658,30 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             <div className="bg-[#FAF9F7] border border-[#E3DFD7] p-1 rounded-xl flex items-center space-x-1 self-start sm:self-auto shadow-xs">
               <button
                 type="button"
-                onClick={() => setReportViewMode('monthly')}
+                onClick={() => setReportViewMode('weekly')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  reportViewMode === 'weekly'
+                    ? 'bg-white text-[#1E5C3D] shadow-xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                Last 7 Days
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingOlderLessons}
+                onClick={async () => {
+                  setReportViewMode('monthly');
+                  if (activeChild) {
+                    setIsLoadingOlderLessons(true);
+                    try {
+                      await loadOlderLessonsArchive({ studentIds: [activeChild.id], daysBack: 180 });
+                      if (onRefreshData) await onRefreshData();
+                    } finally {
+                      setIsLoadingOlderLessons(false);
+                    }
+                  }
+                }}
                 className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                   reportViewMode === 'monthly'
                     ? 'bg-white text-[#1E5C3D] shadow-xs'
@@ -608,25 +692,26 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setReportViewMode('weekly')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                  reportViewMode === 'weekly'
-                    ? 'bg-white text-[#1E5C3D] shadow-xs'
-                    : 'text-[#5A6B61] hover:text-[#161F1A]'
-                }`}
-              >
-                Weekly View
-              </button>
-              <button
-                type="button"
-                onClick={() => setReportViewMode('all')}
+                disabled={isLoadingOlderLessons}
+                onClick={async () => {
+                  setReportViewMode('all');
+                  if (activeChild) {
+                    setIsLoadingOlderLessons(true);
+                    try {
+                      await loadOlderLessonsArchive({ studentIds: [activeChild.id], daysBack: 365 });
+                      if (onRefreshData) await onRefreshData();
+                    } finally {
+                      setIsLoadingOlderLessons(false);
+                    }
+                  }
+                }}
                 className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                   reportViewMode === 'all'
                     ? 'bg-white text-[#1E5C3D] shadow-xs'
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
                 }`}
               >
-                Day-by-Day Logs
+                {isLoadingOlderLessons ? 'Loading Older...' : 'Load Older (All Logs)'}
               </button>
             </div>
           </div>

@@ -19,7 +19,8 @@ import {
   Trash2,
   User,
   FileSpreadsheet,
-  Radio
+  Radio,
+  Eye
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, Tutor } from '../../types';
@@ -64,6 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
       case 'admin':
         return [
           { id: 'overview', label: 'Academy Overview', icon: GraduationCap },
+          { id: 'admin_observe', label: 'Observe Live Classes', icon: Eye },
           { id: 'timetable', label: 'Master Timetable', icon: Calendar },
           { id: 'students', label: 'Students', icon: Users },
           { id: 'tutors', label: 'Tutors & Zoom Links', icon: Video },
@@ -94,6 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
       case 'supervisor':
         return [
           { id: 'supervisor_overview', label: 'Operations Overview', icon: ShieldCheck },
+          { id: 'supervisor_observe', label: 'Observe Live Classes', icon: Eye },
           { id: 'timetable', label: 'Master Timetables', icon: Calendar },
           { id: 'supervisor_attendance', label: 'Tutor Attendance & Late', icon: Clock },
           { id: 'lessons', label: 'Lesson Quality & Reports', icon: BookOpen },

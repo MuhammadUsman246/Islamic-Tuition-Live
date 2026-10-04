@@ -20,7 +20,9 @@ import {
   Edit3,
   Lock,
   Clock,
-  Radio
+  Radio,
+  Share2,
+  Eye
 } from 'lucide-react';
 import {
   Tutor,
@@ -38,7 +40,7 @@ import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
 import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
-import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId } from '../../services/dataService';
+import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId, loadOlderLessonsArchive } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { useAuth } from '../../context/AuthContext';
@@ -146,8 +148,9 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     isSameTutor(l.tutorId, tutor?.tutorId) && activeStudentIds.has(l.studentId)
   );
 
-  // Time Period & Student Filter state for Tutor Lesson Reports
-  const [reportTimeMode, setReportTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('monthly');
+  // Time Period & Student Filter state for Tutor Lesson Reports (Defaults to Last 7 Days)
+  const [reportTimeMode, setReportTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('weekly');
+  const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
   const [tutorStartDate, setTutorStartDate] = useState<string>(() => {
     const d = new Date();
@@ -421,36 +424,31 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* Permanent Zoom Action Button - Launches directly into local Zoom desktop application */}
+          {/* IslamicTuition Live Classroom Start Button */}
+          <button
+            type="button"
+            id="tutor_livekit_launch_button"
+            onClick={() => handleJoinLiveKitTestClass()}
+            disabled={isJoiningLiveKit}
+            className="px-5 py-2.5 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-xs transition-colors flex items-center space-x-2 shadow-md cursor-pointer ring-2 ring-emerald-400/30 active:scale-95"
+            title="Start your live audio Quran classroom"
+          >
+            <Radio className="w-4 h-4 text-[#E8A93E] animate-pulse" />
+            <span>{isJoiningLiveKit ? 'Connecting...' : 'Start Live Classroom'}</span>
+          </button>
+
+          {/* Permanent Zoom Fallback Action Button */}
           <button
             type="button"
             id="tutor_zoom_launch_button"
             onClick={handleLaunchZoomDesktop}
-            className="px-5 py-2.5 rounded-xl bg-[#E8A93E] hover:bg-[#C98A1E] text-white font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs cursor-pointer"
-            title="Launch and start your permanent Zoom classroom directly in your logged-in desktop application"
+            className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 font-semibold text-xs transition-colors flex items-center space-x-2 border border-slate-600/50 shadow-xs cursor-pointer"
+            title="Launch Zoom classroom as fallback"
           >
-            <Video className="w-4 h-4" />
-            <span>Launch Zoom Classroom</span>
-            <ExternalLink className="w-3.5 h-3.5" />
+            <Video className="w-3.5 h-3.5 text-blue-400" />
+            <span>Zoom (Fallback)</span>
+            <ExternalLink className="w-3 h-3 text-slate-400" />
           </button>
-
-          {/* LiveKit Test Classroom Button (Controlled Test Access - Visible ONLY to Allowed Test Tutors) */}
-          {isAllowedTestTutor && (
-            <button
-              type="button"
-              id="tutor_livekit_launch_button"
-              onClick={handleJoinLiveKitTestClass}
-              disabled={isJoiningLiveKit}
-              className="px-5 py-2.5 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-semibold text-xs transition-colors flex items-center space-x-2 shadow-xs cursor-pointer border border-emerald-400/40"
-              title="Enter your live integrated Islamic Tuition test classroom"
-            >
-              <Radio className="w-4 h-4 text-[#E8A93E] animate-pulse" />
-              <span>{isJoiningLiveKit ? 'Connecting...' : 'Join Integrated Classroom'}</span>
-              <span className="text-[9px] font-bold bg-[#E8A93E] text-slate-900 px-1.5 py-0.2 rounded font-mono">
-                Pilot
-              </span>
-            </button>
-          )}
 
           {/* Quick Log Lesson Button */}
           <button
@@ -772,18 +770,38 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
 
               {/* Time Mode Pills */}
               <div className="flex items-center space-x-1 bg-white p-1 rounded-lg border border-[#E3DFD7]">
-                {(['monthly', 'weekly', 'custom', 'all'] as const).map(mode => (
+                {(['weekly', 'monthly', 'custom', 'all'] as const).map(mode => (
                   <button
                     key={mode}
                     type="button"
-                    onClick={() => setReportTimeMode(mode)}
+                    disabled={isLoadingOlderLessons}
+                    onClick={async () => {
+                      setReportTimeMode(mode);
+                      if (mode === 'monthly' || mode === 'all' || mode === 'custom') {
+                        setIsLoadingOlderLessons(true);
+                        try {
+                          await loadOlderLessonsArchive({ tutorId: tutor?.tutorId || currentTutorId, daysBack: mode === 'monthly' ? 35 : 365 });
+                          await onRefreshData();
+                        } finally {
+                          setIsLoadingOlderLessons(false);
+                        }
+                      }
+                    }}
                     className={`px-3 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
                       reportTimeMode === mode
                         ? 'bg-[#2D8B5C] text-white shadow-xs'
                         : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-gray-100'
                     }`}
                   >
-                    {mode === 'monthly' ? 'Last 30 Days' : mode === 'weekly' ? 'Last 7 Days' : mode === 'custom' ? 'Custom Range' : 'All Time'}
+                    {mode === 'monthly'
+                      ? 'Last 30 Days'
+                      : mode === 'weekly'
+                      ? 'Last 7 Days'
+                      : mode === 'custom'
+                      ? 'Custom Range'
+                      : isLoadingOlderLessons
+                      ? 'Loading Older...'
+                      : 'Load Older (All)'}
                   </button>
                 ))}
               </div>

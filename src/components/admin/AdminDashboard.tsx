@@ -44,7 +44,8 @@ import {
   Palmtree,
   ShieldCheck,
   CheckCircle2,
-  UserX
+  UserX,
+  Radio
 } from 'lucide-react';
 import {
   Student,
@@ -93,6 +94,10 @@ import { StudentFolderModal } from '../modals/StudentFolderModal';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
 import { ClassroomLab } from './ClassroomLab';
+import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
+import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, LiveRoomStatusItem } from '../../services/livekitService';
+import { computeTutorClassroomStatus, DynamicClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
+import { LiveKitRoomTokenResponse } from '../../types';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
 import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV, exportFeesToCSV, exportFullAcademyBackupJSON } from '../../utils/csvExporter';
@@ -142,7 +147,8 @@ import {
   setStudentLeave,
   deleteClassesBatch,
   subscribeToSummaryMetrics,
-  updateFamilyGroupBatch
+  updateFamilyGroupBatch,
+  loadOlderLessonsArchive
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -238,6 +244,122 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newPasswordInput, setNewPasswordInput] = useState<string>('');
   const [resetFeedbackMsg, setResetFeedbackMsg] = useState<string>('');
 
+  // Live Classroom Observer & Real-time Room Status state for Admin
+  const [isAdminObserverModalOpen, setIsAdminObserverModalOpen] = useState<boolean>(false);
+  const [adminObserverTokenData, setAdminObserverTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
+  const [adminActiveObservingTutor, setAdminActiveObservingTutor] = useState<Tutor | null>(null);
+  const [isConnectingAdminObserver, setIsConnectingAdminObserver] = useState<boolean>(false);
+  const [adminObserveSearch, setAdminObserveSearch] = useState<string>('');
+  const [adminObserveStatusFilter, setAdminObserveStatusFilter] = useState<'all' | 'running' | 'tutor_waiting' | 'student_waiting' | 'scheduled_now' | 'idle'>('all');
+  const [copiedObserveLinkTutorId, setCopiedObserveLinkTutorId] = useState<string | null>(null);
+
+  // Real-time live status map polled from backend server
+  const [liveRoomsStatusMap, setLiveRoomsStatusMap] = useState<Record<string, LiveRoomStatusItem>>({});
+  const [liveRoomsSummary, setLiveRoomsSummary] = useState<{
+    totalTutors: number;
+    runningCount: number;
+    tutorWaitingCount: number;
+    studentWaitingCount: number;
+    idleCount: number;
+  }>({
+    totalTutors: 0,
+    runningCount: 0,
+    tutorWaitingCount: 0,
+    studentWaitingCount: 0,
+    idleCount: 0
+  });
+
+  // Dynamic computed real-time status for each tutor (combines LiveKit room presence + today's scheduled timetable slots)
+  const adminTutorStatusMap = useMemo(() => {
+    const map: Record<string, ReturnType<typeof computeTutorClassroomStatus>> = {};
+    tutors.forEach(t => {
+      const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || null;
+      map[t.tutorId] = computeTutorClassroomStatus(t, classes, students, liveItem);
+    });
+    return map;
+  }, [tutors, classes, students, liveRoomsStatusMap]);
+
+  // Aggregated dynamic status counts for Admin Dashboard
+  const adminStatusCounts = useMemo(() => {
+    let running = 0;
+    let tutorWaiting = 0;
+    let studentWaiting = 0;
+    let scheduledNow = 0;
+    let idle = 0;
+
+    (Object.values(adminTutorStatusMap) as ClassroomComputedStatus[]).forEach(st => {
+      if (st.status === 'running') running++;
+      else if (st.status === 'tutor_waiting') tutorWaiting++;
+      else if (st.status === 'student_waiting') studentWaiting++;
+      else if (st.status === 'scheduled_now') scheduledNow++;
+      else idle++;
+    });
+
+    return {
+      running,
+      tutorWaiting,
+      studentWaiting,
+      scheduledNow,
+      idle,
+      total: tutors.length
+    };
+  }, [adminTutorStatusMap, tutors.length]);
+
+  // Poll real-time room presence every 4 seconds
+  useEffect(() => {
+    let isCancelled = false;
+    const pollStatus = async () => {
+      try {
+        const res = await fetchLiveRoomsStatus();
+        if (!isCancelled && res?.rooms) {
+          const map: Record<string, LiveRoomStatusItem> = {};
+          res.rooms.forEach(r => {
+            map[r.tutorId] = r;
+            map[r.roomSlug] = r;
+            map[r.tutorId.toLowerCase()] = r;
+            map[r.tutorId.toLowerCase().replace(/\s+/g, '-')] = r;
+          });
+          setLiveRoomsStatusMap(map);
+          if (res.summary) setLiveRoomsSummary(res.summary);
+        }
+      } catch (e) {
+        console.warn('Live status polling error:', e);
+      }
+    };
+
+    pollStatus();
+    const interval = setInterval(pollStatus, 4000);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleAdminEnterAndObserveClass = async (tutorObj: Tutor) => {
+    try {
+      setIsConnectingAdminObserver(true);
+      setAdminActiveObservingTutor(tutorObj);
+      const classroomSettings = getLocalClassroomSettings();
+      const tutorIdStr = tutorObj.tutorId || 'Tutor 1';
+      const roomName = getCanonicalRoomName(tutorIdStr);
+
+      const tokenRes = await fetchLiveKitToken({
+        roomId: roomName,
+        identity: `admin_obs_${Date.now()}`,
+        participantName: 'Academy Admin (Observer)',
+        role: 'admin',
+        customServerUrl: classroomSettings.livekitServerUrl || undefined,
+      });
+
+      setAdminObserverTokenData(tokenRes);
+      setIsAdminObserverModalOpen(true);
+    } catch (err: any) {
+      alert(`Could not enter classroom observation: ${err?.message || err}`);
+    } finally {
+      setIsConnectingAdminObserver(false);
+    }
+  };
+
   // Filters
   const [tutorFilter, setTutorFilter] = useState<string>('all');
   const [timetableSubView, setTimetableSubView] = useState<'grid' | 'availability'>('grid');
@@ -301,9 +423,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedStudentForSheet, setSelectedStudentForSheet] = useState<Student | null>(null);
   const [inspectedStudentTab, setInspectedStudentTab] = useState<'ledger' | 'sheet'>('ledger');
 
-  // Spreadsheet-based reports state
+  // Spreadsheet-based reports state (Default to Weekly / Last 7 Days for 90%+ Firestore read optimization)
   const [lessonsViewMode, setLessonsViewMode] = useState<'cards' | 'spreadsheet'>('spreadsheet');
-  const [spreadsheetPeriod, setSpreadsheetPeriod] = useState<'all' | 'weekly' | 'monthly'>('all');
+  const [spreadsheetPeriod, setSpreadsheetPeriod] = useState<'all' | 'weekly' | 'monthly'>('weekly');
+  const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [spreadsheetSearchQuery, setSpreadsheetSearchQuery] = useState<string>('');
   
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -1243,6 +1366,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
+      {/* LiveKit Classroom Modal for Admin Observation */}
+      {isAdminObserverModalOpen && adminObserverTokenData && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
+          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+            <IslamicTuitionClassroom
+              roomName={adminObserverTokenData.roomName}
+              tokenData={adminObserverTokenData}
+              userRole="admin"
+              participantName="Academy Admin (Observer)"
+              initialMuted={true}
+              onLeave={() => {
+                setIsAdminObserverModalOpen(false);
+                setAdminObserverTokenData(null);
+                setAdminActiveObservingTutor(null);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Timetable Slot History (Undo & Redo Utility Bar) */}
       <div id="admin_slot_history_toolbar" className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
         <div className="flex items-center space-x-2">
@@ -1416,6 +1559,383 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
       </div>
+
+      {/* 0. OBSERVE LIVE CLASSES TAB */}
+      {currentTab === 'admin_observe' && (
+        <div className="space-y-6">
+          {/* Deck Header & Overview */}
+          <div className="bg-gradient-to-r from-[#172D22] via-[#10241A] to-[#0A1610] text-white p-6 rounded-2xl border border-[#274836] shadow-md flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1.5 max-w-2xl">
+              <div className="flex items-center space-x-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-[#E8A93E] text-slate-950 text-[10px] font-extrabold uppercase tracking-wider">
+                  Live Classroom Observer & Quality Auditing
+                </span>
+                <span className="text-xs text-emerald-300 font-mono flex items-center space-x-1">
+                  <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  <span>Real-time Active Class Presence & Timetable Sync</span>
+                </span>
+              </div>
+              <h3 className="text-xl font-bold text-white tracking-tight">
+                Academic Faculty Live Classroom Deck
+              </h3>
+              <p className="text-xs text-[#A2BAAD] leading-relaxed">
+                Supervise any active class in real-time. View which tutors and students are actively in session (both joined), who is in room waiting for their student, which student is in queue waiting for their tutor, and who has a scheduled class right now. Enter any live classroom with supervisor authority (0 admit wait), inspect audio/screen clarity, and leave at any time.
+              </p>
+            </div>
+
+            {/* Live Metrics Summary Counters */}
+            <div className="flex items-center flex-wrap gap-2.5">
+              <button
+                type="button"
+                onClick={() => setAdminObserveStatusFilter('running')}
+                className={`bg-black/50 border px-3.5 py-2 rounded-xl text-center shadow-xs transition-all cursor-pointer ${
+                  adminObserveStatusFilter === 'running'
+                    ? 'border-emerald-400 ring-2 ring-emerald-400/30 bg-emerald-950/40'
+                    : 'border-emerald-500/40 hover:border-emerald-400'
+                }`}
+              >
+                <span className="text-[10px] text-emerald-400 uppercase font-bold block flex items-center justify-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  <span>Running Now</span>
+                </span>
+                <strong className="text-base text-emerald-300 font-mono">
+                  {adminStatusCounts.running} Active
+                </strong>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAdminObserveStatusFilter('tutor_waiting')}
+                className={`bg-black/50 border px-3.5 py-2 rounded-xl text-center shadow-xs transition-all cursor-pointer ${
+                  adminObserveStatusFilter === 'tutor_waiting'
+                    ? 'border-amber-400 ring-2 ring-amber-400/30 bg-amber-950/40'
+                    : 'border-amber-500/40 hover:border-amber-400'
+                }`}
+              >
+                <span className="text-[10px] text-amber-400 uppercase font-bold block">Tutor Waiting</span>
+                <strong className="text-base text-amber-300 font-mono">
+                  {adminStatusCounts.tutorWaiting} Waiting
+                </strong>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAdminObserveStatusFilter('student_waiting')}
+                className={`bg-black/50 border px-3.5 py-2 rounded-xl text-center shadow-xs transition-all cursor-pointer ${
+                  adminObserveStatusFilter === 'student_waiting'
+                    ? 'border-orange-400 ring-2 ring-orange-400/30 bg-orange-950/40'
+                    : 'border-orange-500/40 hover:border-orange-400'
+                }`}
+              >
+                <span className="text-[10px] text-orange-400 uppercase font-bold block">Student Waiting</span>
+                <strong className="text-base text-orange-300 font-mono">
+                  {adminStatusCounts.studentWaiting} In Queue
+                </strong>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAdminObserveStatusFilter('scheduled_now')}
+                className={`bg-black/50 border px-3.5 py-2 rounded-xl text-center shadow-xs transition-all cursor-pointer ${
+                  adminObserveStatusFilter === 'scheduled_now'
+                    ? 'border-blue-400 ring-2 ring-blue-400/30 bg-blue-950/40'
+                    : 'border-blue-500/40 hover:border-blue-400'
+                }`}
+              >
+                <span className="text-[10px] text-blue-400 uppercase font-bold block">Scheduled Now</span>
+                <strong className="text-base text-blue-300 font-mono">
+                  {adminStatusCounts.scheduledNow} Slot
+                </strong>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAdminObserveStatusFilter('all')}
+                className={`bg-black/50 border px-3.5 py-2 rounded-xl text-center shadow-xs transition-all cursor-pointer ${
+                  adminObserveStatusFilter === 'all'
+                    ? 'border-white/40 ring-2 ring-white/20'
+                    : 'border-white/10 hover:border-white/30'
+                }`}
+              >
+                <span className="text-[10px] text-[#8AA393] uppercase font-bold block">Total Faculty</span>
+                <strong className="text-base text-white font-mono">{tutors.length} Tutors</strong>
+              </button>
+            </div>
+          </div>
+
+          {/* Search, Filter & Quick Views */}
+          <div className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs flex flex-wrap items-center justify-between gap-3">
+            <div className="flex-1 min-w-[240px] relative">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+              <input
+                type="text"
+                value={adminObserveSearch}
+                onChange={e => setAdminObserveSearch(e.target.value)}
+                placeholder="Search tutor by name, ID (e.g. Tutor 1), student name or course..."
+                className="w-full pl-9 pr-4 py-2 bg-[#FAF9F7] border border-[#D5D0C6] rounded-xl text-xs text-[#161F1A] placeholder-[#5A6B61] focus:outline-none focus:border-[#2D8B5C]"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+              <select
+                value={adminObserveStatusFilter}
+                onChange={e => setAdminObserveStatusFilter(e.target.value as any)}
+                className="px-3 py-2 bg-[#FAF9F7] border border-[#D5D0C6] rounded-xl text-xs font-bold text-[#161F1A] focus:outline-none"
+              >
+                <option value="all">All Classrooms ({sortedTutors.length})</option>
+                <option value="running">🟢 Running Classes (Tutor & Student Joined) ({adminStatusCounts.running})</option>
+                <option value="tutor_waiting">🟡 Tutor in Room (Waiting for Student) ({adminStatusCounts.tutorWaiting})</option>
+                <option value="student_waiting">🟠 Student Waiting (Waiting for Tutor) ({adminStatusCounts.studentWaiting})</option>
+                <option value="scheduled_now">🔵 Scheduled Class Right Now ({adminStatusCounts.scheduledNow})</option>
+                <option value="idle">⚪ Idle / Room Ready ({adminStatusCounts.idle})</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Tutors Real-time Classroom Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {sortedTutors.filter(t => {
+              const computed = adminTutorStatusMap[t.tutorId] || computeTutorClassroomStatus(t, classes, students, null);
+              const q = adminObserveSearch.toLowerCase().trim();
+              const matchSearch = !q ||
+                (t.tutorId || '').toLowerCase().includes(q) ||
+                (t.realName || '').toLowerCase().includes(q) ||
+                (t.displayName || '').toLowerCase().includes(q) ||
+                (t.email || '').toLowerCase().includes(q) ||
+                (computed.scheduledStudentName || '').toLowerCase().includes(q) ||
+                (computed.studentsInRoom || []).some(s => s.toLowerCase().includes(q)) ||
+                (computed.waitingStudents || []).some(s => s.toLowerCase().includes(q));
+              if (!matchSearch) return false;
+
+              if (adminObserveStatusFilter === 'all') return true;
+              return computed.status === adminObserveStatusFilter;
+            }).map((t) => {
+              const tutorClasses = classes.filter(c => c.tutorId === t.tutorId && c.status !== 'Cancelled');
+              const assignedStudents = students.filter(s => s.assignedTutorId === t.tutorId && s.status !== 'Inactive');
+              const computed = adminTutorStatusMap[t.tutorId] || computeTutorClassroomStatus(t, classes, students, null);
+
+              const cleanSlug = (t.tutorId || 'tutor-1').toLowerCase().replace(/\s+/g, '-');
+              const classUrl = `/class/${cleanSlug}`;
+              const fullUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}${classUrl}`;
+
+              return (
+                <div
+                  key={t.id || t.tutorId}
+                  className={`bg-white rounded-2xl border shadow-xs p-5 space-y-4 transition-all flex flex-col justify-between ${
+                    computed.status === 'running'
+                      ? 'border-emerald-500/80 ring-2 ring-emerald-500/30 shadow-md bg-gradient-to-b from-white to-emerald-50/20'
+                      : computed.status === 'tutor_waiting'
+                        ? 'border-amber-400/80 ring-2 ring-amber-400/20 shadow-xs bg-gradient-to-b from-white to-amber-50/20'
+                        : computed.status === 'student_waiting'
+                          ? 'border-orange-400/80 ring-2 ring-orange-400/20 shadow-xs bg-gradient-to-b from-white to-orange-50/20'
+                          : computed.status === 'scheduled_now'
+                            ? 'border-blue-400/80 ring-1 ring-blue-400/20'
+                            : 'border-[#E3DFD7] hover:border-[#2D8B5C]'
+                  }`}
+                >
+                  <div className="space-y-3">
+                    {/* Header: ID + Live Status Badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 border border-emerald-200 text-emerald-900 font-mono font-extrabold text-xs">
+                            {t.tutorId}
+                          </span>
+
+                          {/* Dynamic Real-time Status Badge */}
+                          {computed.status === 'running' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 border border-emerald-300 text-emerald-900 flex items-center space-x-1.5 animate-pulse">
+                              <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                              <span>Class Running ({computed.participantCount} in Room)</span>
+                            </span>
+                          ) : computed.status === 'tutor_waiting' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 border border-amber-300 text-amber-900 flex items-center space-x-1">
+                              <span className="w-2 h-2 rounded-full bg-amber-500" />
+                              <span>Tutor in Room (Waiting for Student)</span>
+                            </span>
+                          ) : computed.status === 'student_waiting' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-100 border border-orange-300 text-orange-900 flex items-center space-x-1">
+                              <span className="w-2 h-2 rounded-full bg-orange-500" />
+                              <span>Student in Waiting Room</span>
+                            </span>
+                          ) : computed.status === 'scheduled_now' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 border border-blue-300 text-blue-900 flex items-center space-x-1">
+                              <span className="w-2 h-2 rounded-full bg-blue-500" />
+                              <span>Class Scheduled Now</span>
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700">
+                              Idle / Ready
+                            </span>
+                          )}
+                        </div>
+
+                        <h4 className="text-sm font-bold text-[#161F1A] pt-1">{t.realName || t.displayName || t.tutorId}</h4>
+                        <p className="text-xs text-[#5A6B61]">{t.email || 'Email registered in portal'}</p>
+                      </div>
+
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
+                        t.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {t.status}
+                      </span>
+                    </div>
+
+                    {/* Active Connected Students Info if running */}
+                    {computed.status === 'running' && (
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-1">
+                        <div className="flex items-center justify-between font-bold text-emerald-950">
+                          <span className="flex items-center space-x-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Tutor & Student Connected</span>
+                          </span>
+                          <span className="text-[10px] bg-emerald-200/60 text-emerald-900 px-1.5 py-0.2 rounded font-mono">Live Call</span>
+                        </div>
+                        <p className="text-[11px] text-emerald-800">
+                          <strong>Active Student:</strong> {computed.studentsInRoom.length > 0 ? computed.studentsInRoom.join(', ') : (computed.scheduledStudentName || 'Assigned Student')}
+                        </p>
+                        {computed.scheduledCourse && (
+                          <p className="text-[10px] text-emerald-700 font-medium">
+                            Lesson: {computed.scheduledCourse} {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tutor Waiting Alert */}
+                    {computed.status === 'tutor_waiting' && (
+                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+                        <div className="flex items-center space-x-1 font-bold text-amber-950">
+                          <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                          <span>Tutor In Room • Waiting for Student to Join</span>
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          Scheduled: <strong>{computed.scheduledStudentName || 'Assigned Student'}</strong> {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Student Waiting Alert */}
+                    {computed.status === 'student_waiting' && (
+                      <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-900 space-y-1">
+                        <div className="flex items-center space-x-1 font-bold text-orange-950">
+                          <AlertTriangle className="w-3.5 h-3.5 text-orange-600 animate-pulse" />
+                          <span>Student Waiting in Queue • Tutor Not in Room</span>
+                        </div>
+                        <p className="text-[11px] text-orange-800">
+                          Waiting: <strong>{computed.waitingStudents.join(', ') || computed.scheduledStudentName || 'Student'}</strong>
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Scheduled Right Now (Neither joined yet) */}
+                    {computed.status === 'scheduled_now' && (
+                      <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 space-y-1">
+                        <div className="flex items-center space-x-1 font-bold text-blue-950">
+                          <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Timetable Class Active Now</span>
+                        </div>
+                        <p className="text-[11px] text-blue-800">
+                          Student: <strong>{computed.scheduledStudentName}</strong> ({computed.scheduledCourse || 'Quran Lessons'})
+                        </p>
+                        <p className="text-[10px] text-blue-700">
+                          Time Slot: {computed.scheduledTimeText}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Next Class Today if Idle */}
+                    {computed.status === 'idle' && (
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700">
+                        {computed.nextScheduledClass ? (
+                          <p className="text-[11px]">
+                            <span className="text-slate-500 font-medium">Next Session Today:</span>{' '}
+                            <strong>{computed.nextScheduledClass.studentName}</strong> at{' '}
+                            <span className="font-mono font-bold text-emerald-800">{computed.nextScheduledClass.startTimePKT} PKT</span>
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-slate-500">
+                            No further scheduled sessions for today.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Classroom Link Card */}
+                    <div className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-[#5A6B61]">
+                        <span className="flex items-center space-x-1 text-[#2D8B5C]">
+                          <Radio className="w-3 h-3 text-[#E8A93E]" />
+                          <span>Classroom Link</span>
+                        </span>
+                        <span className="font-mono text-[10px] bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200 font-bold">
+                          Passcode: 12345
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 bg-white p-1.5 rounded-lg border border-[#D5D0C6]">
+                        <span className="text-xs font-mono font-bold text-[#2D8B5C] truncate">{classUrl}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(fullUrl);
+                            setCopiedObserveLinkTutorId(t.tutorId);
+                            setTimeout(() => setCopiedObserveLinkTutorId(null), 2000);
+                          }}
+                          className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-[#161F1A] text-[10px] font-bold rounded transition-colors cursor-pointer shrink-0"
+                        >
+                          {copiedObserveLinkTutorId === t.tutorId ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Stats Metrics */}
+                    <div className="grid grid-cols-2 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">
+                      <div className="bg-[#FAF9F7] p-2 rounded-lg">
+                        <span className="text-[10px] text-[#5A6B61] block">Assigned Students</span>
+                        <strong className="text-xs text-[#161F1A] font-mono">{assignedStudents.length} Students</strong>
+                      </div>
+                      <div className="bg-[#FAF9F7] p-2 rounded-lg">
+                        <span className="text-[10px] text-[#5A6B61] block">Today's Classes</span>
+                        <strong className="text-xs text-[#2D8B5C] font-mono">{computed.todayClasses.length} Sessions</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons: Enter & Observe Class + Fallback */}
+                  <div className="pt-3 border-t border-[#EAE6DE] space-y-2">
+                    <button
+                      type="button"
+                      disabled={isConnectingAdminObserver}
+                      onClick={() => handleAdminEnterAndObserveClass(t)}
+                      className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer disabled:opacity-50 active:scale-95 ring-2 ring-emerald-400/20"
+                      title="Enter this tutor's live classroom to inspect audio, video, screen share, and student engagement"
+                    >
+                      <Eye className="w-4 h-4 text-emerald-200" />
+                      <span>{isConnectingAdminObserver && adminActiveObservingTutor?.tutorId === t.tutorId ? 'Connecting...' : `Enter & Observe Class`}</span>
+                    </button>
+
+                    <div className="flex items-center justify-between text-[11px] text-[#5A6B61] px-1">
+                      <span className="flex items-center space-x-1">
+                        <Video className="w-3 h-3 text-blue-500" />
+                        <span>Zoom Fallback:</span>
+                      </span>
+                      <a
+                        href={t.zoomLink || 'https://zoom.us'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline font-mono text-[10px] flex items-center space-x-0.5"
+                      >
+                        <span>Open</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* 1. OVERVIEW TAB */}
       {currentTab === 'overview' && (
@@ -3318,19 +3838,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </span>
                   </div>
 
-                  {/* Permanent Zoom link */}
-                  <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] space-y-1">
-                    <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1.5">
-                      <Video className="w-3.5 h-3.5 text-[#2D8B5C]" /> Permanent Zoom Classroom Link
-                    </span>
-                    <a
-                      href={tutor.zoomLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-[#2D8B5C] font-mono hover:underline truncate block"
-                    >
-                      {tutor.zoomLink}
-                    </a>
+                  {/* Custom Live Classroom Link & Zoom Fallback */}
+                  <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] space-y-2">
+                    {/* Live Classroom Link */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider">
+                        <span className="flex items-center gap-1 text-[#2D8B5C]">
+                          <Radio className="w-3.5 h-3.5 text-[#E8A93E] animate-pulse" /> Live Classroom Link
+                        </span>
+                        <span className="text-[10px] text-emerald-800 font-mono font-bold bg-emerald-100 px-1.5 py-0.2 rounded border border-emerald-200">
+                          Passcode: 12345
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 bg-white p-1.5 rounded border border-[#D5D0C6]">
+                        <span className="text-xs text-[#2D8B5C] font-mono font-bold truncate">
+                          {`/class/${(tutor.tutorId || `tutor-${idx + 1}`).toLowerCase().replace(/\s+/g, '-')}`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const link = `${typeof window !== 'undefined' ? window.location.origin : ''}/class/${(tutor.tutorId || `tutor-${idx + 1}`).toLowerCase().replace(/\s+/g, '-')}`;
+                            navigator.clipboard.writeText(link);
+                            alert(`Copied Classroom Link for ${tutor.tutorId}: ${link}`);
+                          }}
+                          className="px-2 py-1 bg-[#2D8B5C] text-white text-[10px] font-bold rounded hover:bg-[#1E5C3D] transition-colors cursor-pointer shrink-0"
+                        >
+                          Copy Link
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Fallback Zoom link */}
+                    <div className="space-y-0.5 pt-1 border-t border-dashed border-[#E3DFD7]">
+                      <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1">
+                        <Video className="w-3 h-3 text-blue-600" /> Zoom Link (Fallback)
+                      </span>
+                      <a
+                        href={tutor.zoomLink || 'https://zoom.us'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-blue-700 font-mono hover:underline truncate block"
+                      >
+                        {tutor.zoomLink || 'https://zoom.us'}
+                      </a>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">
@@ -3477,28 +4028,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div className="inline-flex bg-gray-100 p-1 rounded-lg text-xs">
                   <button
-                    onClick={() => setSpreadsheetPeriod('all')}
-                    className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
-                      spreadsheetPeriod === 'all' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
-                    }`}
-                  >
-                    All Time
-                  </button>
-                  <button
                     onClick={() => setSpreadsheetPeriod('weekly')}
                     className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
                       spreadsheetPeriod === 'weekly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
                     }`}
                   >
-                    Weekly (7 Days)
+                    Last 7 Days (Live)
                   </button>
                   <button
-                    onClick={() => setSpreadsheetPeriod('monthly')}
+                    onClick={async () => {
+                      setSpreadsheetPeriod('monthly');
+                      setIsLoadingOlderLessons(true);
+                      try {
+                        await loadOlderLessonsArchive(30);
+                        await onRefreshData();
+                      } finally {
+                        setIsLoadingOlderLessons(false);
+                      }
+                    }}
                     className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
                       spreadsheetPeriod === 'monthly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
                     }`}
                   >
-                    Monthly (30 Days)
+                    {isLoadingOlderLessons && spreadsheetPeriod === 'monthly' ? 'Loading 30d...' : 'Monthly (30 Days)'}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setSpreadsheetPeriod('all');
+                      setIsLoadingOlderLessons(true);
+                      try {
+                        await loadOlderLessonsArchive('all');
+                        await onRefreshData();
+                      } finally {
+                        setIsLoadingOlderLessons(false);
+                      }
+                    }}
+                    className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                      spreadsheetPeriod === 'all' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                    }`}
+                  >
+                    {isLoadingOlderLessons && spreadsheetPeriod === 'all' ? 'Loading Archive...' : 'Load Older (All Time)'}
                   </button>
                 </div>
 

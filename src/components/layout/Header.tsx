@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { LogOut, Eye, Menu, PanelLeftClose, Bell } from 'lucide-react';
+import { LogOut, Eye, Menu, PanelLeftClose, Bell, Video } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Tutor, Student, Announcement, StudentFee, TimetableClass, Lesson } from '../../types';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 import { NotificationCenterModal } from '../common/NotificationCenterModal';
+import { ZoomStyleJoinModal, AssignedTutorRoomOption } from '../classroom/ZoomStyleJoinModal';
+import { getTutorSlug, getTutorDisplayId } from '../../services/livekitService';
 
 interface HeaderProps {
   title: string;
@@ -43,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
   } = useAuth();
 
   const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [isZoomJoinModalOpen, setIsZoomJoinModalOpen] = useState(false);
 
   const handlePersonaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -94,6 +97,80 @@ export const Header: React.FC<HeaderProps> = ({
     });
     return list;
   }, [students]);
+
+  // Resolve assigned tutor(s) for active Student or Parent so "Join Class" defaults to their assigned tutor instead of tutor-1
+  const assignedTutorsForModal = React.useMemo<AssignedTutorRoomOption[]>(() => {
+    const options: AssignedTutorRoomOption[] = [];
+    const seenKeys = new Set<string>();
+
+    const addOption = (rawTutorId?: string, stu?: Student) => {
+      if (!rawTutorId) return;
+      const slug = getTutorSlug(rawTutorId);
+      const displayId = getTutorDisplayId(rawTutorId);
+      const matchedTutor = tutors.find(
+        t =>
+          t.tutorId === rawTutorId ||
+          t.tutorId === displayId ||
+          getTutorSlug(t.tutorId) === slug
+      );
+      const key = `${slug}_${stu?.studentId || 'self'}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+
+      options.push({
+        tutorId: matchedTutor?.tutorId || displayId,
+        tutorName: matchedTutor?.realName || undefined,
+        slug,
+        studentName: stu?.name,
+        courseType: stu?.courseType,
+      });
+    };
+
+    const cleanEmail = userProfile?.email?.toLowerCase().trim() || '';
+
+    if (activeRole === 'student') {
+      const targetStu = students.find(s => {
+        if (adminViewingRole === 'student' && adminViewingTargetId) {
+          return s.studentId === adminViewingTargetId || s.id === adminViewingTargetId;
+        }
+        if (userProfile?.studentId && (s.studentId === userProfile.studentId || s.id === userProfile.studentId)) {
+          return true;
+        }
+        if (cleanEmail && (s.email?.toLowerCase().trim() === cleanEmail || s.parentEmail?.toLowerCase().trim() === cleanEmail)) {
+          return true;
+        }
+        return false;
+      });
+
+      if (targetStu) {
+        addOption(targetStu.assignedTutorId, targetStu);
+        classes
+          .filter(c => c.studentId === targetStu.studentId || c.studentName === targetStu.name)
+          .forEach(c => addOption(c.tutorId, targetStu));
+      }
+    } else if (activeRole === 'parent') {
+      const parentChildren = students.filter(s => {
+        if (adminViewingRole === 'parent' && adminViewingTargetId) {
+          return s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId;
+        }
+        if (userProfile?.linkedStudentIds?.includes(s.studentId)) return true;
+        if (userProfile?.uid && s.parentId === userProfile.uid) return true;
+        if (cleanEmail && (s.parentEmail?.toLowerCase().trim() === cleanEmail || s.email?.toLowerCase().trim() === cleanEmail)) {
+          return true;
+        }
+        return false;
+      });
+
+      parentChildren.forEach(child => {
+        addOption(child.assignedTutorId, child);
+        classes
+          .filter(c => c.studentId === child.studentId || c.studentName === child.name)
+          .forEach(c => addOption(c.tutorId, child));
+      });
+    }
+
+    return options;
+  }, [activeRole, adminViewingRole, adminViewingTargetId, userProfile, students, tutors, classes]);
 
   return (
     <header
@@ -264,6 +341,19 @@ export const Header: React.FC<HeaderProps> = ({
           );
         })()}
 
+        {/* Join Meeting Button (Zoom Style) - Hidden for Tutors */}
+        {activeRole !== 'tutor' && (
+          <button
+            type="button"
+            onClick={() => setIsZoomJoinModalOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 shrink-0"
+            title="Join Live Class via Tutor ID & Passcode"
+          >
+            <Video className="w-3.5 h-3.5 text-emerald-200" />
+            <span className="hidden xs:inline">Join Class</span>
+          </button>
+        )}
+
         {/* Notification Bell Center */}
         {(() => {
           const pendingFeesCount = (activeRole === 'student' || activeRole === 'parent')
@@ -338,6 +428,17 @@ export const Header: React.FC<HeaderProps> = ({
         classes={classes}
         lessons={lessons}
         onNavigateTab={onNavigateTab}
+      />
+
+      {/* Zoom Style Join Meeting Modal */}
+      <ZoomStyleJoinModal
+        isOpen={isZoomJoinModalOpen}
+        onClose={() => setIsZoomJoinModalOpen(false)}
+        currentUserRole={activeRole}
+        currentUserName={userProfile?.displayName || 'Academy Member'}
+        currentUserId={userProfile?.uid || ''}
+        defaultTutorSlug={assignedTutorsForModal[0]?.slug}
+        assignedTutors={assignedTutorsForModal}
       />
     </header>
   );

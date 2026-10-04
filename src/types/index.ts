@@ -595,6 +595,58 @@ export interface StudentInterventionLog {
   outcomeFeedback?: string;
 }
 
+export interface PermanentRoom {
+  id: string; // UUID
+  room_slug: string; // Unique string e.g. "tutor-bilal-student-ahmad"
+  livekit_room_id: string; // Unique identifier for LiveKit token payload e.g. "room_tutor_bilal_student_ahmad"
+  tutor_id: string; // Foreign Key / ID
+  student_id: string; // Foreign Key / ID
+  meeting_id: number; // Public numeric ID e.g. 83910294
+  passcode: string; // 6-digit numeric string e.g. "123456"
+  base_scheduled_time: string; // "15:00:00"
+  timezone: string; // e.g. "Asia/Karachi"
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RoomOverride {
+  id: string; // UUID
+  permanent_room_id: string; // Foreign Key -> PermanentRoom.id
+  override_date: string; // "YYYY-MM-DD"
+  temporary_room_id: string; // e.g. "temp_override_bilal_ahmad_2026-10-03"
+  new_time: string; // "16:30:00"
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+  reason?: string;
+  createdAt?: string;
+}
+
+export interface GuestLink {
+  id: string; // UUID
+  token_param: string; // Unique cryptographically secure token string
+  tutor_id: string; // Foreign key / ID
+  expires_at: string; // ISO timestamp string
+  is_used: boolean;
+  createdAt?: string;
+}
+
+export interface ClassroomRecording {
+  id: string; // UUID
+  room_id: string;
+  date_recorded: string; // Date format YYYY-MM-DD
+  s3_url: string; // Secure string URL
+  deleted_at: string; // Timestamp for the 28-day purging lifecycle
+  duration_seconds?: number;
+  file_size_bytes?: number;
+}
+
+export interface WaitingRoomParticipant {
+  id: string;
+  room_slug: string;
+  guest_name: string;
+  joined_at: string;
+  status: 'WAITING' | 'ADMITTED' | 'REJECTED';
+}
+
 export interface SummaryMetrics {
   totalStudents: number;
   activeStudents: number;

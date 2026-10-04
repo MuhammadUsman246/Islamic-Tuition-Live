@@ -68,7 +68,10 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
   classes
 }) => {
   // Active sub-tab within Classroom Lab
-  const [labSubTab, setLabSubTab] = useState<'test_bench' | 'simultaneous_rooms' | 'recordings' | 'settings'>('test_bench');
+  const [labSubTab, setLabSubTab] = useState<'tutor_directory' | 'test_bench' | 'simultaneous_rooms' | 'recordings' | 'settings'>('tutor_directory');
+  const [editingPasscodeTutorId, setEditingPasscodeTutorId] = useState<string | null>(null);
+  const [newPasscodeValue, setNewPasscodeValue] = useState<string>('12345');
+  const [copiedLinkTutorId, setCopiedLinkTutorId] = useState<string | null>(null);
 
   // Settings
   const [settings, setSettings] = useState<ClassroomLabSettings>(() => getLocalClassroomSettings());
@@ -129,12 +132,34 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
     durationMinutes: number;
   }>>([]);
 
-  // Recordings
+  // Recordings & Permanent Rooms
   const [recordings, setRecordings] = useState<ClassroomRecordingItem[]>(() => getLocalClassroomRecordings());
+  const [permanentRooms, setPermanentRooms] = useState<Array<{
+    id: string;
+    room_slug: string;
+    livekit_room_id: string;
+    tutor_id: string;
+    passcode: string;
+  }>>([]);
 
-  // Probe server status on mount
+  const loadBackendLiveKitData = async () => {
+    try {
+      const res = await fetch('/api/livekit/rooms/permanent');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.rooms) {
+          setPermanentRooms(data.rooms);
+        }
+      }
+    } catch (e) {
+      console.warn('Permanent rooms fetch notice:', e);
+    }
+  };
+
+  // Probe server status & permanent rooms on mount
   useEffect(() => {
     refreshServerStatus();
+    loadBackendLiveKitData();
   }, []);
 
   const refreshServerStatus = async () => {
@@ -145,26 +170,29 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
   };
 
   // Launch a test room
-  const handleLaunchTestRoom = async (role: UserRole, mode: 'single' | 'dual_lab' = 'single', forceSimulation = false) => {
+  const handleLaunchTestRoom = async (role: UserRole, mode: 'single' | 'dual_lab' = 'single', forceSimulation = false, isHiddenAdmin = false, overrideTutorId?: string) => {
     try {
       setIsLaunching(true);
       setLaunchError(null);
 
-      const tutorObj = tutors.find(t => t.tutorId === selectedTutorId) || tutors[0];
+      const targetTutorId = overrideTutorId || selectedTutorId;
+      const tutorObj = tutors.find(t => t.tutorId === targetTutorId) || tutors[0];
       const studentObj = students.find(s => s.studentId === selectedStudentId) || students[0];
 
-      const roomName = getCanonicalRoomName(selectedTutorId, selectedStudentId, testRoomPrefix);
-      const participantName = role === 'tutor'
-        ? (tutorObj?.realName ? `${tutorObj.realName} (${selectedTutorId})` : selectedTutorId)
-        : (studentObj?.name || 'Student Zayd');
-      const identity = `${role}_${role === 'tutor' ? selectedTutorId : selectedStudentId}_${Date.now()}`;
+      const roomName = getCanonicalRoomName(targetTutorId, selectedStudentId, overrideTutorId ? '' : testRoomPrefix);
+      const participantName = isHiddenAdmin
+        ? 'Invisible Supervisor'
+        : (role === 'tutor'
+          ? (tutorObj?.realName ? `${tutorObj.realName} (${targetTutorId})` : targetTutorId)
+          : (studentObj?.name || 'Student Zayd'));
+      const identity = `${role}_${role === 'tutor' ? targetTutorId : selectedStudentId}_${Date.now()}`;
 
       // Request short-lived token from backend
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
         identity,
         participantName,
-        role,
+        role: isHiddenAdmin ? 'admin' : role,
         classId: 'test_lab_class',
         customServerUrl: settings.livekitServerUrl || undefined,
         forceSimulation,
@@ -188,7 +216,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
         isOpen: true,
         roomName,
         tokenData: tokenRes,
-        role,
+        role: isHiddenAdmin ? 'admin' : role,
         participantName,
         mode,
         dualStudentTokenData: dualStudentToken
@@ -385,6 +413,19 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
       <div className="flex flex-wrap items-center gap-2 border-b border-[#E3DFD7] pb-2 text-xs font-bold">
         <button
           type="button"
+          onClick={() => setLabSubTab('tutor_directory')}
+          className={`px-4 py-2.5 rounded-xl transition-all cursor-pointer flex items-center space-x-2 ${
+            labSubTab === 'tutor_directory'
+              ? 'bg-[#2D8B5C] text-white shadow-xs'
+              : 'bg-white text-[#5A6B61] hover:text-[#161F1A] border border-[#E3DFD7]'
+          }`}
+        >
+          <Globe className="w-4 h-4 text-[#E8A93E]" />
+          <span>1. Faculty Tutors & Classroom Links</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setLabSubTab('test_bench')}
           className={`px-4 py-2.5 rounded-xl transition-all cursor-pointer flex items-center space-x-2 ${
             labSubTab === 'test_bench'
@@ -393,7 +434,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
           }`}
         >
           <Play className="w-4 h-4" />
-          <span>1. Test Bench (1-to-1 Room)</span>
+          <span>2. Test Bench (1-to-1 Room)</span>
         </button>
 
         <button
@@ -406,7 +447,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>2. Load & Scale Tester (1 → 25 Rooms)</span>
+          <span>3. Load & Scale Tester (1 → 25 Rooms)</span>
         </button>
 
         <button
@@ -419,7 +460,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
           }`}
         >
           <Radio className="w-4 h-4" />
-          <span>3. Recording Retention (3 Days)</span>
+          <span>4. Recording Retention (28 Days)</span>
         </button>
 
         <button
@@ -432,7 +473,7 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
           }`}
         >
           <Sliders className="w-4 h-4" />
-          <span>4. Classroom Settings & Allowlist</span>
+          <span>5. Settings & Allowlist</span>
         </button>
       </div>
 
@@ -444,7 +485,142 @@ export const ClassroomLab: React.FC<ClassroomLabProps> = ({
         </div>
       )}
 
-      {/* TAB 1: TEST BENCH (1-to-1 ROOM TESTING) */}
+      {/* SUB-TAB 1: TUTOR LINKS & MEETING IDS DIRECTORY */}
+      {labSubTab === 'tutor_directory' && (
+        <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E3DFD7] pb-4">
+            <div>
+              <h3 className="text-base font-bold text-[#161F1A] flex items-center gap-2">
+                <Globe className="w-5 h-5 text-[#2D8B5C]" />
+                <span>Faculty Tutors Meeting Directory ({tutors.length} Active Tutors)</span>
+              </h3>
+              <p className="text-xs text-[#5A6B61] mt-0.5">
+                Every tutor has a fixed Meeting ID, 5-digit Passcode, and Permanent Vanity Link. Tutors can be added or updated anytime, and their rooms auto-provision dynamically!
+              </p>
+            </div>
+            <div className="flex items-center space-x-2 text-xs font-mono bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 font-bold">
+              <span>Default Passcode: 12345</span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] uppercase tracking-wider font-bold">
+                <tr>
+                  <th className="p-3">Tutor Slot</th>
+                  <th className="p-3">Faculty Member</th>
+                  <th className="p-3">Classroom Link (/class/tutor-id)</th>
+                  <th className="p-3">Passcode</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E3DFD7]">
+                {tutors.map((t, idx) => {
+                  const num = idx + 1;
+                  const tutorIdStr = t.tutorId || `Tutor ${num}`;
+                  const slug = `tutor-${num}`;
+                  const relativeUrl = `/class/${slug}`;
+                  const fullUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}${relativeUrl}`;
+                  const permRoomObj = permanentRooms.find(r => r.room_slug === slug || r.tutor_id === tutorIdStr);
+                  const currentPasscode = permRoomObj?.passcode || '12345';
+
+                  return (
+                    <tr key={t.id || tutorIdStr} className="hover:bg-[#FAF9F7] transition-colors">
+                      <td className="p-3 font-bold text-[#161F1A]">
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 rounded font-mono font-extrabold text-[11px]">
+                          {tutorIdStr}
+                        </span>
+                      </td>
+                      <td className="p-3 font-bold text-[#161F1A]">
+                        {t.realName || t.displayName || tutorIdStr}
+                      </td>
+                      <td className="p-3 font-mono text-[#161F1A]">
+                        <div className="flex items-center space-x-2">
+                          <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200 text-[11px]">
+                            {relativeUrl}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(fullUrl);
+                              setCopiedLinkTutorId(tutorIdStr);
+                              setTimeout(() => setCopiedLinkTutorId(null), 2000);
+                            }}
+                            className="text-emerald-700 hover:text-emerald-900 font-bold cursor-pointer underline flex items-center space-x-1"
+                          >
+                            <span>{copiedLinkTutorId === tutorIdStr ? 'Copied!' : 'Copy Link'}</span>
+                          </button>
+                        </div>
+                      </td>
+                      <td className="p-3 font-mono font-bold text-amber-700">
+                        {editingPasscodeTutorId === tutorIdStr ? (
+                          <div className="flex items-center space-x-1">
+                            <input
+                              type="text"
+                              maxLength={6}
+                              value={newPasscodeValue}
+                              onChange={e => setNewPasscodeValue(e.target.value)}
+                              className="w-16 bg-white border border-amber-400 rounded px-1.5 py-0.5 text-xs text-center font-bold"
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await fetch(`/api/livekit/rooms/permanent/${slug}`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ passcode: newPasscodeValue })
+                                  });
+                                  await loadBackendLiveKitData();
+                                  setEditingPasscodeTutorId(null);
+                                } catch (e) {
+                                  console.warn('Could not update passcode:', e);
+                                }
+                              }}
+                              className="px-2 py-0.5 bg-emerald-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-2">
+                            <span>{currentPasscode}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPasscodeTutorId(tutorIdStr);
+                                setNewPasscodeValue(currentPasscode);
+                              }}
+                              className="text-[10px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTutorId(tutorIdStr);
+                            handleLaunchTestRoom('admin', 'single', false, true, tutorIdStr);
+                          }}
+                          className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-lg font-bold text-xs shadow-2xs transition-colors cursor-pointer inline-flex items-center space-x-1"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Observe Class</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: TEST BENCH (1-to-1 ROOM TESTING) */}
       {labSubTab === 'test_bench' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Form: Room Configuration */}

@@ -633,7 +633,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
 
           // Cache and apply immediately to React state
-          localStorage.setItem('it_cached_user_profile', JSON.stringify(loadedProf));
+          const prevCachedStr = localStorage.getItem('it_cached_user_profile');
+          const nextCachedStr = JSON.stringify(loadedProf);
+          localStorage.setItem('it_cached_user_profile', nextCachedStr);
           setUserProfile(loadedProf);
           setLoading(false);
           authLog('ProfileApplied', `✅ User profile successfully applied in ${Date.now() - startTime}ms:`, {
@@ -644,8 +646,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             studentId: loadedProf.studentId
           });
 
-          // Save/merge to Firestore in background without blocking UI (single doc write)
-          setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(() => {});
+          // Only persist to Firestore if the profile is new or actually changed (saves 1 write on every page refresh)
+          if (prevCachedStr !== nextCachedStr) {
+            setDoc(doc(db, 'users', user.uid), loadedProf, { merge: true }).catch(() => {});
+          }
         } catch (err) {
           authWarn('ProfileFetch', 'Error resolving user profile in onAuthStateChanged:', err);
           if (isMounted) {
@@ -702,12 +706,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Initial heartbeat on mount
     sendHeartbeat();
 
-    // 10-minute recurring heartbeat (600,000ms) to dramatically reduce database writes
-    const interval = setInterval(sendHeartbeat, 600000);
+    // 15-minute recurring heartbeat (900,000ms) to minimize database writes
+    const interval = setInterval(sendHeartbeat, 900000);
 
-    // 1. Real-time listener for current session document in Firestore
+    // Single lightweight real-time listener for current session document in Firestore
     let unsubSession: (() => void) | null = null;
-    let unsubUser: (() => void) | null = null;
 
     try {
       unsubSession = onSnapshot(doc(db, SESSIONS_COL, clientSessionId), (snap) => {
@@ -733,29 +736,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }, (_err) => {
         // Silent snapshot error fallback
       });
-
-      // 2. Also listen for forceLoggedOutAt timestamp on user's profile
-      unsubUser = onSnapshot(doc(db, 'users', userProfile.uid), (snap) => {
-        if (snap.exists()) {
-          const uData = snap.data();
-          if (uData?.forceLoggedOutAt && !isTerminatedHandled) {
-            const forceTime = new Date(uData.forceLoggedOutAt).getTime();
-            const sessionStartTime = Number(sessionStorage.getItem('it_session_start_time') || Date.now());
-            // ONLY force logout if the admin forced termination happened AFTER current login time (with 5s buffer)
-            if (forceTime > sessionStartTime + 5000) {
-              isTerminatedHandled = true;
-              authLog('RemoteTermination', 'User account forced logout by administrator.');
-              try {
-                localStorage.setItem(
-                  'it_auth_notice',
-                  'Your session was remotely terminated by the Academy Administrator. Please sign in again with your email and password.'
-                );
-              } catch {}
-              forceLogout();
-            }
-          }
-        }
-      }, () => {});
     } catch (err) {
       console.warn('Session security listener setup note:', err);
     }
@@ -763,7 +743,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       clearInterval(interval);
       if (unsubSession) unsubSession();
-      if (unsubUser) unsubUser();
     };
   }, [userProfile?.uid, userProfile?.role, userProfile?.email]);
 

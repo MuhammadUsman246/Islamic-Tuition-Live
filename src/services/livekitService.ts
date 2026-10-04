@@ -43,32 +43,77 @@ export const DEFAULT_CLASSROOM_SETTINGS: ClassroomLabSettings = {
 };
 
 /**
- * Generate a canonical, deterministic LiveKit room name shared between Tutor, Student & Admin
+ * Convert any tutor identifier ("Tutor 3", "TUT-003", "room_tutor_3", "tutor-3")
+ * into its canonical URL slug (e.g. "tutor-3").
  */
-export function getCanonicalRoomName(tutorInput: any, studentInput?: any, customRoomName?: string): string {
-  if (customRoomName && typeof customRoomName === 'string' && customRoomName.trim()) {
-    return customRoomName.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
-  }
-
-  let tutorStr = 'Tutor_1';
+export function getTutorSlug(tutorInput: any): string {
+  if (!tutorInput) return 'tutor-1';
+  let tutorStr = '';
   if (typeof tutorInput === 'string') {
-    tutorStr = tutorInput;
+    tutorStr = tutorInput.trim();
+  } else if (typeof tutorInput === 'object') {
+    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || '';
+  }
+  if (!tutorStr) return 'tutor-1';
+
+  const numMatch = tutorStr.match(/\d+/);
+  if (numMatch) {
+    return `tutor-${parseInt(numMatch[0], 10)}`;
+  }
+  return tutorStr.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tutor-1';
+}
+
+/**
+ * Convert any tutor identifier ("TUT-003", "tutor-3", "Tutor 3") into a clean display ID ("Tutor 3").
+ */
+export function getTutorDisplayId(tutorInput: any): string {
+  if (!tutorInput) return 'Tutor 1';
+  let tutorStr = '';
+  if (typeof tutorInput === 'string') {
+    tutorStr = tutorInput.trim();
+  } else if (typeof tutorInput === 'object') {
+    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || '';
+  }
+  if (!tutorStr) return 'Tutor 1';
+
+  const numMatch = tutorStr.match(/\d+/);
+  if (numMatch) {
+    return `Tutor ${parseInt(numMatch[0], 10)}`;
+  }
+  return tutorStr;
+}
+
+/**
+ * Generate a canonical, deterministic LiveKit room name shared between Tutor, Student, Parent & Admin.
+ * Every tutor has one permanent canonical classroom (e.g. "room_tutor_1" for Tutor 1 / tutor-1),
+ * ensuring Tutors, Students, Parents, Supervisors, Admins, and /class/tutor-X links always meet in the exact same room.
+ */
+export function getCanonicalRoomName(tutorInput: any, _studentInput?: any, customRoomName?: string): string {
+  if (customRoomName && typeof customRoomName === 'string' && customRoomName.trim()) {
+    const trimmed = customRoomName.trim();
+    // Check if the custom input is actually a tutor slug or ID like "tutor-1" or "Tutor 1" or "TUT-001"
+    const tutorMatch = trimmed.match(/^(?:room[_-])?(?:tutor|tut)[_-\s]*(\d+)$/i);
+    if (tutorMatch) {
+      return `room_tutor_${parseInt(tutorMatch[1], 10)}`;
+    }
+    return trimmed.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  }
+
+  let tutorStr = 'Tutor 1';
+  if (typeof tutorInput === 'string' && tutorInput.trim()) {
+    tutorStr = tutorInput.trim();
   } else if (tutorInput && typeof tutorInput === 'object') {
-    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || tutorInput.displayName || 'Tutor_1';
+    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || tutorInput.displayName || 'Tutor 1';
   }
 
-  let studentStr = '';
-  if (typeof studentInput === 'string') {
-    studentStr = studentInput;
-  } else if (studentInput && typeof studentInput === 'object') {
-    studentStr = studentInput.studentId || studentInput.id || studentInput.name || '';
+  // Extract tutor number if present (e.g. "Tutor 1", "tutor-1", "TUT-001", "room_tutor_1" -> "room_tutor_1")
+  const numMatch = tutorStr.match(/\d+/);
+  if (numMatch) {
+    const num = parseInt(numMatch[0], 10);
+    return `room_tutor_${num}`;
   }
 
-  const cleanTutor = tutorStr.replace(/[^a-zA-Z0-9]/g, '_');
-  if (studentStr && studentStr.trim()) {
-    const cleanStudent = studentStr.trim().replace(/[^a-zA-Z0-9]/g, '_');
-    return `room_${cleanTutor}_${cleanStudent}`;
-  }
+  const cleanTutor = tutorStr.toLowerCase().replace(/[^a-z0-9]/g, '_');
   return `room_tutor_${cleanTutor}`;
 }
 
@@ -208,7 +253,7 @@ export async function checkLiveKitServerStatus(): Promise<{
  */
 export function createOptimizedLiveKitRoom(): Room {
   return new Room({
-    adaptiveStream: false,
+    adaptiveStream: true,
     dynacast: true,
     stopLocalTrackOnUnpublish: true,
     disconnectOnPageLeave: true,
@@ -216,9 +261,41 @@ export function createOptimizedLiveKitRoom(): Room {
       autoGainControl: true,
       echoCancellation: true,
       noiseSuppression: true,
+      channelCount: 1,
+      sampleRate: 48000,
     },
     videoCaptureDefaults: {
-      resolution: VideoPresets.h720.resolution,
+      resolution: {
+        width: 640,
+        height: 480,
+        frameRate: 15,
+      },
+    },
+    publishDefaults: {
+      // Voice audio is #1 network priority with RED packet-loss recovery (prevents robotic/breaking voice on slow networks)
+      audioPreset: {
+        maxBitrate: 32_000,
+        priority: 'high',
+      },
+      red: true,
+      dtx: true,
+      // Student camera capped at compact 480p (180 kbps max, low network priority) to save bandwidth & resources
+      videoEncoding: {
+        maxBitrate: 180_000,
+        maxFramerate: 15,
+        priority: 'low',
+      },
+      // Smart auto-adjusting screen share: 1080p primary + 720p HD fallback layer so slow internet steps down slightly without blurry text or hurting voice
+      simulcast: true,
+      degradationPreference: 'balanced',
+      screenShareSimulcastLayers: [
+        VideoPresets.h720,
+      ],
+      screenShareEncoding: {
+        maxBitrate: 800_000,
+        maxFramerate: 10,
+        priority: 'medium',
+      },
     },
   });
 }
@@ -314,4 +391,53 @@ export function saveLocalClassroomRecordings(recordings: ClassroomRecordingItem[
   try {
     localStorage.setItem(CLASSROOM_RECORDINGS_STORAGE_KEY, JSON.stringify(recordings));
   } catch {}
+}
+
+export interface LiveRoomStatusItem {
+  tutorId: string;
+  roomSlug: string;
+  status: 'running' | 'tutor_waiting' | 'student_waiting' | 'idle';
+  tutorPresent: boolean;
+  studentPresent: boolean;
+  participantCount: number;
+  studentCount: number;
+  students: string[];
+  waitingCount: number;
+  waitingStudents: string[];
+  lastActivity: string | null;
+}
+
+export interface LiveRoomsStatusResponse {
+  rooms: LiveRoomStatusItem[];
+  summary: {
+    totalTutors: number;
+    runningCount: number;
+    tutorWaitingCount: number;
+    studentWaitingCount: number;
+    idleCount: number;
+  };
+}
+
+/**
+ * Fetch real-time live status for all classrooms from server
+ */
+export async function fetchLiveRoomsStatus(): Promise<LiveRoomsStatusResponse> {
+  try {
+    const res = await fetch('/api/livekit/rooms/live-status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn('Live rooms status fetch notice:', e);
+  }
+  return {
+    rooms: [],
+    summary: {
+      totalTutors: 0,
+      runningCount: 0,
+      tutorWaitingCount: 0,
+      studentWaitingCount: 0,
+      idleCount: 0
+    }
+  };
 }

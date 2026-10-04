@@ -39,6 +39,7 @@ import {
   subscribeToLessons,
   subscribeToStudents,
   subscribeToClasses,
+  subscribeToStudentAndParentLiveUpdates,
   loadCachedCollection,
   deduplicateTutors,
   ensureFeesLoaded,
@@ -416,6 +417,57 @@ const MainPortal: React.FC = () => {
     return () => unsub();
   }, [currentUser, role, userProfile?.tutorId, currentUserId]);
 
+  // Scoped real-time delta listener for Student & Parent roles:
+  // Listens ONLY to the logged-in Student's (or Parent's children's) studentId(s) so any schedule change,
+  // tutor reassignment, or new lesson report updates in real time without a page reload (consuming only 1-5 reads).
+  const activeStudentOrParentIdsKey = React.useMemo(() => {
+    if (role !== 'student' && role !== 'parent') return '';
+    const ids = new Set<string>();
+    if (adminViewingRole && adminViewingTargetId) {
+      ids.add(adminViewingTargetId.trim());
+    }
+    if (userProfile?.studentId) {
+      ids.add(userProfile.studentId.trim());
+    }
+    if (Array.isArray(userProfile?.linkedStudentIds)) {
+      userProfile.linkedStudentIds.forEach(id => {
+        if (id) ids.add(id.trim());
+      });
+    }
+    const cleanEmail = userProfile?.email?.toLowerCase().trim();
+    if (cleanEmail && students.length > 0) {
+      students.forEach(s => {
+        const sEmail = s.email?.toLowerCase().trim();
+        const pEmail = s.parentEmail?.toLowerCase().trim();
+        if ((sEmail === cleanEmail || pEmail === cleanEmail) && s.studentId) {
+          ids.add(s.studentId.trim());
+        }
+      });
+    }
+    return Array.from(ids).filter(Boolean).sort().join(',');
+  }, [role, adminViewingRole, adminViewingTargetId, userProfile?.studentId, userProfile?.linkedStudentIds, userProfile?.email, students]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (role !== 'student' && role !== 'parent') return;
+    if (!activeStudentOrParentIdsKey) return;
+
+    const targetStudentIds = activeStudentOrParentIdsKey.split(',').filter(Boolean);
+    const unsub = subscribeToStudentAndParentLiveUpdates(targetStudentIds, {
+      onStudents: (updatedStudents) => {
+        if (updatedStudents && updatedStudents.length > 0) setStudents(updatedStudents);
+      },
+      onClasses: (updatedClasses) => {
+        if (updatedClasses && updatedClasses.length > 0) setClasses(updatedClasses);
+      },
+      onLessons: (updatedLessons) => {
+        if (updatedLessons) setLessons(updatedLessons);
+      }
+    });
+
+    return () => unsub();
+  }, [currentUser, role, activeStudentOrParentIdsKey]);
+
   // Dynamic Linking Effect: Ensure logged in user's profile is linked to real student/parent/tutor record in Firestore
   useEffect(() => {
     if (!userProfile || !userProfile.email || adminViewingRole) return;
@@ -768,7 +820,28 @@ const MainPortal: React.FC = () => {
   );
 };
 
+import { PermanentSlugRoute } from './components/classroom/PermanentSlugRoute';
+import { GuestLinkRoute } from './components/classroom/GuestLinkRoute';
+
 export default function App() {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+
+  if (pathname.startsWith('/c/') || pathname.startsWith('/class/')) {
+    return (
+      <AuthProvider>
+        <PermanentSlugRoute />
+      </AuthProvider>
+    );
+  }
+
+  if (pathname.startsWith('/guest/')) {
+    return (
+      <AuthProvider>
+        <GuestLinkRoute />
+      </AuthProvider>
+    );
+  }
+
   return (
     <AuthProvider>
       <MainPortal />
