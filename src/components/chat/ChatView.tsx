@@ -50,7 +50,8 @@ import {
   initiateCallSession,
   subscribeToIncomingCalls,
   editChatMessage,
-  deleteChatMessage
+  deleteChatMessage,
+  canonicalizeChatThreadId
 } from '../../services/dataService';
 import { useAuth } from '../../context/AuthContext';
 import { AudioPlayer } from './AudioPlayer';
@@ -88,14 +89,31 @@ interface ChatViewProps {
 export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: propStudents, tutors: propTutors }) => {
   const { userProfile, activeRole, adminViewingRole, adminViewingTargetId } = useAuth();
   const role: UserRole = activeRole || userProfile?.role || 'admin';
-  const currentUserId = (adminViewingRole && adminViewingTargetId)
-    ? `${role}_${adminViewingTargetId}`
-    : (role === 'tutor' && userProfile?.tutorId ? userProfile.tutorId : (userProfile?.uid || 'user'));
 
   const [students, setStudents] = useState<Student[]>(() => propStudents && propStudents.length > 0 ? propStudents : []);
   const [tutors, setTutors] = useState<Tutor[]>(() => propTutors && propTutors.length > 0 ? propTutors : []);
-  const [messageLimit, setMessageLimit] = useState<number>(35);
+  const [messageLimit, setMessageLimit] = useState<number>(100);
   const [, setLoadingData] = useState(false);
+
+  const resolvedTutorId = useMemo(() => {
+    if (role !== 'tutor' && adminViewingRole !== 'tutor') return '';
+    if (adminViewingTargetId) return adminViewingTargetId;
+    if (userProfile?.tutorId) return userProfile.tutorId;
+    const cleanEmail = (userProfile?.email || '').trim().toLowerCase();
+    if (cleanEmail && tutors.length > 0) {
+      const byEmail = tutors.find(t => (t.email || '').trim().toLowerCase() === cleanEmail);
+      if (byEmail?.tutorId) return byEmail.tutorId;
+    }
+    const emailMatch = cleanEmail.match(/tutor\s*[_-]?(\d+)/i);
+    if (emailMatch) return `Tutor ${emailMatch[1]}`;
+    const nameMatch = (userProfile?.displayName || '').match(/tutor\s*[_-]?(\d+)/i);
+    if (nameMatch) return `Tutor ${nameMatch[1]}`;
+    return tutors.length > 0 ? tutors[0].tutorId : 'Tutor 1';
+  }, [role, adminViewingRole, adminViewingTargetId, userProfile?.tutorId, userProfile?.email, userProfile?.displayName, tutors]);
+
+  const currentUserId = (adminViewingRole && adminViewingTargetId)
+    ? (role === 'tutor' ? resolvedTutorId : `${role}_${adminViewingTargetId}`)
+    : (role === 'tutor' && resolvedTutorId ? resolvedTutorId : (userProfile?.uid || 'user'));
 
   // Sync props when updated from parent without extra Firestore reads
   useEffect(() => {
@@ -247,7 +265,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
   // Compute effective display name respecting inspection mode
   const effectiveDisplayName = useMemo(() => {
     if (role === 'tutor' || adminViewingRole === 'tutor') {
-      const currentTutorId = adminViewingTargetId || userProfile?.tutorId || '';
+      const currentTutorId = resolvedTutorId || adminViewingTargetId || userProfile?.tutorId || '';
       const match = tutors.find(t => t.tutorId.toLowerCase() === currentTutorId.toLowerCase() || t.tutorId.toLowerCase().replace(/[^a-z0-9]/g, '') === currentTutorId.toLowerCase().replace(/[^a-z0-9]/g, ''));
       if (match) {
         return match.realName ? `${match.realName} (${match.tutorId})` : match.tutorId;
@@ -368,7 +386,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
       // Tutor has their own dedicated Support Group (with Admin & Supervisors)
       // Direct 1-to-1 with Admin is intentionally removed so tutors cannot bypass the group.
       // All messages are sent here so both Admins and Supervisors are present and can see all chat.
-      const currentTutorId = adminViewingTargetId || userProfile?.tutorId || (tutors.length > 0 ? tutors[0].tutorId : 'tutor_1');
+      const currentTutorId = resolvedTutorId || adminViewingTargetId || userProfile?.tutorId || (tutors.length > 0 ? tutors[0].tutorId : 'Tutor 1');
       const tKey = currentTutorId.replace(/\s+/g, '_').toLowerCase();
 
       channels.push({
@@ -414,11 +432,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
       }
     }
     return uniqueChannels;
-  }, [role, userProfile?.uid, userProfile?.tutorId, userProfile?.studentId, userProfile?.email, adminViewingRole, adminViewingTargetId, students, tutors]);
+  }, [role, resolvedTutorId, userProfile?.uid, userProfile?.tutorId, userProfile?.studentId, userProfile?.email, adminViewingRole, adminViewingTargetId, students, tutors]);
 
   const [activeThreadId, setActiveThreadId] = useState<string>(() => {
-    if (initialThreadId && availableChannels.some(c => c.id === initialThreadId)) {
-      return initialThreadId;
+    if (initialThreadId) {
+      const canonicalInit = canonicalizeChatThreadId(initialThreadId);
+      if (availableChannels.some(c => c.id === initialThreadId)) return initialThreadId;
+      if (availableChannels.some(c => c.id === canonicalInit)) return canonicalInit;
     }
     return availableChannels[0]?.id || '';
   });
@@ -427,9 +447,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
 
   // Switch to initialThreadId if provided from outside
   useEffect(() => {
-    if (initialThreadId && availableChannels.some(c => c.id === initialThreadId)) {
-      setActiveThreadId(initialThreadId);
-      setMobileChatView('messages');
+    if (initialThreadId) {
+      const canonicalInit = canonicalizeChatThreadId(initialThreadId);
+      if (availableChannels.some(c => c.id === initialThreadId)) {
+        setActiveThreadId(initialThreadId);
+        setMobileChatView('messages');
+      } else if (availableChannels.some(c => c.id === canonicalInit)) {
+        setActiveThreadId(canonicalInit);
+        setMobileChatView('messages');
+      }
     }
   }, [initialThreadId, availableChannels]);
 
@@ -459,7 +485,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
 
   // Reset messageLimit when switching active thread
   useEffect(() => {
-    setMessageLimit(35);
+    setMessageLimit(100);
   }, [activeThreadId]);
 
   // Subscribe to active thread with 35-message windowing limit
@@ -1692,7 +1718,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                   </div>
 
                   {group.items.map((m) => {
-                    const isMe = m.senderId === currentUserId;
+                    const isMe =
+                      m.senderId === currentUserId ||
+                      (role === 'tutor' &&
+                        m.senderRole === 'tutor' &&
+                        (m.senderId || '').replace(/^(tutor_)/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase() ===
+                          (currentUserId || '').replace(/^(tutor_)/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase());
                     const formattedTime = formatMessageTimestamp(m.timestamp);
                     const isGroupChat = activeThreadId === 'channel_staff_group' || activeThreadId.startsWith('desk_tutor_');
                     const seenByList = Array.isArray(m.seenBy) ? m.seenBy : [];

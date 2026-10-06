@@ -139,7 +139,7 @@ export const WeeklyProgressReportModal: React.FC<WeeklyProgressReportModalProps>
   if (!isOpen || !currentStudent) return null;
 
   const assignedTutor = tutors.find(t => t.tutorId === currentStudent.assignedTutorId || t.realName === currentStudent.assignedTutorId);
-  const tutorName = assignedTutor?.realName || currentStudent.assignedTutorId;
+  const tutorName = currentStudent.assignedTutorId || assignedTutor?.tutorId || 'Tutor';
 
   const reportData: WeeklyReportData = {
     student: currentStudent,

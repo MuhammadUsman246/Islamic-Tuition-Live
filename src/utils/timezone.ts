@@ -308,3 +308,78 @@ export function getCurrentOperationalDate(): string {
   }
 }
 
+/**
+ * Normalizes any date string (YYYY-MM-DD, ISO string, etc.) to YYYY-MM-DD
+ */
+export function normalizeDateString(dStr?: string): string {
+  if (!dStr) return '';
+  const trimmed = dStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 10);
+  }
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const yr = parsed.getFullYear();
+    const mo = String(parsed.getMonth() + 1).padStart(2, '0');
+    const dy = String(parsed.getDate()).padStart(2, '0');
+    return `${yr}-${mo}-${dy}`;
+  }
+  return trimmed;
+}
+
+/**
+ * Calculates a date N days relative to the current operational date (YYYY-MM-DD)
+ */
+export function getRelativeOperationalDate(daysOffset = 0): string {
+  const base = getCurrentOperationalDate();
+  try {
+    const parts = base.split('-').map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+      dt.setDate(dt.getDate() + daysOffset);
+      const yr = dt.getFullYear();
+      const mo = String(dt.getMonth() + 1).padStart(2, '0');
+      const dy = String(dt.getDate()).padStart(2, '0');
+      return `${yr}-${mo}-${dy}`;
+    }
+  } catch {}
+  const fallback = new Date();
+  fallback.setDate(fallback.getDate() + daysOffset);
+  return fallback.toISOString().slice(0, 10);
+}
+
+/**
+ * Robust date-range check for lessons across all dashboards
+ */
+export function isLessonInDateRange(
+  lessonDate: string | undefined,
+  mode: 'all' | 'weekly' | 'monthly' | '60days' | 'custom',
+  customStart?: string,
+  customEnd?: string
+): boolean {
+  if (mode === 'all') return true;
+  const lDate = normalizeDateString(lessonDate);
+  if (!lDate) return false;
+
+  if (mode === 'weekly') {
+    const cutoff = getRelativeOperationalDate(-7);
+    return lDate >= cutoff;
+  }
+  if (mode === 'monthly') {
+    const cutoff = getRelativeOperationalDate(-30);
+    return lDate >= cutoff;
+  }
+  if (mode === '60days') {
+    const cutoff = getRelativeOperationalDate(-60);
+    return lDate >= cutoff;
+  }
+  if (mode === 'custom') {
+    const start = normalizeDateString(customStart);
+    const end = normalizeDateString(customEnd);
+    if (start && lDate < start) return false;
+    if (end && lDate > end) return false;
+    return true;
+  }
+  return true;
+}
+

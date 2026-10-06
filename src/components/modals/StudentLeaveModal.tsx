@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Calendar, Clock, AlertCircle, CheckCircle, Palmtree, ArrowRight, RotateCcw, Loader2 } from 'lucide-react';
 import { Student } from '../../types';
+import { getTutorDisplayId } from '../../utils/tutorPrivacy';
 
 interface StudentLeaveModalProps {
   isOpen: boolean;
@@ -159,7 +160,7 @@ export const StudentLeaveModal: React.FC<StudentLeaveModalProps> = ({
                 Student Leave / Vacation Management
               </h3>
               <p className="text-[11px] text-[#5A6B61]">
-                {student.name} ({student.studentId}) • {student.assignedTutorId || 'No Tutor'}
+                {student.name} ({student.studentId}) • {getTutorDisplayId(student.assignedTutorId) || 'No Tutor'}
               </p>
             </div>
           </div>

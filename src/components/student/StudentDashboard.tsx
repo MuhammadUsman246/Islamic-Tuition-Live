@@ -38,12 +38,12 @@ import {
   LiveKitRoomTokenResponse
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { convertPKTToStudentTime, getTimezoneShortCode } from '../../utils/timezone';
+import { convertPKTToStudentTime, getTimezoneShortCode, isLessonInDateRange, getRelativeOperationalDate, normalizeDateString, getCurrentOperationalDate } from '../../utils/timezone';
 import { generateInvoicePDF, generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
 import { StudentProfileCustomizerModal } from '../modals/StudentProfileCustomizerModal';
-import { StudentParentTourModal } from '../modals/StudentParentTourModal';
+import { StudentParentTourModal, hasSeenPortalTour } from '../modals/StudentParentTourModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { findStudentByEmailOrId, loadOlderLessonsArchive } from '../../services/dataService';
@@ -82,13 +82,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const [viewingReceiptFee, setViewingReceiptFee] = useState<StudentFee | null>(null);
   const [paymentNoticeFee, setPaymentNoticeFee] = useState<StudentFee | null>(null);
   const [selectedLessonForDetail, setSelectedLessonForDetail] = useState<Lesson | null>(null);
-  const [startDateReport, setStartDateReport] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [endDateReport, setEndDateReport] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [reportViewMode, setReportViewMode] = useState<'monthly' | 'weekly' | 'all'>('weekly');
+  const [startDateReport, setStartDateReport] = useState<string>(() => getRelativeOperationalDate(-30));
+  const [endDateReport, setEndDateReport] = useState<string>(() => getCurrentOperationalDate());
+  const [reportViewMode, setReportViewMode] = useState<'monthly' | '60days' | 'weekly' | 'all' | 'custom'>('weekly');
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [expandedMonths, setExpandedMonths] = useState<{ [key: string]: boolean }>({});
   const [expandedWeeks, setExpandedWeeks] = useState<{ [key: string]: boolean }>({});
@@ -180,18 +176,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   const student = matchedStudent || fetchedStudent || synthesizedStudent;
 
-  // Automatically trigger Tour modal on first login for student
+  // Automatically trigger Tour modal on first login for student (never auto-popup during Admin Inspection Mode or after dismissal)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || adminViewingRole) return;
     const targetKey = student?.studentId || userProfile?.studentId || userProfile?.uid || 'student_guest';
-    const seen = localStorage.getItem(`has_seen_portal_tour_student_${targetKey}`);
-    if (!seen) {
+    if (!hasSeenPortalTour('student', targetKey)) {
       const timer = setTimeout(() => {
         setIsTourModalOpen(true);
       }, 600);
       return () => clearTimeout(timer);
     }
-  }, [student?.studentId, userProfile?.studentId, userProfile?.uid]);
+  }, [student?.studentId, userProfile?.studentId, userProfile?.uid, adminViewingRole]);
 
   const isMatchCurrentStudent = (targetIdOrName?: string) => {
     if (!targetIdOrName || !student) return false;
@@ -211,6 +206,57 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const myLessons = student ? lessons.filter(l => isMatchCurrentStudent(l.studentId) || isMatchCurrentStudent(l.studentName)) : [];
   const myAttendance = student ? attendance.filter(a => isMatchCurrentStudent(a.studentId) || isMatchCurrentStudent(a.studentName)) : [];
 
+  // UNIFIED STUDENT ATTENDANCE: Auto-picked from lesson submissions + quick attendance records
+  const unifiedStudentAttendance = useMemo(() => {
+    const list: Array<{
+      id: string;
+      date: string;
+      tutorId?: string;
+      status: 'Present' | 'Late' | 'Absent' | 'Excused' | 'Student on Leave';
+      notes: string;
+      source: string;
+    }> = [];
+
+    // 1. Ingest lesson reports
+    myLessons.forEach(l => {
+      const st = (l.attendanceStatus || 'Present') as any;
+      let notes = l.lessonCovered || 'Lesson completed';
+      if (st === 'Absent') {
+        notes = l.absentReason ? `Absent: ${l.absentReason}` : 'Student Absent';
+      } else if (st === 'Late') {
+        notes = `${l.lateMinutes ? `${l.lateMinutes} min late — ` : ''}${l.lessonCovered || 'Class conducted'}`;
+      } else if (st === 'Student on Leave') {
+        notes = 'Authorized leave';
+      }
+
+      list.push({
+        id: `lesson_${l.id}`,
+        date: l.date,
+        tutorId: l.tutorId,
+        status: st,
+        notes,
+        source: 'Lesson Report'
+      });
+    });
+
+    // 2. Ingest manual attendance records
+    myAttendance.forEach(a => {
+      const match = list.find(item => item.date === a.date);
+      if (!match) {
+        list.push({
+          id: `att_${a.id}`,
+          date: a.date,
+          tutorId: a.tutorId,
+          status: a.status as any,
+          notes: a.notes || 'Verified attendance',
+          source: 'Attendance Log'
+        });
+      }
+    });
+
+    return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [myLessons, myAttendance]);
+
   // Resolve student's assigned tutor accurately from student record or scheduled classes
   const rawAssignedTutorId = student?.assignedTutorId || myClasses[0]?.tutorId || 'Tutor 1';
   const assignedTutor = student
@@ -220,13 +266,19 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           getTutorSlug(t.tutorId) === getTutorSlug(rawAssignedTutorId)
       ) || null
     : null;
-  const resolvedTutorDisplayId = assignedTutor?.tutorId || getTutorDisplayId(rawAssignedTutorId);
-  const resolvedTutorSlug = getTutorSlug(resolvedTutorDisplayId);
+  const resolvedTutorDisplayId = getTutorDisplayId(assignedTutor || rawAssignedTutorId, tutors);
+  const resolvedTutorSlug = getTutorSlug(resolvedTutorDisplayId, tutors);
   const [copiedClassroomLink, setCopiedClassroomLink] = useState(false);
+
+  const filteredStudentLessons = useMemo(() => {
+    return myLessons.filter(l => {
+      return isLessonInDateRange(l.date, reportViewMode, startDateReport, endDateReport);
+    });
+  }, [myLessons, reportViewMode, startDateReport, endDateReport]);
 
   const lessonsByMonth = useMemo(() => {
     const grouped: { [key: string]: Lesson[] } = {};
-    myLessons.forEach(lesson => {
+    filteredStudentLessons.forEach(lesson => {
       const monthKey = lesson.month || 'Other / Uncategorized';
       if (!grouped[monthKey]) {
         grouped[monthKey] = [];
@@ -234,11 +286,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       grouped[monthKey].push(lesson);
     });
     return grouped;
-  }, [myLessons]);
+  }, [filteredStudentLessons]);
 
   const lessonsByWeek = useMemo(() => {
     const grouped: { [key: string]: Lesson[] } = {};
-    myLessons.forEach(lesson => {
+    filteredStudentLessons.forEach(lesson => {
       const weekKey = `Week of ${getMonday(lesson.date)}`;
       if (!grouped[weekKey]) {
         grouped[weekKey] = [];
@@ -246,7 +298,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       grouped[weekKey].push(lesson);
     });
     return grouped;
-  }, [myLessons]);
+  }, [filteredStudentLessons]);
 
   // STRICT INVOICE ISOLATION: A Student must ONLY see their own fee and personal amount
   const myFees = useMemo(() => {
@@ -308,7 +360,6 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       });
       setLiveKitTokenData(tokenRes);
       setIsLiveKitModalOpen(true);
-      await joinClassroomSession(tokenRes, 'student', student?.name || userProfile?.displayName || 'Student');
     } catch (err: any) {
       alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
     } finally {
@@ -357,7 +408,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-700 p-0.5 shadow-md flex items-center justify-center overflow-hidden border-2 border-white/30 shrink-0 cursor-pointer hover:scale-105 transition-transform group relative"
               title="Click to customize profile picture and goals"
             >
-              {userProfile?.avatarUrl ? (
+              {(!adminViewingRole && userProfile?.avatarUrl) ? (
                 <img
                   src={userProfile.avatarUrl}
                   alt="Student Avatar"
@@ -366,7 +417,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 />
               ) : (
                 <span className="text-xl sm:text-2xl font-bold text-white">
-                  {userProfile?.displayName?.charAt(0).toUpperCase() || student.name.charAt(0).toUpperCase()}
+                  {((!adminViewingRole && userProfile?.displayName) || student.name).charAt(0).toUpperCase()}
                 </span>
               )}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-2xl">
@@ -382,17 +433,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <span className="text-xs text-[#b8dbca]">
                   Timezone: <strong className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-white" title={student?.timezone}>{getTimezoneShortCode(student?.timezone)}</strong>
                 </span>
-                {userProfile?.preferredName && (
+                {!adminViewingRole && userProfile?.preferredName && (
                   <span className="text-xs text-emerald-200 italic font-medium">
                     (Known as "{userProfile.preferredName}")
                   </span>
                 )}
               </div>
               <h2 className="text-xl font-bold tracking-tight">
-                Assalamu Alaykum, {userProfile?.preferredName || student?.name}
+                Assalamu Alaykum, {(!adminViewingRole && userProfile?.preferredName) || student?.name}
               </h2>
               <p className="text-xs text-[#d2e8dd] max-w-xl">
-                Course: <strong>{student?.courseType}</strong> • Assigned Tutor: <strong>{resolvedTutorDisplayId} {assignedTutor?.realName ? `(${assignedTutor.realName})` : ''}</strong>
+                Course: <strong>{student?.courseType}</strong> • Assigned Tutor: <strong>{resolvedTutorDisplayId}</strong>
               </p>
               {/* Assigned Tutor Classroom ID & Direct Link Pill */}
               <div className="pt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -597,16 +648,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
                     <div className="p-3 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7] text-xs space-y-1">
                       <p className="text-[#5A6B61] flex items-center justify-between">
-                        <span>Instructor: <strong className="text-[#2D8B5C]">{cls.tutorId}</strong></span>
+                        <span>Instructor: <strong className="text-[#2D8B5C]">{getTutorDisplayId(cls.tutorId, tutors)}</strong></span>
                         <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          {getTutorSlug(cls.tutorId)}
+                          {getTutorSlug(cls.tutorId, tutors)}
                         </span>
                       </p>
                       <p className="text-[#5A6B61]">
                         Weekly Class: <span className="font-medium text-[#161F1A]">{converted.localDay}s at {converted.localTime}</span>
                       </p>
                       <p className="text-[#5A6B61] font-mono text-[11px] truncate">
-                        Link: <span className="text-[#1E5C3D]">{window.location.origin}/class/{getTutorSlug(cls.tutorId)}</span>
+                        Link: <span className="text-[#1E5C3D]">{window.location.origin}/class/{getTutorSlug(cls.tutorId, tutors)}</span>
                       </p>
                     </div>
 
@@ -617,7 +668,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                       className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-lg flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
                     >
                       <Radio className="w-3.5 h-3.5 text-[#E8A93E]" />
-                      <span>Join {getTutorDisplayId(cls.tutorId)} Classroom ({getTutorSlug(cls.tutorId)})</span>
+                      <span>Join {getTutorDisplayId(cls.tutorId, tutors)} Classroom ({getTutorSlug(cls.tutorId, tutors)})</span>
                     </button>
                   </div>
                 );
@@ -710,7 +761,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             </div>
 
             {/* View Mode Switcher */}
-            <div className="bg-[#FAF9F7] border border-[#E3DFD7] p-1 rounded-xl flex items-center space-x-1 self-start sm:self-auto shadow-xs">
+            <div className="flex flex-wrap items-center gap-1.5 bg-[#FAF9F7] border border-[#E3DFD7] p-1 rounded-xl shadow-xs self-start sm:self-auto">
               <button
                 type="button"
                 onClick={() => setReportViewMode('weekly')}
@@ -730,7 +781,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                   if (student) {
                     setIsLoadingOlderLessons(true);
                     try {
-                      await loadOlderLessonsArchive({ studentIds: [student.id], daysBack: 180 });
+                      await loadOlderLessonsArchive({ studentIds: Array.from(new Set([student.studentId, student.id].filter(Boolean))), daysBack: 35 });
                       if (onRefreshData) await onRefreshData();
                     } finally {
                       setIsLoadingOlderLessons(false);
@@ -743,7 +794,53 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
                 }`}
               >
-                Monthly Summary
+                Last 30 Days
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingOlderLessons}
+                onClick={async () => {
+                  setReportViewMode('60days');
+                  if (student) {
+                    setIsLoadingOlderLessons(true);
+                    try {
+                      await loadOlderLessonsArchive({ studentIds: Array.from(new Set([student.studentId, student.id].filter(Boolean))), daysBack: 65 });
+                      if (onRefreshData) await onRefreshData();
+                    } finally {
+                      setIsLoadingOlderLessons(false);
+                    }
+                  }
+                }}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  reportViewMode === '60days'
+                    ? 'bg-white text-[#1E5C3D] shadow-xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                Last 60 Days
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingOlderLessons}
+                onClick={async () => {
+                  setReportViewMode('custom');
+                  if (student) {
+                    setIsLoadingOlderLessons(true);
+                    try {
+                      await loadOlderLessonsArchive({ studentIds: Array.from(new Set([student.studentId, student.id].filter(Boolean))), daysBack: 180 });
+                      if (onRefreshData) await onRefreshData();
+                    } finally {
+                      setIsLoadingOlderLessons(false);
+                    }
+                  }
+                }}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  reportViewMode === 'custom'
+                    ? 'bg-white text-[#1E5C3D] shadow-xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                Custom Range
               </button>
               <button
                 type="button"
@@ -753,7 +850,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                   if (student) {
                     setIsLoadingOlderLessons(true);
                     try {
-                      await loadOlderLessonsArchive({ studentIds: [student.id], daysBack: 365 });
+                      await loadOlderLessonsArchive({ studentIds: Array.from(new Set([student.studentId, student.id].filter(Boolean))), daysBack: 365 });
                       if (onRefreshData) await onRefreshData();
                     } finally {
                       setIsLoadingOlderLessons(false);
@@ -766,10 +863,35 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
                 }`}
               >
-                {isLoadingOlderLessons ? 'Loading Older...' : 'Load Older (All Logs)'}
+                {isLoadingOlderLessons && reportViewMode === 'all' ? 'Loading Older...' : 'All History'}
               </button>
             </div>
           </div>
+
+          {/* Custom Date Pickers for Student */}
+          {reportViewMode === 'custom' && (
+            <div className="flex flex-wrap items-center gap-3 bg-[#FAF9F7] p-3 rounded-xl border border-[#E3DFD7] text-xs">
+              <span className="font-bold text-[#161F1A]">Select Range:</span>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[#5A6B61]">From:</span>
+                <input
+                  type="date"
+                  value={startDateReport}
+                  onChange={(e) => setStartDateReport(e.target.value)}
+                  className="bg-white border border-[#D5D0C6] rounded-lg px-2.5 py-1 text-xs font-mono outline-none"
+                />
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[#5A6B61]">To:</span>
+                <input
+                  type="date"
+                  value={endDateReport}
+                  onChange={(e) => setEndDateReport(e.target.value)}
+                  className="bg-white border border-[#D5D0C6] rounded-lg px-2.5 py-1 text-xs font-mono outline-none"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Render helper */}
           {(() => {
@@ -782,7 +904,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <div className="flex items-center justify-between">
                   <div>
                     <h4 className="text-sm font-bold text-[#161F1A]">{lesson.lessonType}</h4>
-                    <p className="text-xs text-[#5A6B61]">Taught by {lesson.tutorId} on {lesson.date}</p>
+                    <p className="text-xs text-[#5A6B61]">Taught by {getTutorDisplayId(lesson.tutorId, tutors)} on {lesson.date}</p>
                   </div>
                   <div className="flex items-center space-x-2">
                     {(() => {
@@ -890,20 +1012,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               </div>
             );
 
-            if (myLessons.length === 0) {
+            if (filteredStudentLessons.length === 0) {
               return (
                 <div className="bg-white p-8 rounded-xl border border-[#E3DFD7] text-center text-xs text-[#5A6B61]">
                   <BookOpen className="w-8 h-8 text-[#D5D0C6] mx-auto mb-2" />
-                  <p className="font-semibold text-[#161F1A]">No lesson reports recorded yet.</p>
-                  <p className="text-[11px] mt-1">Lesson entries by your assigned tutor will appear here in real-time.</p>
+                  <p className="font-semibold text-[#161F1A]">No lesson reports found for the selected time range.</p>
+                  <p className="text-[11px] mt-1">Try selecting "Last 60 Days" or "All History" to view earlier records.</p>
                 </div>
               );
             }
 
-            if (reportViewMode === 'all') {
+            if (reportViewMode === 'all' || reportViewMode === 'custom') {
               return (
                 <div className="space-y-3">
-                  {myLessons.map(renderLessonCard)}
+                  {filteredStudentLessons.map(renderLessonCard)}
                 </div>
               );
             }
@@ -1010,34 +1132,65 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       {/* TAB 3: ATTENDANCE */}
       {currentTab === 'student_attendance' && (
         <div className="space-y-4">
-          <h3 className="text-base font-bold text-[#161F1A]">My Class Attendance Record</h3>
-          <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                <tr>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Tutor</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EAE6DE]">
-                {myAttendance.map(att => (
-                  <tr key={att.id} className="hover:bg-[#FAF9F7]/60">
-                    <td className="py-3 px-4 font-semibold text-[#161F1A]">{att.date}</td>
-                    <td className="py-3 px-4 text-[#2D8B5C] font-medium">{att.tutorId}</td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        att.status === 'Present' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {att.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-[#5A6B61]">{att.notes || 'Verified attendance'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-[#161F1A]">My Class Attendance Record</h3>
+              <p className="text-xs text-[#5A6B61]">Real-time attendance history verified from your completed classes.</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-[#E3DFD7] rounded-2xl overflow-hidden shadow-xs">
+            {unifiedStudentAttendance.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#5A6B61] italic">
+                No attendance logs recorded yet. Attendance will populate automatically upon lesson completion.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                    <tr>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Tutor</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Class Details / Lesson Covered</th>
+                      <th className="py-3 px-4">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#EAE6DE]">
+                    {unifiedStudentAttendance.map(att => (
+                      <tr key={att.id} className="hover:bg-[#FAF9F7]/60">
+                        <td className="py-3 px-4 font-mono font-semibold text-[#161F1A]">{att.date}</td>
+                        <td className="py-3 px-4 text-[#2D8B5C] font-semibold">{getTutorDisplayId(att.tutorId, tutors)}</td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center space-x-1 ${
+                            att.status === 'Present'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : att.status === 'Late'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : att.status === 'Absent'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                              : 'bg-blue-100 text-blue-800 border border-blue-200'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              att.status === 'Present' ? 'bg-emerald-600' :
+                              att.status === 'Late' ? 'bg-amber-600' :
+                              att.status === 'Absent' ? 'bg-rose-600' : 'bg-blue-600'
+                            }`} />
+                            <span>{att.status}</span>
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-[#161F1A] max-w-xs truncate font-medium">{att.notes || '—'}</td>
+                        <td className="py-3 px-4">
+                          <span className="text-[10px] font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded border border-gray-200">
+                            {att.source}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1168,7 +1321,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-[#5A6B61]">
-                  Assigned ID: <strong className="font-mono text-[#2D8B5C]">{student?.studentId || userProfile?.studentId || 'STU-000'}</strong> • Instructor: <strong>{assignedTutor?.tutorId || 'Assigned Tutor'}</strong>
+                  Assigned ID: <strong className="font-mono text-[#2D8B5C]">{student?.studentId || userProfile?.studentId || 'STU-000'}</strong> • Instructor: <strong>{resolvedTutorDisplayId}</strong>
                 </p>
                 {userProfile?.bio && (
                   <p className="text-xs text-[#161F1A] italic max-w-xl pt-0.5">
@@ -1450,7 +1603,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
         isOpen={isTourModalOpen}
         onClose={() => setIsTourModalOpen(false)}
         userRole="student"
-        userName={userProfile?.displayName || student?.name || 'Student'}
+        userName={(!adminViewingRole && userProfile?.displayName) || student?.name || 'Student'}
         onNavigateTab={setCurrentTab}
         storageKeyPrefix={student?.studentId || userProfile?.studentId || userProfile?.uid || 'student_guest'}
       />

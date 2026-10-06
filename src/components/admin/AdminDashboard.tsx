@@ -45,7 +45,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   UserX,
-  Radio
+  Radio,
+  Pencil
 } from 'lucide-react';
 import {
   Student,
@@ -97,15 +98,16 @@ import { ClassroomLab } from './ClassroomLab';
 import { ChatSafetySettingsView } from './ChatSafetySettingsView';
 import { LessonDictionaryManager } from './LessonDictionaryManager';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
-import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, LiveRoomStatusItem } from '../../services/livekitService';
+import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, admitFromWaitingRoom, LiveRoomStatusItem } from '../../services/livekitService';
 import { computeTutorClassroomStatus, DynamicClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
 import { LiveKitRoomTokenResponse } from '../../types';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
 import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV, exportFeesToCSV, exportFullAcademyBackupJSON } from '../../utils/csvExporter';
 import { getCurrencySymbol, formatFeeAmount, ALLOWED_CURRENCIES } from '../../utils/currency';
-import { getTimezoneShortCode, getCurrentTeachingDay, convertPKTToStudentTime } from '../../utils/timezone';
+import { getTimezoneShortCode, getCurrentTeachingDay, convertPKTToStudentTime, getCurrentOperationalDate, isLessonInDateRange, getRelativeOperationalDate, normalizeDateString } from '../../utils/timezone';
 import { calculateStudentTrialProgress } from '../../utils/trialCalculator';
+import { TutorsTrainingPortal } from '../common/TutorsTrainingPortal';
 import {
   addClass,
   updateClass,
@@ -128,6 +130,7 @@ import {
   updateReferral,
   deleteReferral,
   addAnnouncement,
+  updateAnnouncement,
   deleteAnnouncement,
   addAttendanceRecord,
   deleteAttendanceRecord,
@@ -271,15 +274,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     idleCount: 0
   });
 
+  // Re-evaluate time-based schedule every 20 seconds
+  const [adminTimeTick, setAdminTimeTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setAdminTimeTick(v => v + 1), 20000);
+    return () => clearInterval(t);
+  }, []);
+
   // Dynamic computed real-time status for each tutor (combines LiveKit room presence + today's scheduled timetable slots)
   const adminTutorStatusMap = useMemo(() => {
     const map: Record<string, ReturnType<typeof computeTutorClassroomStatus>> = {};
     tutors.forEach(t => {
-      const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || null;
+      const slug = (t.tutorId || '').toLowerCase().replace(/\s+/g, '-');
+      const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || liveRoomsStatusMap[slug] || null;
       map[t.tutorId] = computeTutorClassroomStatus(t, classes, students, liveItem);
     });
     return map;
-  }, [tutors, classes, students, liveRoomsStatusMap]);
+  }, [tutors, classes, students, liveRoomsStatusMap, adminTimeTick]);
 
   // Aggregated dynamic status counts for Admin Dashboard
   const adminStatusCounts = useMemo(() => {
@@ -292,9 +303,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (Object.values(adminTutorStatusMap) as ClassroomComputedStatus[]).forEach(st => {
       if (st.status === 'running') running++;
       else if (st.status === 'tutor_waiting') tutorWaiting++;
-      else if (st.status === 'student_waiting') studentWaiting++;
       else if (st.status === 'scheduled_now') scheduledNow++;
-      else idle++;
+      else if (st.status === 'idle') idle++;
+
+      if (st.status === 'student_waiting' || st.hasStudentWaitingInQueue) {
+        studentWaiting++;
+      }
     });
 
     return {
@@ -306,6 +320,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       total: tutors.length
     };
   }, [adminTutorStatusMap, tutors.length]);
+
+  const refreshAdminLiveStatus = React.useCallback(async () => {
+    try {
+      const res = await fetchLiveRoomsStatus();
+      if (res?.rooms) {
+        const map: Record<string, LiveRoomStatusItem> = {};
+        res.rooms.forEach(r => {
+          map[r.tutorId] = r;
+          map[r.roomSlug] = r;
+          map[r.tutorId.toLowerCase()] = r;
+          map[r.tutorId.toLowerCase().replace(/\s+/g, '-')] = r;
+        });
+        setLiveRoomsStatusMap(map);
+        if (res.summary) setLiveRoomsSummary(res.summary);
+      }
+    } catch (e) {
+      console.warn('Live status refresh error:', e);
+    }
+  }, []);
 
   // Poll real-time room presence every 4 seconds
   useEffect(() => {
@@ -427,8 +460,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Spreadsheet-based reports state (Default to Weekly / Last 7 Days for 90%+ Firestore read optimization)
   const [lessonsViewMode, setLessonsViewMode] = useState<'cards' | 'spreadsheet'>('spreadsheet');
-  const [spreadsheetPeriod, setSpreadsheetPeriod] = useState<'all' | 'weekly' | 'monthly'>('weekly');
+  const [spreadsheetPeriod, setSpreadsheetPeriod] = useState<'all' | 'weekly' | 'monthly' | '60days' | 'custom'>('weekly');
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
+  const [spreadsheetStartDate, setSpreadsheetStartDate] = useState<string>(() => getRelativeOperationalDate(-30));
+  const [spreadsheetEndDate, setSpreadsheetEndDate] = useState<string>(() => getCurrentOperationalDate());
   const [spreadsheetSearchQuery, setSpreadsheetSearchQuery] = useState<string>('');
   
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -464,7 +499,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [hideDataGovernance, setHideDataGovernance] = useState<boolean>(false);
   const [hideUserGovernance, setHideUserGovernance] = useState<boolean>(false);
 
-  // Announcement creation form state with multiple target roles
+  // Announcement creation & editing form state with multiple target roles
+  const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null);
   const [newAnnTitle, setNewAnnTitle] = useState('');
   const [newAnnContent, setNewAnnContent] = useState('');
   const [newAnnRoles, setNewAnnRoles] = useState<string[]>(['all']);
@@ -475,6 +511,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [attStudentId, setAttStudentId] = useState(students[0]?.studentId || '');
   const [attStatus, setAttStatus] = useState<'Present' | 'Absent' | 'Excused'>('Present');
   const [attendanceSubTab, setAttendanceSubTab] = useState<'students' | 'tutors'>('students');
+  const [adminAttStudentFilter, setAdminAttStudentFilter] = useState<string>('all');
+  const [adminAttStatusFilter, setAdminAttStatusFilter] = useState<'all' | 'Present' | 'Late' | 'Absent' | 'Excused'>('all');
+  const [adminAttSearchQuery, setAdminAttSearchQuery] = useState<string>('');
+
+  // Unified Student Attendance Log (Auto-picked from lessons & quick-logs)
+  const unifiedAdminStudentAttendance = useMemo(() => {
+    const list: Array<{
+      id: string;
+      studentId: string;
+      studentName: string;
+      tutorId?: string;
+      date: string;
+      status: 'Present' | 'Late' | 'Absent' | 'Excused' | 'Student on Leave';
+      details: string;
+      source: 'Lesson Submission' | 'Manual Log';
+      markedBy?: string;
+      markedAt?: string;
+      rawLesson?: Lesson;
+    }> = [];
+
+    // 1. Ingest every saved lesson with attendance status
+    lessons.forEach(l => {
+      const st = (l.attendanceStatus || 'Present') as 'Present' | 'Late' | 'Absent' | 'Excused' | 'Student on Leave';
+      let details = l.lessonCovered || 'Class conducted';
+      if (st === 'Absent') {
+        details = l.absentReason ? `Absent: ${l.absentReason}` : 'Student Absent';
+      } else if (st === 'Late') {
+        details = `${l.lateMinutes ? `${l.lateMinutes} min late — ` : ''}${l.lessonCovered || 'Class conducted'}`;
+      } else if (st === 'Student on Leave') {
+        details = 'Student on authorized leave';
+      }
+
+      list.push({
+        id: `lesson_${l.id}`,
+        studentId: l.studentId,
+        studentName: l.studentName || l.studentId,
+        tutorId: l.tutorId,
+        date: l.date,
+        status: st,
+        details,
+        source: 'Lesson Submission',
+        markedBy: l.tutorId || 'Tutor',
+        markedAt: l.createdAt || l.date,
+        rawLesson: l
+      });
+    });
+
+    // 2. Ingest manual attendance records
+    attendance.forEach(a => {
+      const match = list.find(item => item.studentId === a.studentId && item.date === a.date);
+      if (!match) {
+        list.push({
+          id: `att_${a.id}`,
+          studentId: a.studentId,
+          studentName: a.studentName || a.studentId,
+          tutorId: a.tutorId,
+          date: a.date,
+          status: a.status as any,
+          details: a.notes || 'Manual administrative record',
+          source: 'Manual Log',
+          markedBy: a.markedBy || 'Admin',
+          markedAt: a.markedAt || a.date
+        });
+      }
+    });
+
+    return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [lessons, attendance]);
+
+  const filteredAdminStudentAttendance = useMemo(() => {
+    return unifiedAdminStudentAttendance.filter(rec => {
+      if (adminAttStudentFilter !== 'all' && rec.studentId !== adminAttStudentFilter) return false;
+      if (adminAttStatusFilter !== 'all' && rec.status !== adminAttStatusFilter) return false;
+      if (adminAttSearchQuery.trim()) {
+        const q = adminAttSearchQuery.toLowerCase().trim();
+        const matchName = (rec.studentName || '').toLowerCase().includes(q);
+        const matchId = (rec.studentId || '').toLowerCase().includes(q);
+        const matchTutor = (rec.tutorId || '').toLowerCase().includes(q);
+        const matchDetails = (rec.details || '').toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchTutor && !matchDetails) return false;
+      }
+      return true;
+    });
+  }, [unifiedAdminStudentAttendance, adminAttStudentFilter, adminAttStatusFilter, adminAttSearchQuery]);
+
+  const adminStudentAttStats = useMemo(() => {
+    const base = filteredAdminStudentAttendance;
+    const total = base.length;
+    const present = base.filter(r => r.status === 'Present').length;
+    const late = base.filter(r => r.status === 'Late').length;
+    const absent = base.filter(r => r.status === 'Absent').length;
+    const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 100;
+    return { total, present, late, absent, rate };
+  }, [filteredAdminStudentAttendance]);
 
   // Fee Tab sub-filters and search
   const [feeTabFilter, setFeeTabFilter] = useState<'all' | 'Paid' | 'Submitted' | 'Pending' | 'Overdue'>('all');
@@ -1275,6 +1405,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
+  const handleStartEditAnnouncement = (ann: Announcement) => {
+    setEditingAnnouncementId(ann.id);
+    setNewAnnTitle(ann.title || '');
+    setNewAnnContent(ann.content || '');
+    const parsedRoles = Array.isArray(ann.targetRoles) && ann.targetRoles.length > 0
+      ? ann.targetRoles.map(r => String(r).toLowerCase().replace(/s$/, ''))
+      : (ann.targetRole
+          ? String(ann.targetRole)
+              .split(',')
+              .map(r => r.trim().toLowerCase().replace(/s$/, ''))
+              .filter(Boolean)
+          : ['all']);
+    setNewAnnRoles(parsedRoles.length > 0 ? parsedRoles : ['all']);
+    setNewAnnStartDate(ann.startDate || '');
+    setNewAnnEndDate(ann.endDate || '');
+    if (typeof document !== 'undefined') {
+      document.getElementById('admin_announcement_editor_form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  const handleCancelEditAnnouncement = () => {
+    setEditingAnnouncementId(null);
+    setNewAnnTitle('');
+    setNewAnnContent('');
+    setNewAnnRoles(['all']);
+    setNewAnnStartDate('');
+    setNewAnnEndDate('');
+  };
+
   const handleDeleteAnnouncement = async (annId: string) => {
     const ann = announcements.find(a => a.id === annId);
     if (!ann) return;
@@ -1282,13 +1441,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       id: ann.id,
       itemType: 'announcement',
       title: ann.title,
-      description: 'The announcement will be moved to the Recovery Trash.',
+      description: 'The announcement will be deleted from all dashboards (Admin, Supervisor, Tutor, Student, and Parent) immediately and moved to Recovery Trash.',
       details: {
         Title: ann.title,
         Audience: ann.targetRole || 'All Academy',
         PostedDate: ann.createdAt?.slice(0, 10) || 'N/A'
       },
       onConfirm: async () => {
+        if (editingAnnouncementId === ann.id) {
+          handleCancelEditAnnouncement();
+        }
         const trashId = await deleteAnnouncement(ann.id);
         await onRefreshData();
         setUndoToast({
@@ -1329,17 +1491,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!newAnnTitle || !newAnnContent) return;
     const targetRoles = newAnnRoles.length === 0 || newAnnRoles.includes('all') ? ['all'] : newAnnRoles;
-    await addAnnouncement({
-      title: newAnnTitle,
-      content: newAnnContent,
-      targetRoles: targetRoles as any,
-      targetRole: targetRoles.join(', '),
-      pinned: false,
-      authorName: 'Academic Directorate',
-      startDate: newAnnStartDate || undefined,
-      endDate: newAnnEndDate || undefined,
-      createdAt: new Date().toISOString()
-    });
+    if (editingAnnouncementId) {
+      await updateAnnouncement(editingAnnouncementId, {
+        title: newAnnTitle.trim(),
+        content: newAnnContent.trim(),
+        targetRoles: targetRoles as any,
+        targetRole: targetRoles.join(', '),
+        startDate: newAnnStartDate || '',
+        endDate: newAnnEndDate || ''
+      });
+      setEditingAnnouncementId(null);
+    } else {
+      await addAnnouncement({
+        title: newAnnTitle.trim(),
+        content: newAnnContent.trim(),
+        targetRoles: targetRoles as any,
+        targetRole: targetRoles.join(', '),
+        pinned: false,
+        authorName: 'Academic Directorate',
+        startDate: newAnnStartDate || undefined,
+        endDate: newAnnEndDate || undefined,
+        createdAt: new Date().toISOString()
+      });
+    }
     setNewAnnTitle('');
     setNewAnnContent('');
     setNewAnnRoles(['all']);
@@ -1687,10 +1861,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <option value="all">All Classrooms ({sortedTutors.length})</option>
                 <option value="running">🟢 Running Classes (Tutor & Student Joined) ({adminStatusCounts.running})</option>
                 <option value="tutor_waiting">🟡 Tutor in Room (Waiting for Student) ({adminStatusCounts.tutorWaiting})</option>
-                <option value="student_waiting">🟠 Student Waiting (Waiting for Tutor) ({adminStatusCounts.studentWaiting})</option>
+                <option value="student_waiting">🟠 Student Waiting (In Queue / Waiting Lounge) ({adminStatusCounts.studentWaiting})</option>
                 <option value="scheduled_now">🔵 Scheduled Class Right Now ({adminStatusCounts.scheduledNow})</option>
                 <option value="idle">⚪ Idle / Room Ready ({adminStatusCounts.idle})</option>
               </select>
+              <button
+                type="button"
+                onClick={() => refreshAdminLiveStatus()}
+                className="px-3 py-2 bg-[#FAF9F7] hover:bg-emerald-50 border border-[#D5D0C6] hover:border-emerald-300 rounded-xl text-xs font-bold text-[#161F1A] flex items-center space-x-1.5 transition-colors cursor-pointer"
+                title="Refresh live classroom status immediately"
+              >
+                <RotateCw className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                <span>Refresh Live</span>
+              </button>
             </div>
           </div>
 
@@ -1710,6 +1893,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               if (!matchSearch) return false;
 
               if (adminObserveStatusFilter === 'all') return true;
+              if (adminObserveStatusFilter === 'student_waiting') {
+                return computed.status === 'student_waiting' || computed.hasStudentWaitingInQueue;
+              }
               return computed.status === adminObserveStatusFilter;
             }).map((t) => {
               const tutorClasses = classes.filter(c => c.tutorId === t.tutorId && c.status !== 'Cancelled');
@@ -1753,12 +1939,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ) : computed.status === 'tutor_waiting' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 border border-amber-300 text-amber-900 flex items-center space-x-1">
                               <span className="w-2 h-2 rounded-full bg-amber-500" />
-                              <span>Tutor in Room (Waiting for Student)</span>
+                              <span>Tutor Waiting for Student</span>
                             </span>
                           ) : computed.status === 'student_waiting' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-100 border border-orange-300 text-orange-900 flex items-center space-x-1">
-                              <span className="w-2 h-2 rounded-full bg-orange-500" />
-                              <span>Student in Waiting Room</span>
+                              <span className="w-2 h-2 rounded-full bg-orange-500 animate-ping" />
+                              <span>Student Waiting ({computed.waitingCount || 1} in Queue)</span>
                             </span>
                           ) : computed.status === 'scheduled_now' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 border border-blue-300 text-blue-900 flex items-center space-x-1">
@@ -1767,7 +1953,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </span>
                           ) : (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700">
-                              Idle / Ready
+                              Room Ready
+                            </span>
+                          )}
+
+                          {/* Secondary Queue Pill when a class is RUNNING AND the next student is waiting in queue */}
+                          {computed.status === 'running' && computed.hasStudentWaitingInQueue && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-100 border border-orange-400 text-orange-900 flex items-center space-x-1 shadow-2xs">
+                              <span>⏳ +{computed.waitingCount} in Waiting Lounge</span>
                             </span>
                           )}
                         </div>
@@ -1794,7 +1987,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span className="text-[10px] bg-emerald-200/60 text-emerald-900 px-1.5 py-0.2 rounded font-mono">Live Call</span>
                         </div>
                         <p className="text-[11px] text-emerald-800">
-                          <strong>Active Student:</strong> {computed.studentsInRoom.length > 0 ? computed.studentsInRoom.join(', ') : (computed.scheduledStudentName || 'Assigned Student')}
+                          <strong>In Classroom:</strong> {computed.tutorNameInRoom || t.tutorId} + <strong>{computed.liveStudentsInRoom.length > 0 ? computed.liveStudentsInRoom.join(', ') : (computed.scheduledStudentName || 'Assigned Student')}</strong>
                         </p>
                         {computed.scheduledCourse && (
                           <p className="text-[10px] text-emerald-700 font-medium">
@@ -1807,26 +2000,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {/* Tutor Waiting Alert */}
                     {computed.status === 'tutor_waiting' && (
                       <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
-                        <div className="flex items-center space-x-1 font-bold text-amber-950">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
-                          <span>Tutor In Room • Waiting for Student to Join</span>
+                        <div className="flex items-center justify-between font-bold text-amber-950">
+                          <span className="flex items-center space-x-1">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                            <span>Tutor In Room • Waiting for Student</span>
+                          </span>
+                          <span className="text-[9px] bg-amber-200/70 text-amber-950 px-1.5 py-0.5 rounded font-mono">Room Open</span>
                         </div>
                         <p className="text-[11px] text-amber-800">
-                          Scheduled: <strong>{computed.scheduledStudentName || 'Assigned Student'}</strong> {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
+                          Scheduled: <strong>{computed.scheduledStudentName || 'Next Assigned Student'}</strong> {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
                         </p>
                       </div>
                     )}
 
-                    {/* Student Waiting Alert */}
-                    {computed.status === 'student_waiting' && (
-                      <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-900 space-y-1">
-                        <div className="flex items-center space-x-1 font-bold text-orange-950">
-                          <AlertTriangle className="w-3.5 h-3.5 text-orange-600 animate-pulse" />
-                          <span>Student Waiting in Queue • Tutor Not in Room</span>
+                    {/* Next Student Lounge / Waiting Queue Box (Shown whenever ANY student is waiting — whether class is running or tutor is absent) */}
+                    {(computed.hasStudentWaitingInQueue || computed.status === 'student_waiting') && (
+                      <div className="p-2.5 bg-orange-50 border border-orange-300 rounded-xl text-xs text-orange-950 space-y-2 shadow-2xs">
+                        <div className="flex items-center justify-between font-bold text-orange-950">
+                          <span className="flex items-center space-x-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-orange-600 animate-pulse shrink-0" />
+                            <span>
+                              {computed.status === 'running'
+                                ? `⏳ Next Student Ready in Queue (${computed.waitingCount})`
+                                : `🟠 Student Waiting in Room/Queue • Tutor Not Joined`}
+                            </span>
+                          </span>
+                          <span className="text-[10px] bg-orange-200/80 text-orange-950 px-1.5 py-0.5 rounded font-mono font-bold">
+                            {computed.status === 'running' ? '1-on-1 Lock' : 'Waiting'}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-orange-800">
-                          Waiting: <strong>{computed.waitingStudents.join(', ') || computed.scheduledStudentName || 'Student'}</strong>
-                        </p>
+
+                        {computed.waitingDetails && computed.waitingDetails.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {computed.waitingDetails.map((wItem, wIdx) => {
+                              const mins = Math.floor((wItem.waitingSeconds || 0) / 60);
+                              const secs = (wItem.waitingSeconds || 0) % 60;
+                              const waitTimeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                              return (
+                                <div
+                                  key={wItem.id || wIdx}
+                                  className="flex items-center justify-between gap-2 bg-white/90 px-2.5 py-1.5 rounded-lg border border-orange-200"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="px-1.5 py-0.2 bg-orange-100 text-orange-900 rounded text-[10px] font-mono font-extrabold">
+                                        #{wItem.queuePosition || wIdx + 1}
+                                      </span>
+                                      <strong className="text-[11px] text-[#161F1A] truncate">{wItem.name}</strong>
+                                    </div>
+                                    <span className="text-[10px] text-orange-800 block">
+                                      Waiting {waitTimeStr} • {wItem.reason === 'NEXT_STUDENT_QUEUE' ? 'Next Student Lounge' : 'Waiting for Tutor'}
+                                    </span>
+                                  </div>
+                                  {wItem.reason === 'NEXT_STUDENT_QUEUE' && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const canonicalRoom = getCanonicalRoomName({ tutorId: t.tutorId });
+                                        await admitFromWaitingRoom(canonicalRoom, wItem.id);
+                                        await refreshAdminLiveStatus();
+                                      }}
+                                      className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-[10px] font-bold shrink-0 cursor-pointer transition-colors"
+                                      title="Allow this waiting student into the live classroom immediately"
+                                    >
+                                      Allow In Now
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-orange-800">
+                            Waiting: <strong>{computed.waitingStudents.join(', ') || computed.scheduledStudentName || 'Student'}</strong>
+                          </p>
+                        )}
                       </div>
                     )}
 
@@ -3956,21 +4204,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             // 2. Period Filter
             if (!matchSearch) return false;
-            if (spreadsheetPeriod === 'all') return true;
-
-            const lessonTime = new Date(l.date).getTime();
-            const nowTime = Date.now();
-            const diffDays = (nowTime - lessonTime) / (1000 * 60 * 60 * 24);
-
-            if (spreadsheetPeriod === 'weekly') {
-              return diffDays <= 7;
-            }
-            if (spreadsheetPeriod === 'monthly') {
-              return diffDays <= 31;
-            }
-            return true;
+            return isLessonInDateRange(l.date, spreadsheetPeriod, spreadsheetStartDate, spreadsheetEndDate);
           })
-          .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
         return (
           <div className="space-y-4">
@@ -3993,95 +4229,155 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Header Filters & View Switcher */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-3xs">
-              <div className="flex items-center space-x-3">
-                <span className="text-xs font-bold text-[#5A6B61]">View Layout:</span>
-                <div className="inline-flex bg-gray-100 p-1 rounded-lg">
+            <div className="space-y-3 bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-3xs">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs font-bold text-[#5A6B61]">View Layout:</span>
+                  <div className="inline-flex bg-gray-100 p-1 rounded-lg">
+                    <button
+                      onClick={() => setLessonsViewMode('spreadsheet')}
+                      className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                        lessonsViewMode === 'spreadsheet' ? 'bg-[#2D8B5C] text-white shadow-2xs' : 'text-[#5A6B61] hover:text-[#161F1A]'
+                      }`}
+                    >
+                      📊 Spreadsheet Grid
+                    </button>
+                    <button
+                      onClick={() => setLessonsViewMode('cards')}
+                      className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                        lessonsViewMode === 'cards' ? 'bg-[#2D8B5C] text-white shadow-2xs' : 'text-[#5A6B61] hover:text-[#161F1A]'
+                      }`}
+                    >
+                      📋 Feed Cards
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center space-x-2 bg-gray-50 border border-[#D5D0C6] px-2.5 py-1 rounded-lg">
+                    <Search className="w-3.5 h-3.5 text-[#5A6B61]" />
+                    <input
+                      type="text"
+                      placeholder="Filter sheet by Student/Tutor..."
+                      value={spreadsheetSearchQuery}
+                      onChange={(e) => setSpreadsheetSearchQuery(e.target.value)}
+                      className="bg-transparent border-none text-xs focus:outline-none w-44"
+                    />
+                  </div>
+
+                  <div className="inline-flex flex-wrap bg-gray-100 p-1 rounded-lg text-xs gap-1">
+                    <button
+                      onClick={() => setSpreadsheetPeriod('weekly')}
+                      className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                        spreadsheetPeriod === 'weekly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                      }`}
+                    >
+                      Last 7 Days (Live)
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setSpreadsheetPeriod('monthly');
+                        setIsLoadingOlderLessons(true);
+                        try {
+                          await loadOlderLessonsArchive(35);
+                          await onRefreshData();
+                        } finally {
+                          setIsLoadingOlderLessons(false);
+                        }
+                      }}
+                      className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                        spreadsheetPeriod === 'monthly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                      }`}
+                    >
+                      {isLoadingOlderLessons && spreadsheetPeriod === 'monthly' ? 'Loading 30d...' : 'Monthly (30 Days)'}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setSpreadsheetPeriod('60days');
+                        setIsLoadingOlderLessons(true);
+                        try {
+                          await loadOlderLessonsArchive(65);
+                          await onRefreshData();
+                        } finally {
+                          setIsLoadingOlderLessons(false);
+                        }
+                      }}
+                      className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                        spreadsheetPeriod === '60days' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                      }`}
+                    >
+                      {isLoadingOlderLessons && spreadsheetPeriod === '60days' ? 'Loading 60d...' : 'Last 60 Days'}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setSpreadsheetPeriod('custom');
+                        setIsLoadingOlderLessons(true);
+                        try {
+                          await loadOlderLessonsArchive(180);
+                          await onRefreshData();
+                        } finally {
+                          setIsLoadingOlderLessons(false);
+                        }
+                      }}
+                      className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                        spreadsheetPeriod === 'custom' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                      }`}
+                    >
+                      Custom Range
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setSpreadsheetPeriod('all');
+                        setIsLoadingOlderLessons(true);
+                        try {
+                          await loadOlderLessonsArchive('all');
+                          await onRefreshData();
+                        } finally {
+                          setIsLoadingOlderLessons(false);
+                        }
+                      }}
+                      className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
+                        spreadsheetPeriod === 'all' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
+                      }`}
+                    >
+                      {isLoadingOlderLessons && spreadsheetPeriod === 'all' ? 'Loading Archive...' : 'Load Older (All Time)'}
+                    </button>
+                  </div>
+
                   <button
-                    onClick={() => setLessonsViewMode('spreadsheet')}
-                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                      lessonsViewMode === 'spreadsheet' ? 'bg-[#2D8B5C] text-white shadow-2xs' : 'text-[#5A6B61] hover:text-[#161F1A]'
-                    }`}
+                    onClick={() => handleExportCSV(filteredSpreadsheetLessons)}
+                    className="px-3 py-1.5 bg-white border border-[#D5D0C6] text-xs font-bold rounded-lg hover:bg-gray-50 flex items-center space-x-1 cursor-pointer shadow-3xs"
+                    title="Download spreadsheet as a compatible CSV sheet"
                   >
-                    📊 Spreadsheet Grid
-                  </button>
-                  <button
-                    onClick={() => setLessonsViewMode('cards')}
-                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                      lessonsViewMode === 'cards' ? 'bg-[#2D8B5C] text-white shadow-2xs' : 'text-[#5A6B61] hover:text-[#161F1A]'
-                    }`}
-                  >
-                    📋 Feed Cards
+                    <Download className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                    <span>Export to CSV</span>
                   </button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center space-x-2 bg-gray-50 border border-[#D5D0C6] px-2.5 py-1 rounded-lg">
-                  <Search className="w-3.5 h-3.5 text-[#5A6B61]" />
-                  <input
-                    type="text"
-                    placeholder="Filter sheet by Student/Tutor..."
-                    value={spreadsheetSearchQuery}
-                    onChange={(e) => setSpreadsheetSearchQuery(e.target.value)}
-                    className="bg-transparent border-none text-xs focus:outline-none w-44"
-                  />
+              {/* Custom Date Inputs if spreadsheetPeriod === 'custom' */}
+              {spreadsheetPeriod === 'custom' && (
+                <div className="flex flex-wrap items-center gap-3 pt-2.5 border-t border-[#E3DFD7]">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-[#5A6B61] font-bold">From Date:</span>
+                    <input
+                      type="date"
+                      value={spreadsheetStartDate}
+                      onChange={(e) => setSpreadsheetStartDate(e.target.value)}
+                      className="border border-[#D5D0C6] rounded-lg px-2 py-1 text-xs bg-white font-mono outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-[#5A6B61] font-bold">To Date:</span>
+                    <input
+                      type="date"
+                      value={spreadsheetEndDate}
+                      onChange={(e) => setSpreadsheetEndDate(e.target.value)}
+                      className="border border-[#D5D0C6] rounded-lg px-2 py-1 text-xs bg-white font-mono outline-none"
+                    />
+                  </div>
                 </div>
-
-                <div className="inline-flex bg-gray-100 p-1 rounded-lg text-xs">
-                  <button
-                    onClick={() => setSpreadsheetPeriod('weekly')}
-                    className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
-                      spreadsheetPeriod === 'weekly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
-                    }`}
-                  >
-                    Last 7 Days (Live)
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setSpreadsheetPeriod('monthly');
-                      setIsLoadingOlderLessons(true);
-                      try {
-                        await loadOlderLessonsArchive(30);
-                        await onRefreshData();
-                      } finally {
-                        setIsLoadingOlderLessons(false);
-                      }
-                    }}
-                    className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
-                      spreadsheetPeriod === 'monthly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
-                    }`}
-                  >
-                    {isLoadingOlderLessons && spreadsheetPeriod === 'monthly' ? 'Loading 30d...' : 'Monthly (30 Days)'}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setSpreadsheetPeriod('all');
-                      setIsLoadingOlderLessons(true);
-                      try {
-                        await loadOlderLessonsArchive('all');
-                        await onRefreshData();
-                      } finally {
-                        setIsLoadingOlderLessons(false);
-                      }
-                    }}
-                    className={`px-2.5 py-1 font-bold rounded cursor-pointer transition-all ${
-                      spreadsheetPeriod === 'all' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
-                    }`}
-                  >
-                    {isLoadingOlderLessons && spreadsheetPeriod === 'all' ? 'Loading Archive...' : 'Load Older (All Time)'}
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => handleExportCSV(filteredSpreadsheetLessons)}
-                  className="px-3 py-1.5 bg-white border border-[#D5D0C6] text-xs font-bold rounded-lg hover:bg-gray-50 flex items-center space-x-1 cursor-pointer shadow-3xs"
-                  title="Download spreadsheet as a compatible CSV sheet"
-                >
-                  <Download className="w-3.5 h-3.5 text-[#2D8B5C]" />
-                  <span>Export to CSV</span>
-                </button>
-              </div>
+              )}
             </div>
 
             {lessonsViewMode === 'spreadsheet' ? (
@@ -5350,11 +5646,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* 10. ANNOUNCEMENTS TAB */}
       {currentTab === 'announcements' && (
         <div className="space-y-6">
-          <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-4">
-            <h3 className="text-sm font-bold text-[#161F1A]">Broadcast New Academy Announcement</h3>
+          <div
+            id="admin_announcement_editor_form"
+            className={`bg-white p-5 rounded-xl border shadow-xs space-y-4 transition-all ${
+              editingAnnouncementId
+                ? 'border-[#2D8B5C] ring-2 ring-[#2D8B5C]/20'
+                : 'border-[#E3DFD7]'
+            }`}
+          >
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-[#161F1A]">
+                  {editingAnnouncementId ? '✏️ Edit Published Academy Announcement' : 'Broadcast New Academy Announcement'}
+                </h3>
+                {editingAnnouncementId && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                    Editing Mode
+                  </span>
+                )}
+              </div>
+              {editingAnnouncementId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditAnnouncement}
+                  className="text-xs font-semibold text-[#5A6B61] hover:text-[#161F1A] px-2.5 py-1 rounded-md border border-[#D5D0C6] hover:bg-gray-50 cursor-pointer"
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </div>
             <form onSubmit={handleCreateAnnouncement} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Title</label>
+                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Heading / Title</label>
                 <input
                   type="text"
                   value={newAnnTitle}
@@ -5419,7 +5742,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Notice Content</label>
+                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Notice Text / Content</label>
                 <textarea
                   rows={3}
                   value={newAnnContent}
@@ -5432,7 +5755,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Show From Date (Optional)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-semibold text-[#5A6B61]">Show From Date (Optional)</label>
+                    {newAnnStartDate && (
+                      <button
+                        type="button"
+                        onClick={() => setNewAnnStartDate('')}
+                        className="text-[10px] text-rose-600 hover:underline cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="date"
                     value={newAnnStartDate}
@@ -5441,7 +5775,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Auto-Expire / Hide Date (Optional)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-semibold text-[#5A6B61]">Auto-Expire / Hide Date (Optional)</label>
+                    {newAnnEndDate && (
+                      <button
+                        type="button"
+                        onClick={() => setNewAnnEndDate('')}
+                        className="text-[10px] text-rose-600 hover:underline cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="date"
                     value={newAnnEndDate}
@@ -5451,12 +5796,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="flex justify-end">
+              <div className="flex items-center justify-end gap-2">
+                {editingAnnouncementId && (
+                  <button
+                    type="button"
+                    onClick={handleCancelEditAnnouncement}
+                    className="px-4 py-2 bg-gray-100 text-[#161F1A] text-xs font-semibold rounded-lg hover:bg-gray-200 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] cursor-pointer shadow-xs"
                 >
-                  Publish Announcement
+                  {editingAnnouncementId ? 'Save Announcement Changes' : 'Publish Announcement'}
                 </button>
               </div>
             </form>
@@ -5468,45 +5822,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           ) : (
             <div className="space-y-3">
-              {announcements.map(ann => (
-                <div key={ann.id} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <h4 className="text-sm font-bold text-[#161F1A]">{ann.title}</h4>
-                    <div className="flex items-center space-x-2">
-                      <div className="flex items-center gap-1">
-                        {(ann.targetRoles && ann.targetRoles.length > 0 ? ann.targetRoles : [ann.targetRole || 'all']).map((r, idx) => (
-                          <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 capitalize">
-                            {r}
-                          </span>
-                        ))}
+              {announcements.map(ann => {
+                const isBeingEdited = editingAnnouncementId === ann.id;
+                return (
+                  <div
+                    key={ann.id}
+                    className={`bg-white p-5 rounded-xl border shadow-xs space-y-2 transition-all ${
+                      isBeingEdited ? 'border-[#2D8B5C] bg-emerald-50/20' : 'border-[#E3DFD7]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <h4 className="text-sm font-bold text-[#161F1A]">{ann.title}</h4>
+                      <div className="flex items-center space-x-2">
+                        <div className="flex items-center gap-1">
+                          {(ann.targetRoles && ann.targetRoles.length > 0 ? ann.targetRoles : [ann.targetRole || 'all']).map((r, idx) => (
+                            <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 capitalize">
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditAnnouncement(ann)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors cursor-pointer ml-2"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAnnouncement(ann.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
                       </div>
-                      <button
-                        onClick={() => handleDeleteAnnouncement(ann.id)}
-                        className="px-2.5 py-1 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer ml-2"
-                      >
-                        Delete
-                      </button>
+                    </div>
+                    <p className="text-xs text-[#161F1A] leading-relaxed whitespace-pre-wrap">{ann.content}</p>
+                    <div className="flex flex-wrap items-center justify-between text-[10px] text-[#5A6B61] pt-1">
+                      <div>
+                        Posted by {ann.authorName} on {new Date(ann.createdAt).toLocaleDateString()}
+                      </div>
+                      {(ann.startDate || ann.endDate) && (
+                        <div className="flex items-center gap-1.5 font-medium bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
+                          <span>⏱️ Active:</span>
+                          <span>{ann.startDate || 'Immediate'}</span>
+                          <span>→</span>
+                          <span>{ann.endDate || 'No Expiry'}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <p className="text-xs text-[#161F1A] leading-relaxed whitespace-pre-wrap">{ann.content}</p>
-                  <div className="flex flex-wrap items-center justify-between text-[10px] text-[#5A6B61] pt-1">
-                    <div>
-                      Posted by {ann.authorName} on {new Date(ann.createdAt).toLocaleDateString()}
-                    </div>
-                    {(ann.startDate || ann.endDate) && (
-                      <div className="flex items-center gap-1.5 font-medium bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
-                        <span>⏱️ Active:</span>
-                        <span>{ann.startDate || 'Immediate'}</span>
-                        <span>→</span>
-                        <span>{ann.endDate || 'No Expiry'}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
+      )}
+
+      {/* TUTORS TRAINING VIDEOS TAB */}
+      {currentTab === 'tutor_training' && (
+        <TutorsTrainingPortal />
       )}
 
       {/* 11. ATTENDANCE TAB (Student Attendance + Tutor Shifts Attendance - Item 13) */}
@@ -5549,11 +5926,93 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {attendanceSubTab === 'students' ? (
             <div className="space-y-6">
-              <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-4">
-                <h3 className="text-sm font-bold text-[#161F1A]">Quick Student Attendance Marking</h3>
-                <form onSubmit={handleMarkAttendance} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+              {/* Quick Student Attendance Form & Stats Overview */}
+              <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#EAE6DE] pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#161F1A]">Student Attendance Ledger</h3>
+                    <p className="text-xs text-[#5A6B61]">
+                      Real-time attendance automatically consolidated from lesson submissions &amp; manual logs.
+                    </p>
+                  </div>
+
+                  {/* Search & Student Filter Selector */}
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Search Input Box */}
+                    <div className="flex items-center space-x-1.5 bg-[#FAF9F7] border border-[#D5D0C6] px-2.5 py-1.5 rounded-lg">
+                      <Search className="w-3.5 h-3.5 text-[#5A6B61]" />
+                      <input
+                        type="text"
+                        placeholder="Search Student Name or ID..."
+                        value={adminAttSearchQuery}
+                        onChange={(e) => setAdminAttSearchQuery(e.target.value)}
+                        className="bg-transparent border-none text-xs focus:outline-none w-44 sm:w-56"
+                      />
+                    </div>
+
+                    <div className="flex items-center space-x-1.5">
+                      <Filter className="w-3.5 h-3.5 text-[#5A6B61]" />
+                      <select
+                        value={adminAttStudentFilter}
+                        onChange={(e) => setAdminAttStudentFilter(e.target.value)}
+                        className="text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C] outline-none"
+                      >
+                        <option value="all">All Academy Students ({students.length})</option>
+                        {students.map(s => (
+                          <option key={s.id} value={s.studentId}>{s.name} ({s.studentId})</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metrics Summary Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  <div className="bg-[#FAF9F7] p-3 rounded-xl border border-[#E3DFD7] text-left">
+                    <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">Total Sessions</span>
+                    <span className="text-lg font-bold text-[#161F1A] mt-0.5 block">{adminStudentAttStats.total}</span>
+                  </div>
+                  <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 text-left">
+                    <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Present</span>
+                    <span className="text-lg font-bold text-emerald-800 mt-0.5 block">{adminStudentAttStats.present}</span>
+                  </div>
+                  <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 text-left">
+                    <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Late</span>
+                    <span className="text-lg font-bold text-amber-800 mt-0.5 block">{adminStudentAttStats.late}</span>
+                  </div>
+                  <div className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-left">
+                    <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block">Absent</span>
+                    <span className="text-lg font-bold text-rose-800 mt-0.5 block">{adminStudentAttStats.absent}</span>
+                  </div>
+                  <div className="bg-[#EEF8F3] p-3 rounded-xl border border-[#2D8B5C]/30 text-left col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold text-[#1E5C3D] uppercase tracking-wider block">Attendance Rate</span>
+                    <span className="text-lg font-extrabold text-[#1E5C3D] mt-0.5 block">{adminStudentAttStats.rate}%</span>
+                  </div>
+                </div>
+
+                {/* Status Filter Buttons */}
+                <div className="flex items-center space-x-1.5 pt-1 border-t border-[#EAE6DE]">
+                  <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
+                  {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setAdminAttStatusFilter(st)}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                        adminAttStatusFilter === st
+                          ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                          : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                      }`}
+                    >
+                      {st === 'all' ? 'All Records' : st}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Quick Attendance Marking Accordion */}
+                <form onSubmit={handleMarkAttendance} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end pt-3 border-t border-[#EAE6DE]">
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-[#161F1A] mb-1">Student</label>
+                    <label className="block text-xs font-semibold text-[#161F1A] mb-1">Quick-Mark Student Attendance</label>
                     <select
                       value={attStudentId}
                       onChange={(e) => setAttStudentId(e.target.value)}
@@ -5582,57 +6041,103 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     type="submit"
                     className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] cursor-pointer"
                   >
-                    Save Attendance
+                    Save Attendance Log
                   </button>
                 </form>
               </div>
 
-              <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Student</th>
-                      <th className="py-3 px-4">Date</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Marked By</th>
-                      <th className="py-3 px-4">Timestamp</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EAE6DE]">
-                    {attendance.map(a => (
-                      <tr key={a.id} className="hover:bg-[#FAF9F7]/60">
-                        <td className="py-3 px-4 font-semibold text-[#161F1A]">{a.studentName} ({a.studentId})</td>
-                        <td className="py-3 px-4">{a.date}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            a.status === 'Present' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                          }`}>
-                            {a.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-[#5A6B61]">{a.markedBy}</td>
-                        <td className="py-3 px-4 text-[#5A6B61] font-mono">{a.markedAt}</td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (confirm(`Are you sure you want to delete the attendance log for ${a.studentName} on ${a.date}?`)) {
-                                await deleteAttendanceRecord(a.id);
-                                if (onRefreshData) {
-                                  await onRefreshData();
-                                }
-                              }
-                            }}
-                            className="px-2 py-1 text-xs text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer"
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {/* Table of Unified Student Attendance */}
+              <div className="bg-white border border-[#E3DFD7] rounded-2xl overflow-hidden shadow-xs">
+                {filteredAdminStudentAttendance.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-[#5A6B61] italic">
+                    No student attendance records match the selected filter.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                        <tr>
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Student</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">Class Details / Reason</th>
+                          <th className="py-3 px-4">Origin / Logged By</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#EAE6DE]">
+                        {filteredAdminStudentAttendance.map(a => (
+                          <tr key={a.id} className="hover:bg-[#FAF9F7]/60">
+                            <td className="py-3 px-4 font-mono font-semibold text-[#161F1A]">{a.date}</td>
+                            <td className="py-3 px-4">
+                              <span className="font-bold text-[#161F1A] block">{a.studentName}</span>
+                              <span className="text-[10px] text-[#5A6B61] font-mono">{a.studentId}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center space-x-1 ${
+                                a.status === 'Present'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : a.status === 'Late'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : a.status === 'Absent'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-blue-100 text-blue-800 border border-blue-200'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  a.status === 'Present' ? 'bg-emerald-600' :
+                                  a.status === 'Late' ? 'bg-amber-600' :
+                                  a.status === 'Absent' ? 'bg-rose-600' : 'bg-blue-600'
+                                }`} />
+                                <span>{a.status}</span>
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-[#161F1A] max-w-xs truncate font-medium">
+                              {a.details || '—'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="text-[10px] font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded border border-gray-200 block truncate">
+                                {a.source} ({a.markedBy || 'System'})
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {a.source === 'Manual Log' ? (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const rawId = a.id.replace('att_', '');
+                                    if (confirm(`Are you sure you want to delete the manual attendance log for ${a.studentName} on ${a.date}?`)) {
+                                      await deleteAttendanceRecord(rawId);
+                                      if (onRefreshData) {
+                                        await onRefreshData();
+                                      }
+                                    }
+                                  }}
+                                  className="px-2 py-1 text-xs text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors cursor-pointer"
+                                >
+                                  Delete
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (a.rawLesson) {
+                                      setEditingLesson(a.rawLesson);
+                                      setSelectedStudentForLesson(a.rawLesson.studentId);
+                                      setIsLessonModalOpen(true);
+                                    }
+                                  }}
+                                  className="px-2 py-1 text-xs text-[#1E5C3D] font-bold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors cursor-pointer"
+                                >
+                                  Edit Lesson
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

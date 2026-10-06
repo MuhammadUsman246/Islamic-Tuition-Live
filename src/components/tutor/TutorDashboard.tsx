@@ -23,7 +23,9 @@ import {
   Clock,
   Radio,
   Share2,
-  Eye
+  Eye,
+  Play,
+  Maximize2
 } from 'lucide-react';
 import {
   Tutor,
@@ -38,13 +40,15 @@ import {
 import { TimetableGrid } from '../common/TimetableGrid';
 import { LessonModal } from '../modals/LessonModal';
 import { StudentMonthReportModal } from '../modals/StudentMonthReportModal';
+import { TutorsTrainingPortal } from '../common/TutorsTrainingPortal';
 import { launchTutorZoomDesktop } from '../../utils/zoomUtils';
 import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName, getTutorSlug } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
-import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId, loadOlderLessonsArchive } from '../../services/dataService';
+import { sanitizeStudentForTutor, addLesson, updateLesson, addAttendanceRecord, updateClass, isSameTutor, normalizeTutorId, getCanonicalTutorDocId, loadOlderLessonsArchive, dismissNewStudentAssignmentForTutor, getDismissedTutorAssignmentKeys, getPendingTutorAssignmentKeys } from '../../services/dataService';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { useAuth } from '../../context/AuthContext';
+import { getCurrentOperationalDate, isLessonInDateRange, getRelativeOperationalDate, normalizeDateString } from '../../utils/timezone';
 
 interface TutorDashboardProps {
   currentTab: string;
@@ -75,6 +79,22 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   const [editingLessonForTutor, setEditingLessonForTutor] = useState<Lesson | null>(null);
   const [selectedStudentForLesson, setSelectedStudentForLesson] = useState<string>('');
   const [selectedStudentForMonthReport, setSelectedStudentForMonthReport] = useState<Student | null>(null);
+  const [selectedTrainingVideoIndex, setSelectedTrainingVideoIndex] = useState<number>(0);
+
+  const TUTOR_TRAINING_PLAYLIST = [
+    { index: 0, number: 1, id: '7YKnLGE1HCc', title: 'Training 1: قاعدہ پڑھانے کا طریقہ', description: 'Qaida Teaching Methodology — Part 1' },
+    { index: 1, number: 2, id: '1kzjgukAIK8', title: 'Training 2: قاعدہ پڑھانے کا طریقہ', description: 'Qaida Teaching Methodology — Part 2' },
+    { index: 2, number: 3, id: 'bN7obzrwghI', title: 'Training 3: قاعدہ پڑھانے کا طریقہ', description: 'Qaida Teaching Methodology — Part 3' },
+    { index: 3, number: 4, id: 'uTAkl2uHYmg', title: 'Training 4: قاعدہ پڑھانے کا طریقہ', description: 'Qaida Teaching Methodology — Part 4' },
+    { index: 4, number: 5, id: 'EkbjoJ3ON9E', title: 'Training 5: عَمَّ پارہ پڑھانے کا طریقہ', description: 'Amma Para Teaching Methodology' },
+    { index: 5, number: 6, id: 'BK-sxzyf_gg', title: 'Training 6: الٓمٓ پارہ پڑھانے کا طریقہ', description: 'Alif Lam Meem Para Teaching Methodology' },
+    { index: 6, number: 7, id: 'hJ9OboLX-uc', title: 'Training 7: قرآن پاک پڑھانے کا طریقہ', description: 'Holy Quran Recitation & Nazra Methodology' },
+    { index: 7, number: 8, id: 'tS16QyZMmuA', title: 'Training 8: Memorization Lesson and Islamic Studies', description: 'Hifz, Daily Duas & Islamic Studies Guide' },
+    { index: 8, number: 9, id: 'W4MgdwaprRo', title: 'Training 9: Trial Classes & Lesson Sheet', description: 'Conducting Trial Classes & Sheet Logging' },
+    { index: 9, number: 10, id: 'gApxPYC_9N8', title: 'Training 10: Lesson Sheet Logging', description: 'Accurate Lesson Entry & Daily Tracking' },
+    { index: 10, number: 11, id: 'Caj3-9sds7I', title: 'Training 11: Rules & Regulations 1', description: 'Faculty Discipline & Shift Protocol — Part 1' },
+    { index: 11, number: 12, id: 'F3yX19erj3g', title: 'Training 12: Rules & Regulations 2', description: 'Faculty Discipline & Shift Protocol — Part 2' },
+  ];
   const [isMonthReportModalOpen, setIsMonthReportModalOpen] = useState<boolean>(false);
 
   const { userProfile, adminViewingRole, adminViewingTargetId } = useAuth();
@@ -150,171 +170,213 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   );
 
   // Time Period & Student Filter state for Tutor Lesson Reports (Defaults to Last 7 Days)
-  const [reportTimeMode, setReportTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('weekly');
+  const [reportTimeMode, setReportTimeMode] = useState<'all' | 'monthly' | '60days' | 'weekly' | 'custom'>('weekly');
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
-  const [tutorStartDate, setTutorStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [tutorEndDate, setTutorEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [tutorStartDate, setTutorStartDate] = useState<string>(() => getRelativeOperationalDate(-30));
+  const [tutorEndDate, setTutorEndDate] = useState<string>(() => getCurrentOperationalDate());
 
   const filteredTutorLessons = useMemo(() => {
     return myLessons.filter(l => {
       if (selectedStudentFilter !== 'all' && l.studentId !== selectedStudentFilter) {
         return false;
       }
-      if (reportTimeMode === 'weekly') {
-        const d = new Date();
-        d.setDate(d.getDate() - 7);
-        const weekAgo = d.toISOString().slice(0, 10);
-        return l.date >= weekAgo;
-      } else if (reportTimeMode === 'monthly') {
-        const d = new Date();
-        d.setDate(d.getDate() - 30);
-        const monthAgo = d.toISOString().slice(0, 10);
-        return l.date >= monthAgo;
-      } else if (reportTimeMode === 'custom') {
-        if (tutorStartDate && l.date < tutorStartDate) return false;
-        if (tutorEndDate && l.date > tutorEndDate) return false;
-      }
-      return true;
+      return isLessonInDateRange(l.date, reportTimeMode, tutorStartDate, tutorEndDate);
     });
   }, [myLessons, selectedStudentFilter, reportTimeMode, tutorStartDate, tutorEndDate]);
 
-  // New Class Notifications tracking for Tutor (Item 8)
-  const [acknowledgedClassIds, setAcknowledgedClassIds] = useState<string[]>(() => {
-    try {
-      const activeTutorId = tutor?.tutorId || currentTutorId;
-      const storedSpecific = activeTutorId ? localStorage.getItem(`tutor_ack_classes_${activeTutorId}`) : null;
-      const storedGeneral = localStorage.getItem('tutor_ack_classes_all');
-      const specList = storedSpecific ? JSON.parse(storedSpecific) : [];
-      const genList = storedGeneral ? JSON.parse(storedGeneral) : [];
-      return Array.from(new Set([...specList, ...genList]));
-    } catch {
-      return [];
-    }
-  });
+  // Unified Attendance Tracking State & Computation (Auto-picked from Lesson Reports + Quick Attendance)
+  const [attendanceStudentFilter, setAttendanceStudentFilter] = useState<string>('all');
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState<string>('all');
 
-  // Sync acknowledged notifications from localStorage when tutor is resolved
-  React.useEffect(() => {
-    const activeTutorId = tutor?.tutorId || currentTutorId;
-    if (!activeTutorId) return;
-    try {
-      const storedSpecific = localStorage.getItem(`tutor_ack_classes_${activeTutorId}`);
-      const storedGeneral = localStorage.getItem('tutor_ack_classes_all');
-      const specList = storedSpecific ? JSON.parse(storedSpecific) : [];
-      const genList = storedGeneral ? JSON.parse(storedGeneral) : [];
-      setAcknowledgedClassIds(Array.from(new Set([...specList, ...genList])));
-    } catch (_) {}
-  }, [tutor?.tutorId, currentTutorId]);
+  const unifiedAttendanceRecords = useMemo(() => {
+    const recordMap = new Map<string, {
+      id: string;
+      studentId: string;
+      studentName: string;
+      date: string;
+      status: 'Present' | 'Late' | 'Absent' | 'Student on Leave';
+      details?: string;
+      source: 'Lesson Report' | 'Quick Attendance';
+      timestamp?: string;
+    }>();
 
-  // Group unacknowledged classes by student (1 notification per student regardless of days/week)
-  const studentClassMap = new Map<string, TimetableClass[]>();
-  myClasses
-    .filter(c => 
-      !acknowledgedClassIds.includes(c.id) && 
-      !acknowledgedClassIds.includes(c.studentId) &&
-      !acknowledgedClassIds.includes(c.studentName) &&
-      !acknowledgedClassIds.includes(`${c.studentId || c.studentName}_${c.dayOfWeek}_${c.startTimePKT}`)
-    )
-    .forEach(c => {
-      const list = studentClassMap.get(c.studentId || c.studentName) || [];
-      list.push(c);
-      studentClassMap.set(c.studentId || c.studentName, list);
+    // 1. Add quick attendance records for this tutor
+    attendance
+      .filter(a => isSameTutor(a.tutorId, tutor?.tutorId))
+      .forEach(a => {
+        const key = `${a.studentId}_${a.date}`;
+        recordMap.set(key, {
+          id: `att_${a.id}`,
+          studentId: a.studentId,
+          studentName: a.studentName || a.studentId,
+          date: a.date,
+          status: a.status === 'Absent' ? 'Absent' : 'Present',
+          details: a.notes || 'Verified quick attendance check',
+          source: 'Quick Attendance',
+          timestamp: a.markedAt
+        });
+      });
+
+    // 2. Auto-pick & prioritize attendance records from Lesson Reports
+    myLessons.forEach(l => {
+      const key = `${l.studentId}_${l.date}`;
+      const status = (l.attendanceStatus as any) || 'Present';
+      let details = l.lessonType;
+      if (status === 'Late' && l.lateMinutes) {
+        details = `Late by ${l.lateMinutes} mins — ${l.lessonType}`;
+      } else if (status === 'Absent') {
+        details = l.absentReason ? `Absent: ${l.absentReason}` : 'Student Absent';
+      } else if (l.lessonCovered && l.lessonCovered !== 'Absent') {
+        details = l.lessonCovered;
+      }
+
+      recordMap.set(key, {
+        id: `les_att_${l.id}`,
+        studentId: l.studentId,
+        studentName: l.studentName || l.studentId,
+        date: l.date,
+        status,
+        details,
+        source: 'Lesson Report',
+        timestamp: l.createdAt
+      });
     });
 
-  const groupedNewAssignments = Array.from(studentClassMap.entries()).map(([studentKey, studentClasses]) => {
-    const first = studentClasses[0];
-    const studentObj = students.find(s => s.studentId === first.studentId || s.name === first.studentName);
-    
-    // Sort days chronologically
+    return Array.from(recordMap.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [attendance, myLessons, tutor?.tutorId]);
+
+  const filteredAttendance = useMemo(() => {
+    return unifiedAttendanceRecords.filter(r => {
+      if (attendanceStudentFilter !== 'all' && r.studentId !== attendanceStudentFilter) {
+        return false;
+      }
+      if (attendanceStatusFilter !== 'all' && r.status !== attendanceStatusFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [unifiedAttendanceRecords, attendanceStudentFilter, attendanceStatusFilter]);
+
+  const attendanceStats = useMemo(() => {
+    const base = attendanceStudentFilter === 'all'
+      ? unifiedAttendanceRecords
+      : unifiedAttendanceRecords.filter(r => r.studentId === attendanceStudentFilter);
+    const total = base.length;
+    const present = base.filter(r => r.status === 'Present').length;
+    const late = base.filter(r => r.status === 'Late').length;
+    const absent = base.filter(r => r.status === 'Absent').length;
+    const onLeave = base.filter(r => r.status === 'Student on Leave').length;
+    const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 100;
+    return { total, present, late, absent, onLeave, rate };
+  }, [unifiedAttendanceRecords, attendanceStudentFilter]);
+
+  // One-time New Student Notifications tracking for Tutor (ONLY newly added/assigned students, never existing roster)
+  const normActiveTutorId = normalizeTutorId(tutor?.tutorId || currentTutorId || 'Tutor 1');
+  const [dismissedStudentKeys, setDismissedStudentKeys] = useState<string[]>(() => getDismissedTutorAssignmentKeys());
+  const [pendingNewAssignmentKeys, setPendingNewAssignmentKeys] = useState<string[]>(() => getPendingTutorAssignmentKeys());
+
+  React.useEffect(() => {
+    setDismissedStudentKeys(getDismissedTutorAssignmentKeys());
+    setPendingNewAssignmentKeys(getPendingTutorAssignmentKeys());
+  }, [normActiveTutorId, students.length, classes.length]);
+
+  const isStudentDismissed = (studentId?: string, studentName?: string) => {
+    const idUpper = (studentId || '').trim().toUpperCase();
+    const nameLower = (studentName || '').trim().toLowerCase();
+    return (
+      (idUpper && (dismissedStudentKeys.includes(`${normActiveTutorId}__${idUpper}`) || dismissedStudentKeys.includes(idUpper))) ||
+      (nameLower && (dismissedStudentKeys.includes(`${normActiveTutorId}__${nameLower}`) || dismissedStudentKeys.includes(nameLower)))
+    );
+  };
+
+  const isStudentNewlyAddedForTutor = (st?: TutorStudentView | Student, studentId?: string, studentName?: string) => {
+    const idUpper = (st?.studentId || studentId || '').trim().toUpperCase();
+    const nameLower = (st?.name || studentName || '').trim().toLowerCase();
+    if (isStudentDismissed(idUpper, nameLower)) return false;
+
+    const inPendingLocal =
+      (idUpper && pendingNewAssignmentKeys.includes(`${normActiveTutorId}__${idUpper}`)) ||
+      (nameLower && pendingNewAssignmentKeys.includes(`${normActiveTutorId}__${nameLower}`));
+
+    return Boolean(st?.isNewTutorAssignment || inPendingLocal);
+  };
+
+  // Group ONLY newly added & unacknowledged students (1 small notification per newly added student)
+  const groupedNewAssignments = useMemo(() => {
     const dayOrder: Record<string, number> = { Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6, Sunday: 7 };
-    const sortedDays = Array.from(new Set(studentClasses.map(c => c.dayOfWeek))).sort((a, b) => (dayOrder[a] || 99) - (dayOrder[b] || 99));
-    
-    let daysLabel = sortedDays.join(', ');
-    if (sortedDays.length >= 3 && sortedDays[0] === 'Monday' && sortedDays[sortedDays.length - 1] === 'Friday') {
-      daysLabel = 'Mon - Fri';
-    } else if (sortedDays.length === 2 && sortedDays[0] === 'Saturday' && sortedDays[1] === 'Sunday') {
-      daysLabel = 'Weekends';
-    }
+    const results: Array<{
+      studentKey: string;
+      studentName: string;
+      studentId: string;
+      studentAge?: number;
+      time: string;
+      daysLabel: string;
+      scheduleSummary: string;
+      identifiers: string[];
+    }> = [];
 
-    const daysCount = sortedDays.length;
-    const scheduleSummary = daysCount === 1 
-      ? `1 day/week (${sortedDays[0]})`
-      : `${daysCount} days/week (${daysLabel})`;
+    myAssignedStudents.forEach(st => {
+      if (!isStudentNewlyAddedForTutor(st, st.studentId, st.name)) return;
 
-    return {
-      studentKey,
-      studentName: first.studentName,
-      studentId: first.studentId,
-      studentAge: studentObj?.age,
-      time: first.startTimePKT,
-      daysLabel,
-      daysCount,
-      scheduleSummary,
-      classIds: [
-        ...studentClasses.map(c => c.id), 
-        first.studentId, 
-        first.studentName,
-        studentKey,
-        ...studentClasses.map(c => `${c.studentId || c.studentName}_${c.dayOfWeek}_${c.startTimePKT}`)
-      ]
-    };
-  });
+      const studentClasses = myClasses.filter(
+        c => (c.studentId && c.studentId === st.studentId) || (c.studentName && c.studentName.toLowerCase() === st.name.toLowerCase())
+      );
 
-  // Also include newly assigned students without timetable slots yet
-  myAssignedStudents.forEach(st => {
-    if (
-      !studentClassMap.has(st.studentId) && 
-      !studentClassMap.has(st.name) &&
-      !acknowledgedClassIds.includes(st.studentId) &&
-      !acknowledgedClassIds.includes(st.name)
-    ) {
-      const existingInAssignments = groupedNewAssignments.some(g => g.studentId === st.studentId || g.studentName === st.name);
-      if (!existingInAssignments) {
-        groupedNewAssignments.push({
-          studentKey: st.studentId,
+      if (studentClasses.length > 0) {
+        const first = studentClasses[0];
+        const sortedDays = Array.from(new Set<string>(studentClasses.map(c => String(c.dayOfWeek)))).sort((a, b) => (dayOrder[a] || 99) - (dayOrder[b] || 99));
+        let daysLabel = sortedDays.join(', ');
+        if (sortedDays.length >= 3 && sortedDays[0] === 'Monday' && sortedDays[sortedDays.length - 1] === 'Friday') {
+          daysLabel = 'Mon - Fri';
+        } else if (sortedDays.length === 2 && sortedDays[0] === 'Saturday' && sortedDays[1] === 'Sunday') {
+          daysLabel = 'Weekends';
+        }
+        const daysCount = sortedDays.length;
+        const scheduleSummary = daysCount === 1
+          ? `1 day/week (${sortedDays[0]})`
+          : `${daysCount} days/week (${daysLabel})`;
+
+        results.push({
+          studentKey: st.studentId || st.name,
+          studentName: st.name,
+          studentId: st.studentId,
+          studentAge: st.age,
+          time: `${first.startTimePKT} PKT`,
+          daysLabel,
+          scheduleSummary,
+          identifiers: [st.studentId, st.name]
+        });
+      } else {
+        results.push({
+          studentKey: st.studentId || st.name,
           studentName: st.name,
           studentId: st.studentId,
           studentAge: st.age,
           time: 'Schedule Pending',
           daysLabel: 'Pending Schedule',
-          daysCount: 0,
-          scheduleSummary: 'New Assignment (Schedule Pending)',
-          classIds: [st.studentId, st.name]
+          scheduleSummary: 'New Student Assigned',
+          identifiers: [st.studentId, st.name]
         });
       }
-    }
-  });
+    });
 
-  const handleAcknowledgeStudentGroup = (classIds: string[]) => {
-    const updated = Array.from(new Set([...acknowledgedClassIds, ...classIds]));
-    setAcknowledgedClassIds(updated);
-    const activeTutorId = tutor?.tutorId || currentTutorId;
-    try {
-      if (activeTutorId) {
-        localStorage.setItem(`tutor_ack_classes_${activeTutorId}`, JSON.stringify(updated));
-      }
-      localStorage.setItem('tutor_ack_classes_all', JSON.stringify(updated));
-    } catch {}
+    return results;
+  }, [myAssignedStudents, myClasses, dismissedStudentKeys, pendingNewAssignmentKeys, normActiveTutorId]);
+
+  const handleAcknowledgeStudentGroup = (identifiers: string[]) => {
+    dismissNewStudentAssignmentForTutor(normActiveTutorId, identifiers);
+    setDismissedStudentKeys(getDismissedTutorAssignmentKeys());
+    setPendingNewAssignmentKeys(getPendingTutorAssignmentKeys());
+    onRefreshData().catch(() => {});
   };
 
   const handleAcknowledgeAll = () => {
-    const allIds = [
-      ...myClasses.map(c => c.id),
-      ...myAssignedStudents.map(s => s.studentId)
-    ];
-    const updated = Array.from(new Set([...acknowledgedClassIds, ...allIds]));
-    setAcknowledgedClassIds(updated);
-    const activeTutorId = tutor?.tutorId || currentTutorId;
-    try {
-      if (activeTutorId) {
-        localStorage.setItem(`tutor_ack_classes_${activeTutorId}`, JSON.stringify(updated));
-      }
-      localStorage.setItem('tutor_ack_classes_all', JSON.stringify(updated));
-    } catch {}
+    const allIdentifiers = groupedNewAssignments.flatMap(g => g.identifiers);
+    dismissNewStudentAssignmentForTutor(normActiveTutorId, allIdentifiers);
+    setDismissedStudentKeys(getDismissedTutorAssignmentKeys());
+    setPendingNewAssignmentKeys(getPendingTutorAssignmentKeys());
+    onRefreshData().catch(() => {});
   };
 
   const handleSaveLesson = async (lessonData: Omit<Lesson, 'id'>) => {
@@ -373,20 +435,19 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   const handleJoinLiveKitTestClass = async (targetStudentId?: string, overrideRoomCode?: string) => {
     try {
       setIsJoiningLiveKit(true);
-      const activeTutorId = tutor?.tutorId || currentTutorId || 'Tutor 1';
+      const activeTutorId = normalizeTutorId(tutor?.tutorId || currentTutorId || 'Tutor 1');
       const roomName = getCanonicalRoomName(activeTutorId, targetStudentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
         identity: `tutor_${getTutorSlug(activeTutorId)}`,
-        participantName: tutor?.realName || tutor?.displayName || activeTutorId,
+        participantName: activeTutorId,
         role: 'tutor',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
       setLiveKitTokenData(tokenRes);
       setIsLiveKitModalOpen(true);
-      await joinClassroomSession(tokenRes, 'tutor', tutor?.realName || tutor?.displayName || activeTutorId);
     } catch (err: any) {
-      alert(`Could not launch LiveKit Classroom: ${err?.message || err}`);
+      alert(`Could not launch Live Classroom: ${err?.message || err}`);
     } finally {
       setIsJoiningLiveKit(false);
     }
@@ -402,7 +463,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
               roomName={liveKitTokenData.roomName}
               tokenData={liveKitTokenData}
               userRole="tutor"
-              participantName={tutor?.realName || tutor?.displayName || tutor?.tutorId || 'Ustadh'}
+              participantName={normalizeTutorId(tutor?.tutorId || currentTutorId || 'Tutor 1')}
               settings={classroomSettings}
               onLeave={() => setIsLiveKitModalOpen(false)}
             />
@@ -415,12 +476,13 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         <div className="space-y-1">
           <div className="flex items-center space-x-2">
             <span className="px-2.5 py-0.5 rounded-full bg-[#E8A93E] text-white text-[10px] font-bold uppercase tracking-wider">
-              {tutor?.tutorId || 'Tutor'} Portal
+              {tutor?.tutorId || 'Tutor'} · Assigned ID
             </span>
-            <span className="text-xs text-[#b8dbca]">Operational Timetable: Asia/Karachi (PKT)</span>
+            <span className="text-xs text-[#b8dbca]">Schedule Timezone: Pakistan Time (PKT)</span>
           </div>
           <h2 className="text-xl font-bold tracking-tight">
-            Assalamu Alaykum, {tutor?.realName || 'Ustadh'}
+            Assalamu Alaykum, {tutor?.realName || 'Ustadh'}{' '}
+            <span className="text-sm font-semibold text-emerald-200">({tutor?.tutorId || currentTutorId})</span>
           </h2>
           <p className="text-xs text-[#d2e8dd] max-w-xl">
             Welcome to your teaching hub. Launch your permanent Zoom classroom link to conduct classes and submit structured reports.
@@ -498,70 +560,31 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
       )}
 
 
-      {/* Floating Modern Notification Tray for New Class Assignments */}
+      {/* Small Compact One-Time Notification for Newly Added Students */}
       {groupedNewAssignments.length > 0 && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full space-y-2.5 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto">
-          <div className="bg-[#1E5C3D] text-white px-4 py-3 rounded-2xl shadow-xl border border-emerald-600 flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-                <Bell className="w-4 h-4 text-emerald-200 animate-pulse" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-                  New Class Assignments
-                </h4>
-                <p className="text-[11px] text-emerald-200">
-                  {groupedNewAssignments.length} student schedules pending review
-                </p>
-              </div>
+        <div className="bg-[#EEF8F3] border border-[#2D8B5C]/40 px-4 py-2.5 rounded-xl shadow-xs flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-200">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <span className="w-6 h-6 rounded-full bg-[#2D8B5C] text-white flex items-center justify-center shrink-0">
+              <Bell className="w-3.5 h-3.5" />
+            </span>
+            <div className="text-xs text-[#161F1A] truncate">
+              <span className="font-extrabold text-[#1E5C3D] mr-1.5">New Student Added:</span>
+              {groupedNewAssignments.map((ga, i) => (
+                <span key={ga.studentKey} className="font-semibold">
+                  {i > 0 ? ' • ' : ''}
+                  {ga.studentName} ({ga.studentId}) — {ga.scheduleSummary} ({ga.time})
+                </span>
+              ))}
             </div>
-            <button
-              type="button"
-              onClick={handleAcknowledgeAll}
-              className="text-[11px] font-bold bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded-lg text-white transition-colors cursor-pointer"
-            >
-              Dismiss All
-            </button>
           </div>
-
-          <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-            {groupedNewAssignments.map((ga) => (
-              <div
-                key={ga.studentKey}
-                className="bg-white/95 backdrop-blur-md p-3.5 rounded-xl border border-[#D5EADF] shadow-lg text-xs flex items-center justify-between gap-3 group hover:border-[#2D8B5C] transition-all"
-              >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center space-x-1.5 flex-wrap">
-                    <span className="w-2 h-2 rounded-full bg-[#2D8B5C] shrink-0" />
-                    <p className="font-extrabold text-[#161F1A] text-[13px] truncate">{ga.studentName}</p>
-                    {ga.studentAge !== undefined && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
-                        Age: {ga.studentAge}
-                      </span>
-                    )}
-                  </div>
-                  <div className="pl-3.5 space-y-0.5">
-                    <p className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
-                      <span>Schedule:</span> <span className="text-[#1E5C3D]">{ga.scheduleSummary || ga.daysLabel}</span>
-                    </p>
-                    <p className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
-                      <span>Time:</span> <span className="text-[#1E5C3D]">{ga.time === 'Schedule Pending' ? 'Schedule Pending' : `${ga.time} PKT`}</span>
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleAcknowledgeStudentGroup(ga.classIds)}
-                  className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-rose-100 hover:text-rose-700 text-gray-500 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                  title="Hide/Dismiss notification"
-                  aria-label="Hide notification"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={handleAcknowledgeAll}
+            className="px-3 py-1 rounded-lg bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-[11px] font-bold transition-colors cursor-pointer shrink-0 flex items-center space-x-1"
+          >
+            <span>Dismiss</span>
+            <X className="w-3 h-3" />
+          </button>
         </div>
       )}
 
@@ -574,7 +597,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
             <div>
               <h3 className="text-base font-bold text-[#161F1A]">My Weekly Teaching Schedule</h3>
               <p className="text-xs text-[#5A6B61]">
-                Clean schedule calibrated in Asia/Karachi (PKT). 30-minute standard sessions.
+                Your weekly class schedule in Pakistan Time (PKT). 30-minute standard sessions.
               </p>
             </div>
             <span className="text-xs font-semibold px-2.5 py-1 rounded bg-[#2D8B5C]/10 text-[#1E5C3D]">
@@ -645,7 +668,7 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                 <div className="space-y-1.5 text-xs bg-[#FAF9F7] p-3 rounded-lg border border-[#E3DFD7]">
                   <p><strong>Course:</strong> {st.courseType}</p>
                   <p><strong>Student Age:</strong> {st.age !== undefined ? `${st.age} years old` : 'Not specified'}</p>
-                  <p className="text-[#5A6B61]"><strong>Teaching Timetable:</strong> PKT Operational Schedule</p>
+                  <p className="text-[#5A6B61]"><strong>Schedule Timezone:</strong> Pakistan Time (PKT)</p>
                   {st.status === 'Trial' && (
                     <p className="text-[#8C5D08]">
                       <strong>Trial Progress:</strong> {st.trialSessionsCompleted} of 5 completed
@@ -706,12 +729,13 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                     return;
                   }
                   const studentObj = selectedStudentFilter !== 'all' ? students.find(s => s.studentId === selectedStudentFilter) : null;
-                  const label = studentObj ? `${studentObj.name} Lessons` : `Tutor ${tutor?.name || ''} Lessons`;
+                  const activeTutorLabel = tutor?.tutorId || currentTutorId || 'Tutor';
+                  const label = studentObj ? `${studentObj.name} Lessons` : `${activeTutorLabel} Lessons`;
                   exportLessonsToCSV(
                     label,
                     filteredTutorLessons,
                     `Filter (${reportTimeMode.toUpperCase()})`,
-                    { tutorName: tutor?.name, studentName: studentObj?.name }
+                    { tutorName: activeTutorLabel, studentName: studentObj?.name }
                   );
                 }}
                 className="px-3 py-1.5 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
@@ -773,18 +797,19 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
               </div>
 
               {/* Time Mode Pills */}
-              <div className="flex items-center space-x-1 bg-white p-1 rounded-lg border border-[#E3DFD7]">
-                {(['weekly', 'monthly', 'custom', 'all'] as const).map(mode => (
+              <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-[#E3DFD7]">
+                {(['weekly', 'monthly', '60days', 'custom', 'all'] as const).map(mode => (
                   <button
                     key={mode}
                     type="button"
                     disabled={isLoadingOlderLessons}
                     onClick={async () => {
                       setReportTimeMode(mode);
-                      if (mode === 'monthly' || mode === 'all' || mode === 'custom') {
+                      if (mode === 'monthly' || mode === '60days' || mode === 'all' || mode === 'custom') {
                         setIsLoadingOlderLessons(true);
                         try {
-                          await loadOlderLessonsArchive({ tutorId: tutor?.tutorId || currentTutorId, daysBack: mode === 'monthly' ? 35 : 365 });
+                          const days = mode === 'monthly' ? 35 : mode === '60days' ? 65 : mode === 'custom' ? 180 : 365;
+                          await loadOlderLessonsArchive({ tutorId: tutor?.tutorId || currentTutorId, daysBack: days });
                           await onRefreshData();
                         } finally {
                           setIsLoadingOlderLessons(false);
@@ -797,15 +822,17 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
                         : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-gray-100'
                     }`}
                   >
-                    {mode === 'monthly'
-                      ? 'Last 30 Days'
-                      : mode === 'weekly'
+                    {mode === 'weekly'
                       ? 'Last 7 Days'
+                      : mode === 'monthly'
+                      ? 'Last 30 Days'
+                      : mode === '60days'
+                      ? 'Last 60 Days'
                       : mode === 'custom'
                       ? 'Custom Range'
                       : isLoadingOlderLessons
                       ? 'Loading Older...'
-                      : 'Load Older (All)'}
+                      : 'All Time'}
                   </button>
                 ))}
               </div>
@@ -985,44 +1012,146 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 4: ATTENDANCE TRACKING */}
+      {/* TAB 4: UNIFIED ATTENDANCE TRACKING */}
       {currentTab === 'tutor_attendance' && (
         <div className="space-y-4">
-          <h3 className="text-base font-bold text-[#161F1A]">Class Attendance Log</h3>
-          <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                <tr>
-                  <th className="py-3 px-4">Student</th>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Timestamp</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EAE6DE]">
-                {attendance
-                  .filter(a => a.tutorId === tutor?.tutorId)
-                  .map(att => (
-                    <tr key={att.id} className="hover:bg-[#FAF9F7]/60">
-                      <td className="py-3 px-4 font-semibold text-[#161F1A]">{att.studentName} ({att.studentId})</td>
-                      <td className="py-3 px-4">{att.date}</td>
-                      <td className="py-3 px-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          att.status === 'Present' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                          {att.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-[#5A6B61] font-mono">{att.markedAt}</td>
-                    </tr>
+          <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-[#161F1A]">Unified Class Attendance Log</h3>
+                <p className="text-xs text-[#5A6B61]">
+                  Attendance auto-picked in real-time from lesson submissions and quick-logs.
+                </p>
+              </div>
+
+              {/* Student Filter Dropdown */}
+              <div className="flex items-center space-x-2">
+                <Filter className="w-4 h-4 text-[#5A6B61]" />
+                <span className="text-xs font-bold text-[#161F1A]">Student:</span>
+                <select
+                  value={attendanceStudentFilter}
+                  onChange={(e) => setAttendanceStudentFilter(e.target.value)}
+                  className="text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C] outline-none"
+                >
+                  <option value="all">All Assigned Students ({myAssignedStudents.length})</option>
+                  {myAssignedStudents.map(s => (
+                    <option key={s.studentId} value={s.studentId}>{s.name} ({s.studentId})</option>
                   ))}
-              </tbody>
-            </table>
+                </select>
+              </div>
+            </div>
+
+            {/* Attendance Metrics Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-1">
+              <div className="bg-[#FAF9F7] p-3 rounded-xl border border-[#E3DFD7] text-left">
+                <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">Total Sessions</span>
+                <span className="text-lg font-bold text-[#161F1A] mt-0.5 block">{attendanceStats.total}</span>
+              </div>
+              <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 text-left">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Present</span>
+                <span className="text-lg font-bold text-emerald-800 mt-0.5 block">{attendanceStats.present}</span>
+              </div>
+              <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 text-left">
+                <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Late</span>
+                <span className="text-lg font-bold text-amber-800 mt-0.5 block">{attendanceStats.late}</span>
+              </div>
+              <div className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-left">
+                <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block">Absent</span>
+                <span className="text-lg font-bold text-rose-800 mt-0.5 block">{attendanceStats.absent}</span>
+              </div>
+              <div className="bg-[#EEF8F3] p-3 rounded-xl border border-[#2D8B5C]/30 text-left col-span-2 sm:col-span-1">
+                <span className="text-[10px] font-bold text-[#1E5C3D] uppercase tracking-wider block">Attendance Rate</span>
+                <span className="text-lg font-extrabold text-[#1E5C3D] mt-0.5 block">{attendanceStats.rate}%</span>
+              </div>
+            </div>
+
+            {/* Status Filter Pills */}
+            <div className="flex items-center space-x-1.5 pt-1 border-t border-[#EAE6DE]">
+              <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
+              {(['all', 'Present', 'Late', 'Absent'] as const).map(st => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setAttendanceStatusFilter(st)}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                    attendanceStatusFilter === st
+                      ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                      : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                  }`}
+                >
+                  {st === 'all' ? 'All Records' : st}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white border border-[#E3DFD7] rounded-2xl overflow-hidden shadow-xs">
+            {filteredAttendance.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#5A6B61] italic">
+                No attendance logs found matching the selected student and status filter.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                    <tr>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Student</th>
+                      <th className="py-3 px-4">Attendance Status</th>
+                      <th className="py-3 px-4">Class Details / Reason</th>
+                      <th className="py-3 px-4">Origin</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#EAE6DE]">
+                    {filteredAttendance.map(att => (
+                      <tr key={att.id} className="hover:bg-[#FAF9F7]/60 transition-colors">
+                        <td className="py-3 px-4 font-semibold text-[#161F1A] font-mono">{att.date}</td>
+                        <td className="py-3 px-4">
+                          <span className="font-bold text-[#161F1A] block">{att.studentName}</span>
+                          <span className="text-[10px] text-[#5A6B61] font-mono">{att.studentId}</span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center space-x-1 ${
+                            att.status === 'Present'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : att.status === 'Late'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : att.status === 'Absent'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                              : 'bg-blue-100 text-blue-800 border border-blue-200'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              att.status === 'Present' ? 'bg-emerald-600' :
+                              att.status === 'Late' ? 'bg-amber-600' :
+                              att.status === 'Absent' ? 'bg-rose-600' : 'bg-blue-600'
+                            }`} />
+                            <span>{att.status}</span>
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-[#161F1A] max-w-xs truncate font-medium">
+                          {att.details || '—'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="text-[10px] font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded border border-gray-200">
+                            {att.source}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* TAB 5: ANNOUNCEMENTS */}
+      {/* TAB 5: TUTORS TRAINING VIDEOS */}
+      {currentTab === 'tutor_training' && (
+        <TutorsTrainingPortal />
+      )}
+
+      {/* TAB 6: ANNOUNCEMENTS */}
       {currentTab === 'announcements' && (
         <AnnouncementsList announcements={announcements} />
       )}

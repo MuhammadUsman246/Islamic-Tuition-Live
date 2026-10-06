@@ -119,9 +119,10 @@ export const Header: React.FC<HeaderProps> = ({
       if (seenKeys.has(key)) return;
       seenKeys.add(key);
 
+      const isInHouseRole = activeRole === 'admin' || activeRole === 'supervisor' || activeRole === 'tutor';
       options.push({
         tutorId: matchedTutor?.tutorId || displayId,
-        tutorName: matchedTutor?.realName || undefined,
+        tutorName: isInHouseRole ? (matchedTutor?.realName || undefined) : undefined,
         slug,
         studentName: stu?.name,
         courseType: stu?.courseType,
@@ -371,8 +372,40 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Notification Bell Center */}
         {(() => {
+          const scopedRoleFees = (() => {
+            if (activeRole === 'admin') return fees;
+            if (activeRole === 'student') {
+              const stu = students.find(s =>
+                (adminViewingRole === 'student' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+                (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
+                (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+              );
+              if (!stu) return [];
+              return fees.filter(f =>
+                f.studentId === stu.studentId ||
+                (f.isFamilyInvoice && f.studentIds && f.studentIds.includes(stu.studentId))
+              );
+            }
+            if (activeRole === 'parent') {
+              const parentChildren = students.filter(s =>
+                (adminViewingRole === 'parent' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)) ||
+                (!adminViewingRole && userProfile?.linkedStudentIds?.includes(s.studentId)) ||
+                (!adminViewingRole && userProfile?.email && s.parentEmail?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+              );
+              if (parentChildren.length === 0) return [];
+              const childIds = new Set(parentChildren.map(c => c.studentId));
+              const familyIds = new Set(parentChildren.map(c => c.familyGroupId).filter(Boolean));
+              return fees.filter(f =>
+                childIds.has(f.studentId) ||
+                (f.studentIds && f.studentIds.some(sid => childIds.has(sid))) ||
+                (f.familyGroupId && familyIds.has(f.familyGroupId))
+              );
+            }
+            return [];
+          })();
+
           const pendingFeesCount = (activeRole === 'student' || activeRole === 'parent')
-            ? fees.filter(f => f.status === 'Pending' || f.status === 'Overdue').length
+            ? scopedRoleFees.filter(f => f.status === 'Pending' || f.status === 'Overdue').length
             : 0;
           const alertsTotal = announcements.length + pendingFeesCount;
 
@@ -396,42 +429,82 @@ export const Header: React.FC<HeaderProps> = ({
         })()}
 
         {/* User Identity Chip */}
-        <div className="flex items-center space-x-1.5 sm:space-x-2 pl-1 border-l border-gray-200">
-          <div
-            className="w-8 h-8 rounded-full bg-[#2D8B5C]/15 border border-[#2D8B5C]/30 flex items-center justify-center text-[#1E5C3D] font-bold text-xs shrink-0 overflow-hidden shadow-2xs"
-            title={`${userProfile?.preferredName || userProfile?.displayName} (${userProfile?.role})`}
-          >
-            {userProfile?.avatarUrl ? (
-              <img
-                src={userProfile.avatarUrl}
-                alt="Avatar"
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : userProfile?.displayName ? (
-              userProfile.displayName.charAt(0).toUpperCase()
-            ) : (
-              'U'
-            )}
-          </div>
-          <div className="hidden xl:block text-left">
-            <p className="text-xs font-semibold text-[#161F1A] leading-tight truncate max-w-[140px]">
-              {userProfile?.preferredName || userProfile?.displayName}
-            </p>
-            <p className="text-[10px] text-[#5A6B61] capitalize">
-              {userProfile?.role} {userProfile?.tutorId ? `(${userProfile.tutorId})` : ''} {userProfile?.studentId ? `(${userProfile.studentId})` : ''}
-            </p>
-          </div>
+        {(() => {
+          const activeTutorForChip = activeRole === 'tutor'
+            ? tutors.find(t =>
+                (adminViewingRole === 'tutor' && adminViewingTargetId && (t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)) ||
+                (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
+                (userProfile?.email && t.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+              )
+            : null;
+          const activeStudentForChip = activeRole === 'student'
+            ? students.find(s =>
+                (adminViewingRole === 'student' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+                (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
+                (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+              )
+            : null;
+          const activeParentStudentForChip = activeRole === 'parent'
+            ? students.find(s =>
+                (adminViewingRole === 'parent' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)) ||
+                (!adminViewingRole && userProfile?.linkedStudentIds?.includes(s.studentId)) ||
+                (!adminViewingRole && userProfile?.email && s.parentEmail?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+              )
+            : null;
 
-          <button
-            type="button"
-            onClick={logout}
-            title={activeRole === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out of Academy"}
-            className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer flex items-center justify-center"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
+          const chipPrimaryName = activeRole === 'tutor'
+            ? (activeTutorForChip?.realName || (!adminViewingRole && (userProfile?.preferredName || userProfile?.displayName)) || 'Tutor')
+            : activeRole === 'student'
+            ? (activeStudentForChip?.name || (!adminViewingRole && (userProfile?.preferredName || userProfile?.displayName)) || 'Student')
+            : activeRole === 'parent'
+            ? (activeParentStudentForChip?.parentName || (!adminViewingRole && (userProfile?.preferredName || userProfile?.displayName)) || 'Parent')
+            : (userProfile?.preferredName || userProfile?.displayName || 'User');
+
+          const chipSecondaryLabel = activeRole === 'tutor'
+            ? `${activeTutorForChip?.tutorId || userProfile?.tutorId || 'Tutor 1'} • Faculty`
+            : activeRole === 'student'
+            ? `student ${activeStudentForChip?.studentId ? `(${activeStudentForChip.studentId})` : ''}`.trim()
+            : `${activeRole || userProfile?.role || ''}`.trim();
+
+          return (
+            <div className="flex items-center space-x-1.5 sm:space-x-2 pl-1 border-l border-gray-200">
+              <div
+                className="w-8 h-8 rounded-full bg-[#2D8B5C]/15 border border-[#2D8B5C]/30 flex items-center justify-center text-[#1E5C3D] font-bold text-xs shrink-0 overflow-hidden shadow-2xs"
+                title={`${chipPrimaryName} (${chipSecondaryLabel})`}
+              >
+                {userProfile?.avatarUrl ? (
+                  <img
+                    src={userProfile.avatarUrl}
+                    alt="Avatar"
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : chipPrimaryName ? (
+                  chipPrimaryName.charAt(0).toUpperCase()
+                ) : (
+                  'U'
+                )}
+              </div>
+              <div className="hidden xl:block text-left">
+                <p className="text-xs font-semibold text-[#161F1A] leading-tight truncate max-w-[150px]">
+                  {chipPrimaryName}
+                </p>
+                <p className="text-[10px] font-bold text-[#2D8B5C] capitalize">
+                  {chipSecondaryLabel}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={logout}
+                title={activeRole === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out of Academy"}
+                className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer flex items-center justify-center"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Notification Center Modal */}
@@ -439,7 +512,37 @@ export const Header: React.FC<HeaderProps> = ({
         isOpen={isNotificationCenterOpen}
         onClose={() => setIsNotificationCenterOpen(false)}
         announcements={announcements}
-        fees={fees}
+        fees={(() => {
+          if (activeRole === 'admin') return fees;
+          if (activeRole === 'student') {
+            const stu = students.find(s =>
+              (adminViewingRole === 'student' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+              (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
+              (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+            );
+            if (!stu) return [];
+            return fees.filter(f =>
+              f.studentId === stu.studentId ||
+              (f.isFamilyInvoice && f.studentIds && f.studentIds.includes(stu.studentId))
+            );
+          }
+          if (activeRole === 'parent') {
+            const parentChildren = students.filter(s =>
+              (adminViewingRole === 'parent' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)) ||
+              (!adminViewingRole && userProfile?.linkedStudentIds?.includes(s.studentId)) ||
+              (!adminViewingRole && userProfile?.email && s.parentEmail?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+            );
+            if (parentChildren.length === 0) return [];
+            const childIds = new Set(parentChildren.map(c => c.studentId));
+            const familyIds = new Set(parentChildren.map(c => c.familyGroupId).filter(Boolean));
+            return fees.filter(f =>
+              childIds.has(f.studentId) ||
+              (f.studentIds && f.studentIds.some(sid => childIds.has(sid))) ||
+              (f.familyGroupId && familyIds.has(f.familyGroupId))
+            );
+          }
+          return [];
+        })()}
         classes={classes}
         lessons={lessons}
         onNavigateTab={onNavigateTab}
@@ -454,7 +557,7 @@ export const Header: React.FC<HeaderProps> = ({
           (adminViewingRole === 'student' && adminViewingTargetId
             ? students.find(s => s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)?.name
             : adminViewingRole === 'tutor' && adminViewingTargetId
-              ? tutors.find(t => t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)?.realName
+              ? tutors.find(t => t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)?.tutorId
               : adminViewingRole === 'parent' && adminViewingTargetId
                 ? students.find(s => s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)?.parentName
                 : null) ||

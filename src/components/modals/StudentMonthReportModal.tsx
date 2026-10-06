@@ -317,79 +317,91 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
                   </div>
 
                   {/* Main Content Grid of Row */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                    {/* Column 1: Main Portion Taught */}
-                    <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#1E5C3D] flex items-center gap-1">
-                        <BookOpen className="w-3 h-3 text-[#2D8B5C]" /> Lesson / Sabaq Taught
-                      </span>
-                      {lesson.quranDetails ? (
-                        <div className="space-y-0.5">
-                          <p className="font-bold text-gray-900 text-xs">
-                            Juz {lesson.quranDetails.juz} • Surah {lesson.quranDetails.surahName} (#{lesson.quranDetails.surahNumber})
+                  {isAbsent ? (
+                    <div className="bg-rose-50/75 p-3.5 rounded-xl border border-rose-200 text-xs text-rose-800 space-y-1">
+                      <div className="flex items-center space-x-1.5 font-bold text-rose-700">
+                        <UserX className="w-3.5 h-3.5" />
+                        <span>Student Absent — No Lesson Conducted</span>
+                      </div>
+                      <p className="text-[11px] text-rose-600">
+                        {lesson.absentReason || 'Student was absent for this scheduled class session.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      {/* Column 1: Main Portion Taught */}
+                      <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#1E5C3D] flex items-center gap-1">
+                          <BookOpen className="w-3 h-3 text-[#2D8B5C]" /> Lesson / Sabaq Taught
+                        </span>
+                        {lesson.quranDetails ? (
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-gray-900 text-xs">
+                              Juz {lesson.quranDetails.juz} • Surah {lesson.quranDetails.surahName} (#{lesson.quranDetails.surahNumber})
+                            </p>
+                            <p className="text-[#2D8B5C] font-medium">
+                              Ayahs {lesson.quranDetails.ayahStart} – {lesson.quranDetails.ayahEnd}
+                              {lesson.quranDetails.mushafPage ? ` (Page ${lesson.quranDetails.mushafPage})` : ''}
+                            </p>
+                          </div>
+                        ) : lesson.qaidaDetails ? (
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-gray-900 text-xs">
+                              Qaida Page {lesson.qaidaDetails.pageNumber}: {lesson.qaidaDetails.lessonName}
+                            </p>
+                            <p className="text-emerald-700 font-medium">
+                              {lesson.qaidaDetails.lessonSection} ({lesson.qaidaDetails.exerciseLine})
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="font-medium text-gray-800">
+                            {lesson.lessonCovered || 'General Session'}
                           </p>
-                          <p className="text-[#2D8B5C] font-medium">
-                            Ayahs {lesson.quranDetails.ayahStart} – {lesson.quranDetails.ayahEnd}
-                            {lesson.quranDetails.mushafPage ? ` (Page ${lesson.quranDetails.mushafPage})` : ''}
-                          </p>
-                        </div>
-                      ) : lesson.qaidaDetails ? (
-                        <div className="space-y-0.5">
-                          <p className="font-bold text-gray-900 text-xs">
-                            Qaida Page {lesson.qaidaDetails.pageNumber}: {lesson.qaidaDetails.lessonName}
-                          </p>
-                          <p className="text-emerald-700 font-medium">
-                            {lesson.qaidaDetails.lessonSection} ({lesson.qaidaDetails.exerciseLine})
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="font-medium text-gray-800">
-                          {lesson.lessonCovered || (isAbsent ? 'Class Absent' : 'General Session')}
+                        )}
+                      </div>
+
+                      {/* Column 2: Memorization & Kalima / Duas */}
+                      <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#E8A93E] flex items-center gap-1">
+                          <Bookmark className="w-3 h-3" /> Memorization / Kalima / Duas
+                        </span>
+                        <p className="text-gray-700 font-medium line-clamp-2">
+                          {lesson.memorization || '—'}
                         </p>
-                      )}
-                    </div>
+                      </div>
 
-                    {/* Column 2: Memorization & Kalima / Duas */}
-                    <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#E8A93E] flex items-center gap-1">
-                        <Bookmark className="w-3 h-3" /> Memorization / Kalima / Duas
-                      </span>
-                      <p className="text-gray-700 font-medium line-clamp-2">
-                        {lesson.memorization || 'Standard Daily Duas & Kalimas'}
-                      </p>
-                    </div>
+                      {/* Column 3: Adaab, Akhlaaq & Attachments */}
+                      <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1">
+                          <HeartHandshake className="w-3 h-3 text-[#2D8B5C]" /> Adaab & Manners
+                        </span>
+                        <p className="text-gray-700 font-medium line-clamp-1">
+                          {lesson.adaabManners || '—'}
+                        </p>
 
-                    {/* Column 3: Adaab, Akhlaaq & Attachments */}
-                    <div className="bg-[#F9F8F5] p-3 rounded-xl border border-[#EAE6DE] space-y-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1">
-                        <HeartHandshake className="w-3 h-3 text-[#2D8B5C]" /> Adaab & Manners
-                      </span>
-                      <p className="text-gray-700 font-medium line-clamp-1">
-                        {lesson.adaabManners || 'Respectful & Attentive in Class'}
-                      </p>
-
-                      {/* Attachment Thumbnails */}
-                      {lesson.screenshots && lesson.screenshots.length > 0 && (
-                        <div className="flex items-center space-x-1.5 pt-1">
-                          {lesson.screenshots.map((s, i) => (
-                            <img
-                              key={i}
-                              src={s.url}
-                              alt={`Lesson artifact ${i}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setPreviewImage(s.url);
-                              }}
-                              className="w-7 h-7 object-cover rounded-md border border-gray-200 hover:opacity-80 transition-opacity"
-                            />
-                          ))}
-                          <span className="text-[10px] text-gray-400 font-semibold">
-                            {lesson.screenshots.length} image(s)
-                          </span>
-                        </div>
-                      )}
+                        {/* Attachment Thumbnails */}
+                        {lesson.screenshots && lesson.screenshots.length > 0 && (
+                          <div className="flex items-center space-x-1.5 pt-1">
+                            {lesson.screenshots.map((s, i) => (
+                              <img
+                                key={i}
+                                src={s.url}
+                                alt={`Lesson artifact ${i}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPreviewImage(s.url);
+                                }}
+                                className="w-7 h-7 object-cover rounded-md border border-gray-200 hover:opacity-80 transition-opacity"
+                              />
+                            ))}
+                            <span className="text-[10px] text-gray-400 font-semibold">
+                              {lesson.screenshots.length} image(s)
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })

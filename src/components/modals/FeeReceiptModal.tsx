@@ -264,7 +264,7 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
                 </span>
                 {fee.receiptImage && (
                   <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full font-mono">
-                    WebP Receipt Attached
+                    Receipt Attached
                   </span>
                 )}
               </div>
@@ -335,10 +335,10 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
                     </div>
                     <div>
                       <p className="text-xs font-bold text-[#161F1A]">
-                        {fee.receiptOriginalFileName || 'Payment_Slip_Receipt.webp'}
+                        {fee.receiptOriginalFileName || 'Payment_Slip_Receipt'}
                       </p>
                       <span className="text-[11px] text-[#5A6B61]">
-                        Compressed WebP • {fee.receiptCompressedSizeKB ? `${fee.receiptCompressedSizeKB} KB` : 'High Definition'}
+                        Receipt Image • {fee.receiptCompressedSizeKB ? `${fee.receiptCompressedSizeKB} KB` : 'Verified Copy'}
                       </span>
                     </div>
                   </div>

@@ -62,6 +62,39 @@ interface TourStep {
   proTip?: string;
 }
 
+const inMemorySeenPortalTours = new Set<string>();
+
+export function hasSeenPortalTour(role: 'student' | 'parent', prefix: string = 'default'): boolean {
+  const globalKey = `has_seen_portal_tour_${role}`;
+  const specificKey = `has_seen_portal_tour_${role}_${prefix}`;
+  if (inMemorySeenPortalTours.has(globalKey) || inMemorySeenPortalTours.has(specificKey)) {
+    return true;
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      if (localStorage.getItem(globalKey) === 'true' || localStorage.getItem(specificKey) === 'true') {
+        inMemorySeenPortalTours.add(globalKey);
+        inMemorySeenPortalTours.add(specificKey);
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+export function markPortalTourSeen(role: 'student' | 'parent', prefix: string = 'default'): void {
+  const globalKey = `has_seen_portal_tour_${role}`;
+  const specificKey = `has_seen_portal_tour_${role}_${prefix}`;
+  inMemorySeenPortalTours.add(globalKey);
+  inMemorySeenPortalTours.add(specificKey);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(globalKey, 'true');
+      localStorage.setItem(specificKey, 'true');
+    } catch {}
+  }
+}
+
 export const StudentParentTourModal: React.FC<StudentParentTourModalProps> = ({
   isOpen,
   onClose,
@@ -82,13 +115,10 @@ export const StudentParentTourModal: React.FC<StudentParentTourModalProps> = ({
 
   if (!isOpen) return null;
 
-  const storageKey = `has_seen_portal_tour_${activeRole}_${storageKeyPrefix}`;
-
   const handleClose = () => {
-    if (dontShowAgain && typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(storageKey, 'true');
-      } catch (e) {}
+    if (dontShowAgain) {
+      markPortalTourSeen(activeRole, storageKeyPrefix);
+      markPortalTourSeen(initialUserRole, storageKeyPrefix);
     }
     onClose();
   };

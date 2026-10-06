@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useClassroom } from '../../context/ClassroomContext';
-import { Video, Lock, User, AlertCircle, X, Sparkles, ExternalLink, Copy, Check } from 'lucide-react';
+import { Video, Lock, User, AlertCircle, X, Sparkles, ExternalLink, Copy, Check, Clock } from 'lucide-react';
 import { IslamicTuitionClassroom } from './IslamicTuitionClassroom';
 import { LiveKitRoomTokenResponse, UserRole } from '../../types';
 import { joinClassroomBySlugOrPasscode, getSavedCustomPasscodes } from '../../services/livekitService';
+import { getTutorDisplayId } from '../../utils/tutorPrivacy';
 
 export interface AssignedTutorRoomOption {
   tutorId: string;
@@ -87,14 +88,37 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
   // Active Session state
   const [tokenData, setTokenData] = useState<LiveKitRoomTokenResponse | null>(null);
 
-  // Waiting Room state
+  // Waiting Room / Next Student Lounge state
   const [inWaitingRoom, setInWaitingRoom] = useState<boolean>(false);
   const [waitingId, setWaitingId] = useState<string | null>(null);
+  const [waitingReason, setWaitingReason] = useState<'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT'>('NEXT_STUDENT_QUEUE');
+  const [queuePosition, setQueuePosition] = useState<number>(1);
+  const [loungeTutorName, setLoungeTutorName] = useState<string>('Tutor 1');
+  const [loungeEndTimeMs, setLoungeEndTimeMs] = useState<number | null>(null);
+  const [loungeRemainingSecs, setLoungeRemainingSecs] = useState<number>(0);
   const [waitingMessage, setWaitingMessage] = useState<string>('Tutor will admit you shortly...');
 
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
   const { joinClassroomSession } = useClassroom();
+
+  // Local 1-second countdown timer for Next Student Lounge (Zero extra server/Firebase load)
+  useEffect(() => {
+    if (!inWaitingRoom || !loungeEndTimeMs) return;
+    const tick = () => {
+      const rem = Math.max(0, Math.floor((loungeEndTimeMs - Date.now()) / 1000));
+      setLoungeRemainingSecs(rem);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [inWaitingRoom, loungeEndTimeMs]);
+
+  const formatCountdown = (secs: number) => {
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    return `${mins.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
+  };
 
   const submitJoinRequest = async (admittedId?: string) => {
     if (!meetingIdOrSlug.trim()) {
@@ -118,7 +142,16 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
       if (data.inWaitingRoom) {
         setInWaitingRoom(true);
         setWaitingId(data.waitingId || null);
-        setWaitingMessage(data.message || 'Tutor will admit you shortly...');
+        setWaitingReason((data as any).waitingReason || 'NEXT_STUDENT_QUEUE');
+        setQueuePosition((data as any).queuePosition || 1);
+        setLoungeTutorName(
+          getTutorDisplayId(
+            (data as any).tutorName ||
+              (meetingIdOrSlug.match(/\d+/) ? `Tutor ${meetingIdOrSlug.match(/\d+/)![0]}` : 'Tutor')
+          )
+        );
+        setLoungeEndTimeMs((data as any).currentLessonEndTimeMs || null);
+        setWaitingMessage(data.message || 'Your class will start automatically as soon as the current lesson finishes!');
         setIsLoading(false);
         return;
       }
@@ -137,7 +170,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
     }
   };
 
-  // Poll waiting room status when guest is waiting for tutor admittance
+  // Poll waiting room status when student/guest is waiting in the Next Student Lounge
   useEffect(() => {
     if (!isOpen || !inWaitingRoom || !waitingId) return;
 
@@ -147,13 +180,17 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
+          if (typeof data.queuePosition === 'number') setQueuePosition(data.queuePosition);
+          if (data.tutorName) setLoungeTutorName(getTutorDisplayId(data.tutorName));
+          if (data.currentLessonEndTimeMs) setLoungeEndTimeMs(data.currentLessonEndTimeMs);
+
           if (data.participant) {
             if (data.participant.status === 'ADMITTED') {
               setInWaitingRoom(false);
               submitJoinRequest(waitingId);
             } else if (data.participant.status === 'REJECTED') {
               setInWaitingRoom(false);
-              setErrorMessage('The tutor declined admittance to this classroom session.');
+              setErrorMessage('The tutor asked to reschedule or closed this classroom session.');
             }
           }
         }
@@ -223,21 +260,75 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
         </div>
 
         {inWaitingRoom ? (
-          /* Waiting Room Intercept */
-          <div className="text-center space-y-4 py-4 animate-pulse">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
-              <Sparkles className="w-8 h-8" />
+          /* Next Student Lounge Intercept with Live Remaining Time Countdown */
+          <div className="text-center space-y-4 py-2">
+            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-amber-400 text-xs font-extrabold">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span>
+                {waitingReason === 'NEXT_STUDENT_QUEUE'
+                  ? `Next Student Lounge · #${queuePosition} in Line`
+                  : 'Classroom Waiting Lounge'}
+              </span>
             </div>
-            <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Passcode Waiting Room</h3>
-              <p className="text-xs text-amber-200/80 leading-relaxed">{waitingMessage}</p>
+
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <Clock className="w-7 h-7 animate-pulse" />
             </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-white">
+                {waitingReason === 'NEXT_STUDENT_QUEUE'
+                  ? `Ustadh ${loungeTutorName} is Currently in a Lesson`
+                  : `Waiting for Ustadh ${loungeTutorName}`}
+              </h3>
+              <p className="text-xs text-emerald-100/90 leading-relaxed">
+                {waitingReason === 'NEXT_STUDENT_QUEUE' ? (
+                  <>
+                    Ustadh <span className="font-extrabold text-emerald-400">{loungeTutorName}</span> is currently wrapping up the previous student&apos;s lesson. You are{' '}
+                    <span className="font-extrabold text-amber-400">#{queuePosition} in line</span> — your class will start automatically as soon as the current lesson finishes!
+                  </>
+                ) : (
+                  waitingMessage
+                )}
+              </p>
+            </div>
+
+            {waitingReason === 'NEXT_STUDENT_QUEUE' && (
+              <div className="rounded-2xl bg-black/45 border border-amber-500/30 p-3.5 space-y-1">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-center space-x-1">
+                  <Clock className="w-3 h-3" />
+                  <span>Estimated Time Remaining in Current Lesson</span>
+                </div>
+                {loungeRemainingSecs > 0 ? (
+                  <div className="text-2xl font-mono font-extrabold text-emerald-400 tracking-wider">
+                    {formatCountdown(loungeRemainingSecs)}
+                  </div>
+                ) : (
+                  <div className="text-xs font-bold text-emerald-400 animate-pulse py-0.5">
+                    ✨ Wrapping up final verses — starting your class any moment now...
+                  </div>
+                )}
+                <p className="text-[10px] text-[#8BA295]">
+                  Stay on this screen — your class will open automatically.
+                </p>
+              </div>
+            )}
+
             <button
               type="button"
-              onClick={() => setInWaitingRoom(false)}
+              onClick={() => {
+                if (waitingId) {
+                  fetch('/api/livekit/waiting-room/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ waitingId, action: 'CANCEL' })
+                  }).catch(() => {});
+                }
+                setInWaitingRoom(false);
+              }}
               className="text-xs text-rose-400 hover:underline font-bold cursor-pointer"
             >
-              Cancel & Exit Waiting Room
+              Leave Waiting Lounge
             </button>
           </div>
         ) : (
@@ -282,7 +373,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
                       >
                         <div className="min-w-0 pr-2">
                           <div className="text-xs font-bold text-white truncate">
-                            {item.tutorId} {item.tutorName ? `(${item.tutorName})` : ''}
+                            {getTutorDisplayId(item.tutorId)}
                           </div>
                           <div className="text-[10px] text-emerald-300/90 truncate">
                             {item.studentName ? `Learner: ${item.studentName}` : 'Assigned Instructor'}
@@ -302,7 +393,7 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
             {/* Field 1: Tutor / Classroom ID */}
             <div className="space-y-1">
               <label className="block text-xs font-bold text-[#8AA393] flex items-center justify-between">
-                <span>Assigned Tutor ID or Classroom Slug</span>
+                <span>Assigned Tutor ID or Classroom Link</span>
                 <span className="text-[10px] text-emerald-400 font-mono">
                   {assignedTutors[0]?.slug ? `Assigned: ${assignedTutors[0].slug}` : `e.g. ${initialSlug}`}
                 </span>

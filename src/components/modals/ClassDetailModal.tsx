@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Calendar, Clock, User, Globe, Edit2, Trash2, Video, Sparkles, CheckCircle2, Ban, BookOpen } from 'lucide-react';
 import { TimetableClass, Student, Tutor, UserRole } from '../../types';
 import { convertPKTToStudentTime } from '../../utils/timezone';
+import { getTutorDisplayName } from '../../utils/tutorPrivacy';
 
 interface ClassDetailModalProps {
   isOpen: boolean;
@@ -138,7 +139,7 @@ export const ClassDetailModal: React.FC<ClassDetailModalProps> = ({
                   <User className="w-3.5 h-3.5 text-[#2D8B5C]" /> Assigned Faculty:
                 </span>
                 <span className="font-semibold text-[#161F1A]">
-                  {classItem.tutorId} {tutor?.realName ? `(${tutor.realName})` : ''}
+                  {getTutorDisplayName(tutor || classItem.tutorId, role)}
                 </span>
               </div>
 

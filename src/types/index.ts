@@ -137,6 +137,7 @@ export interface Student {
   leaveEndDate?: string;   // YYYY-MM-DD
   leaveReason?: string;    // Vacation, Exams, Illness, Family, etc.
   leaveType?: 'Specific Days' | 'Full Month' | 'Custom Range' | 'Indefinite';
+  isNewTutorAssignment?: boolean;
   createdAt: string;
 }
 
@@ -160,6 +161,7 @@ export interface TutorStudentView {
   leaveStartDate?: string;
   leaveEndDate?: string;
   leaveReason?: string;
+  isNewTutorAssignment?: boolean;
 }
 
 export type DayOfWeek = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
@@ -472,6 +474,13 @@ export interface LiveKitRoomTokenResponse {
   isMaskedSecret?: boolean;
   expiresInSeconds?: number;
   message?: string;
+  inWaitingRoom?: boolean;
+  waitingId?: string;
+  waitingReason?: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
+  queuePosition?: number;
+  tutorName?: string;
+  currentLessonEndTimeMs?: number;
+  roomSlug?: string;
 }
 
 export interface ClassroomLabTestSession {
@@ -645,6 +654,9 @@ export interface WaitingRoomParticipant {
   guest_name: string;
   joined_at: string;
   status: 'WAITING' | 'ADMITTED' | 'REJECTED';
+  waiting_seconds?: number;
+  reason?: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
+  queue_position?: number;
 }
 
 export interface ChatMessageItem {

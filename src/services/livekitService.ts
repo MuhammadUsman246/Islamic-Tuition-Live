@@ -42,45 +42,27 @@ export const DEFAULT_CLASSROOM_SETTINGS: ClassroomLabSettings = {
   welcomeMessage: 'Assalamu Alaykum. Welcome to your live 1-to-1 Quran session.',
 };
 
+import { getTutorDisplayId as getPrivacySafeTutorId } from '../utils/tutorPrivacy';
+
 /**
  * Convert any tutor identifier ("Tutor 3", "TUT-003", "room_tutor_3", "tutor-3")
- * into its canonical URL slug (e.g. "tutor-3").
+ * into its canonical URL slug (e.g. "tutor-3"). Never exposes real names.
  */
-export function getTutorSlug(tutorInput: any): string {
-  if (!tutorInput) return 'tutor-1';
-  let tutorStr = '';
-  if (typeof tutorInput === 'string') {
-    tutorStr = tutorInput.trim();
-  } else if (typeof tutorInput === 'object') {
-    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || '';
-  }
-  if (!tutorStr) return 'tutor-1';
-
-  const numMatch = tutorStr.match(/\d+/);
+export function getTutorSlug(tutorInput: any, allTutors?: any[]): string {
+  const safeId = getPrivacySafeTutorId(tutorInput, allTutors);
+  const numMatch = safeId.match(/\d+/);
   if (numMatch) {
     return `tutor-${parseInt(numMatch[0], 10)}`;
   }
-  return tutorStr.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tutor-1';
+  return 'tutor-1';
 }
 
 /**
  * Convert any tutor identifier ("TUT-003", "tutor-3", "Tutor 3") into a clean display ID ("Tutor 3").
+ * Strictly strips any real name for student/parent privacy.
  */
-export function getTutorDisplayId(tutorInput: any): string {
-  if (!tutorInput) return 'Tutor 1';
-  let tutorStr = '';
-  if (typeof tutorInput === 'string') {
-    tutorStr = tutorInput.trim();
-  } else if (typeof tutorInput === 'object') {
-    tutorStr = tutorInput.tutorId || tutorInput.id || tutorInput.realName || '';
-  }
-  if (!tutorStr) return 'Tutor 1';
-
-  const numMatch = tutorStr.match(/\d+/);
-  if (numMatch) {
-    return `Tutor ${parseInt(numMatch[0], 10)}`;
-  }
-  return tutorStr;
+export function getTutorDisplayId(tutorInput: any, allTutors?: any[]): string {
+  return getPrivacySafeTutorId(tutorInput, allTutors);
 }
 
 /**
@@ -246,7 +228,7 @@ export function saveCustomRoomPasscode(roomSlug: string, passcode: string): void
 
 export function getDefaultPermanentRooms() {
   const customMap = getSavedCustomPasscodes();
-  return Array.from({ length: 25 }, (_, idx) => {
+  return Array.from({ length: 30 }, (_, idx) => {
     const num = idx + 1;
     const slug = `tutor-${num}`;
     return {
@@ -360,7 +342,7 @@ export async function joinClassroomBySlugOrPasscode(params: {
   admittedWaitingId?: string;
 }): Promise<
   | ({ inWaitingRoom: true; waitingId: string; message: string } & Partial<LiveKitRoomTokenResponse>)
-  | ({ inWaitingRoom?: false } & LiveKitRoomTokenResponse)
+  | LiveKitRoomTokenResponse
 > {
   // Normalize any full URL or slug (e.g. "https://app.islamictuition.us/class/tutor-10" -> "tutor-10")
   let rawSlug = (params.roomSlug || 'tutor-1').trim();
@@ -626,8 +608,17 @@ export function saveLocalClassroomRecordings(recordings: ClassroomRecordingItem[
   } catch {}
 }
 
+export interface WaitingQueueDetailItem {
+  id: string;
+  name: string;
+  waitingSeconds: number;
+  reason: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
+  queuePosition: number;
+}
+
 export interface LiveRoomStatusItem {
   tutorId: string;
+  tutorName?: string;
   roomSlug: string;
   status: 'running' | 'tutor_waiting' | 'student_waiting' | 'idle';
   tutorPresent: boolean;
@@ -637,6 +628,7 @@ export interface LiveRoomStatusItem {
   students: string[];
   waitingCount: number;
   waitingStudents: string[];
+  waitingDetails?: WaitingQueueDetailItem[];
   lastActivity: string | null;
 }
 
@@ -652,7 +644,181 @@ export interface LiveRoomsStatusResponse {
 }
 
 /**
- * Fetch real-time live status for all classrooms from server
+ * Direct browser fallback for querying LiveKit Cloud RoomService (Twirp API)
+ * when hosted on a static server (e.g. cPanel / .htaccess) where /api/* returns HTML.
+ */
+async function fetchLiveRoomsStatusFromLiveKitCloudDirect(): Promise<LiveRoomsStatusResponse> {
+  const defaultRooms = getDefaultPermanentRooms();
+  try {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const payload = {
+      iss: FALLBACK_LIVEKIT_KEY,
+      sub: 'admin_status_monitor',
+      nbf: nowSec - 5,
+      exp: nowSec + 120,
+      video: {
+        roomList: true,
+        roomAdmin: true,
+      },
+    };
+    const signingInput = `${base64UrlEncodeString(JSON.stringify(header))}.${base64UrlEncodeString(JSON.stringify(payload))}`;
+    const keyData = new TextEncoder().encode(FALLBACK_LIVEKIT_SECRET);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuf = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(signingInput));
+    const adminJwt = `${signingInput}.${base64UrlEncodeBytes(new Uint8Array(sigBuf))}`;
+
+    const httpBase = FALLBACK_LIVEKIT_URL.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+    const listRes = await fetch(`${httpBase}/twirp/livekit.RoomService/ListRooms`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminJwt}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!listRes.ok) {
+      throw new Error(`LiveKit ListRooms HTTP ${listRes.status}`);
+    }
+
+    const listData = await listRes.json();
+    const activeCloudRooms: any[] = (listData?.rooms || []).filter(
+      (cr: any) => (cr.num_participants || cr.numParticipants || 0) > 0
+    );
+
+    const cloudParticipantsByRoom: Record<string, any[]> = {};
+    await Promise.allSettled(
+      activeCloudRooms.map(async (cr: any) => {
+        const rName = cr.name;
+        const pRes = await fetch(`${httpBase}/twirp/livekit.RoomService/ListParticipants`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${adminJwt}`,
+          },
+          body: JSON.stringify({ room: rName }),
+        });
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          const canonical = getCanonicalRoomName(rName, undefined, rName).toLowerCase();
+          cloudParticipantsByRoom[canonical] = pData?.participants || [];
+        }
+      })
+    );
+
+    const roomStatuses: LiveRoomStatusItem[] = defaultRooms.map((r) => {
+      const normRoom = r.livekit_room_id.toLowerCase();
+      const rawPeers = cloudParticipantsByRoom[normRoom] || [];
+
+      const visiblePeers = rawPeers.filter((p: any) => {
+        let meta: any = {};
+        try {
+          if (p.metadata) meta = JSON.parse(p.metadata);
+        } catch {}
+        const idLower = (p.identity || '').toLowerCase();
+        const nameLower = (p.name || '').toLowerCase();
+        const metaRole = (meta.role || '').toString().toLowerCase();
+        return !(
+          Boolean(meta.hidden) ||
+          Boolean(p.permission?.hidden) ||
+          metaRole === 'admin' ||
+          metaRole === 'supervisor' ||
+          idLower.includes('admin_obs') ||
+          idLower.includes('supervisor_obs') ||
+          idLower.includes('observer') ||
+          nameLower.includes('invisible')
+        );
+      });
+
+      const tutorsList = visiblePeers.filter((p: any) => {
+        let meta: any = {};
+        try {
+          if (p.metadata) meta = JSON.parse(p.metadata);
+        } catch {}
+        const idLower = (p.identity || '').toLowerCase();
+        const nameLower = (p.name || '').toLowerCase();
+        const metaRole = (meta.role || '').toString().toLowerCase();
+        return (
+          metaRole === 'tutor' ||
+          idLower.startsWith('tutor') ||
+          idLower.includes('tutor_') ||
+          /^tutor\s*\d+/i.test(p.name || '') ||
+          nameLower.includes('ustadh') ||
+          nameLower.includes('qari')
+        );
+      });
+
+      const studentsList = visiblePeers.filter((p: any) => !tutorsList.includes(p));
+      const tutorPresent = tutorsList.length > 0;
+      const studentPresent = studentsList.length > 0;
+      const studentNames = studentsList.map((s: any) => s.name || s.identity || 'Student');
+
+      const waitingDetails: WaitingQueueDetailItem[] =
+        !tutorPresent && studentPresent
+          ? studentNames.map((sName: string, idx: number) => ({
+              id: `wait_${idx}`,
+              name: sName,
+              waitingSeconds: 30,
+              reason: 'TUTOR_NOT_PRESENT',
+              queuePosition: idx + 1,
+            }))
+          : [];
+
+      let status: 'running' | 'tutor_waiting' | 'student_waiting' | 'idle' = 'idle';
+      if (tutorPresent && studentPresent) status = 'running';
+      else if (tutorPresent && !studentPresent) status = 'tutor_waiting';
+      else if (!tutorPresent && studentPresent) status = 'student_waiting';
+
+      return {
+        tutorId: r.tutor_id,
+        tutorName: tutorsList[0]?.name || r.tutor_id,
+        roomSlug: r.room_slug,
+        status,
+        tutorPresent,
+        studentPresent,
+        participantCount: visiblePeers.length,
+        studentCount: studentsList.length,
+        students: studentNames,
+        waitingCount: waitingDetails.length,
+        waitingStudents: waitingDetails.map((w) => w.name),
+        waitingDetails,
+        lastActivity: visiblePeers.length > 0 ? new Date().toISOString() : null,
+      };
+    });
+
+    return {
+      rooms: roomStatuses,
+      summary: {
+        totalTutors: roomStatuses.length,
+        runningCount: roomStatuses.filter((r) => r.status === 'running').length,
+        tutorWaitingCount: roomStatuses.filter((r) => r.status === 'tutor_waiting').length,
+        studentWaitingCount: roomStatuses.filter((r) => r.status === 'student_waiting' || r.waitingCount > 0).length,
+        idleCount: roomStatuses.filter((r) => r.status === 'idle').length,
+      },
+    };
+  } catch (err) {
+    return {
+      rooms: [],
+      summary: {
+        totalTutors: 0,
+        runningCount: 0,
+        tutorWaitingCount: 0,
+        studentWaitingCount: 0,
+        idleCount: 0,
+      },
+    };
+  }
+}
+
+/**
+ * Fetch real-time live status for all classrooms from server (with automatic LiveKit Cloud direct fallback)
  */
 export async function fetchLiveRoomsStatus(): Promise<LiveRoomsStatusResponse> {
   try {
@@ -664,14 +830,23 @@ export async function fetchLiveRoomsStatus(): Promise<LiveRoomsStatusResponse> {
   } catch (e) {
     console.warn('Live rooms status fetch notice:', e);
   }
-  return {
-    rooms: [],
-    summary: {
-      totalTutors: 0,
-      runningCount: 0,
-      tutorWaitingCount: 0,
-      studentWaitingCount: 0,
-      idleCount: 0
-    }
-  };
+  return fetchLiveRoomsStatusFromLiveKitCloudDirect();
 }
+
+/**
+ * Admit a waiting student from the Next Student Lounge / Waiting Room into the live classroom
+ */
+export async function admitFromWaitingRoom(roomName: string, studentId: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/livekit/waiting-room/admit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomName, studentId }),
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn('Admit from waiting room error:', e);
+    return false;
+  }
+}
+

@@ -26,7 +26,8 @@ import {
   Mic,
   ExternalLink,
   Share2,
-  CheckCircle2
+  CheckCircle2,
+  RotateCw
 } from 'lucide-react';
 import {
   Tutor,
@@ -42,6 +43,7 @@ import { TimetableGrid } from '../common/TimetableGrid';
 import { TutorSlotAvailabilityInspector } from '../common/TutorSlotAvailabilityInspector';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
+import { getCurrentOperationalDate, isLessonInDateRange, getRelativeOperationalDate, normalizeDateString } from '../../utils/timezone';
 import {
   sanitizeStudentForSupervisor,
   addTutorAttendanceRecord,
@@ -58,7 +60,7 @@ import { LessonMaterialEditModal } from '../modals/LessonMaterialEditModal';
 import { LessonEditModal } from '../modals/LessonEditModal';
 import { LessonModal } from '../modals/LessonModal';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
-import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, LiveRoomStatusItem } from '../../services/livekitService';
+import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, admitFromWaitingRoom, LiveRoomStatusItem } from '../../services/livekitService';
 import { computeTutorClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
 
 interface SupervisorDashboardProps {
@@ -81,6 +83,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   students,
   classes,
   lessons,
+  attendance = [],
   tutorAttendance,
   announcements,
   onRefreshData
@@ -115,15 +118,23 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     idleCount: 0
   });
 
+  // Re-evaluate time-based schedule every 20 seconds
+  const [supervisorTimeTick, setSupervisorTimeTick] = useState(0);
+  React.useEffect(() => {
+    const t = setInterval(() => setSupervisorTimeTick(v => v + 1), 20000);
+    return () => clearInterval(t);
+  }, []);
+
   // Dynamic computed real-time status for each tutor (combines LiveKit room presence + today's scheduled timetable slots)
   const supervisorTutorStatusMap = React.useMemo(() => {
     const map: Record<string, ReturnType<typeof computeTutorClassroomStatus>> = {};
     tutors.forEach(t => {
-      const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || null;
+      const slug = (t.tutorId || '').toLowerCase().replace(/\s+/g, '-');
+      const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || liveRoomsStatusMap[slug] || null;
       map[t.tutorId] = computeTutorClassroomStatus(t, classes, students, liveItem);
     });
     return map;
-  }, [tutors, classes, students, liveRoomsStatusMap]);
+  }, [tutors, classes, students, liveRoomsStatusMap, supervisorTimeTick]);
 
   // Aggregated dynamic status counts for Supervisor
   const supervisorStatusCounts = React.useMemo(() => {
@@ -136,9 +147,12 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     (Object.values(supervisorTutorStatusMap) as ClassroomComputedStatus[]).forEach(st => {
       if (st.status === 'running') running++;
       else if (st.status === 'tutor_waiting') tutorWaiting++;
-      else if (st.status === 'student_waiting') studentWaiting++;
       else if (st.status === 'scheduled_now') scheduledNow++;
-      else idle++;
+      else if (st.status === 'idle') idle++;
+
+      if (st.status === 'student_waiting' || st.hasStudentWaitingInQueue) {
+        studentWaiting++;
+      }
     });
 
     return {
@@ -150,6 +164,25 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       total: tutors.length
     };
   }, [supervisorTutorStatusMap, tutors.length]);
+
+  const refreshSupervisorLiveStatus = React.useCallback(async () => {
+    try {
+      const res = await fetchLiveRoomsStatus();
+      if (res?.rooms) {
+        const map: Record<string, LiveRoomStatusItem> = {};
+        res.rooms.forEach(r => {
+          map[r.tutorId] = r;
+          map[r.roomSlug] = r;
+          map[r.tutorId.toLowerCase()] = r;
+          map[r.tutorId.toLowerCase().replace(/\s+/g, '-')] = r;
+        });
+        setLiveRoomsStatusMap(map);
+        if (res.summary) setLiveRoomsSummary(res.summary);
+      }
+    } catch (e) {
+      console.warn('Live status refresh error:', e);
+    }
+  }, []);
 
   // Poll real-time room presence every 4 seconds
   React.useEffect(() => {
@@ -201,6 +234,9 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       if (!matchSearch) return false;
 
       if (tutorObserveStatusFilter === 'all') return true;
+      if (tutorObserveStatusFilter === 'student_waiting') {
+        return computed.status === 'student_waiting' || computed.hasStudentWaitingInQueue;
+      }
       return computed.status === tutorObserveStatusFilter;
     });
   }, [sortedObserveTutors, tutorObserveSearch, tutorObserveStatusFilter, supervisorTutorStatusMap, classes, students]);
@@ -322,15 +358,102 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   const [supervisorTimetableMode, setSupervisorTimetableMode] = useState<'grid' | 'availability'>('grid');
   const [supervisorSearchQuery, setSupervisorSearchQuery] = useState<string>('');
   const [supervisorSafetyFilter, setSupervisorSafetyFilter] = useState<'all' | 'audited' | 'flagged' | 'pending'>('all');
-  const [supervisorTimeMode, setSupervisorTimeMode] = useState<'all' | 'monthly' | 'weekly' | 'custom'>('weekly');
+  const [supervisorTimeMode, setSupervisorTimeMode] = useState<'all' | 'monthly' | '60days' | 'weekly' | 'custom'>('weekly');
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [supervisorStudentId, setSupervisorStudentId] = useState<string>('all');
-  const [supervisorStartDate, setSupervisorStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [supervisorEndDate, setSupervisorEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [supervisorAttendanceSubTab, setSupervisorAttendanceSubTab] = useState<'students' | 'tutors'>('students');
+  const [supervisorStudentAttFilter, setSupervisorStudentAttFilter] = useState<string>('all');
+  const [supervisorStatusAttFilter, setSupervisorStatusAttFilter] = useState<'all' | 'Present' | 'Late' | 'Absent' | 'Excused'>('all');
+  const [supervisorStudentAttSearchQuery, setSupervisorStudentAttSearchQuery] = useState<string>('');
+
+  // Unified Student Attendance Log for Supervisor
+  const unifiedSupervisorStudentAttendance = React.useMemo(() => {
+    const list: Array<{
+      id: string;
+      studentId: string;
+      studentName: string;
+      tutorId?: string;
+      date: string;
+      status: 'Present' | 'Late' | 'Absent' | 'Excused' | 'Student on Leave';
+      details: string;
+      source: 'Lesson Submission' | 'Manual Log';
+      markedBy?: string;
+    }> = [];
+
+    // 1. Ingest lessons
+    lessons.forEach(l => {
+      const st = (l.attendanceStatus || 'Present') as any;
+      let details = l.lessonCovered || 'Class conducted';
+      if (st === 'Absent') {
+        details = l.absentReason ? `Absent: ${l.absentReason}` : 'Student Absent';
+      } else if (st === 'Late') {
+        details = `${l.lateMinutes ? `${l.lateMinutes} min late — ` : ''}${l.lessonCovered || 'Class conducted'}`;
+      } else if (st === 'Student on Leave') {
+        details = 'Student on authorized leave';
+      }
+
+      list.push({
+        id: `lesson_${l.id}`,
+        studentId: l.studentId,
+        studentName: l.studentName || l.studentId,
+        tutorId: l.tutorId,
+        date: l.date,
+        status: st,
+        details,
+        source: 'Lesson Submission',
+        markedBy: l.tutorId || 'Tutor'
+      });
+    });
+
+    // 2. Ingest manual attendance records
+    attendance.forEach(a => {
+      const match = list.find(item => item.studentId === a.studentId && item.date === a.date);
+      if (!match) {
+        list.push({
+          id: `att_${a.id}`,
+          studentId: a.studentId,
+          studentName: a.studentName || a.studentId,
+          tutorId: a.tutorId,
+          date: a.date,
+          status: a.status as any,
+          details: a.notes || 'Manual administrative log',
+          source: 'Manual Log',
+          markedBy: a.markedBy || 'Supervisor'
+        });
+      }
+    });
+
+    return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [lessons, attendance]);
+
+  const filteredSupervisorStudentAttendance = React.useMemo(() => {
+    return unifiedSupervisorStudentAttendance.filter(rec => {
+      if (supervisorStudentAttFilter !== 'all' && rec.studentId !== supervisorStudentAttFilter) return false;
+      if (supervisorStatusAttFilter !== 'all' && rec.status !== supervisorStatusAttFilter) return false;
+      if (supervisorStudentAttSearchQuery.trim()) {
+        const q = supervisorStudentAttSearchQuery.toLowerCase().trim();
+        const matchName = (rec.studentName || '').toLowerCase().includes(q);
+        const matchId = (rec.studentId || '').toLowerCase().includes(q);
+        const matchTutor = (rec.tutorId || '').toLowerCase().includes(q);
+        const matchDetails = (rec.details || '').toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchTutor && !matchDetails) return false;
+      }
+      return true;
+    });
+  }, [unifiedSupervisorStudentAttendance, supervisorStudentAttFilter, supervisorStatusAttFilter, supervisorStudentAttSearchQuery]);
+
+  const supervisorStudentAttStats = React.useMemo(() => {
+    const base = filteredSupervisorStudentAttendance;
+    const total = base.length;
+    const present = base.filter(r => r.status === 'Present').length;
+    const late = base.filter(r => r.status === 'Late').length;
+    const absent = base.filter(r => r.status === 'Absent').length;
+    const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 100;
+    return { total, present, late, absent, rate };
+  }, [filteredSupervisorStudentAttendance]);
+
+  const [supervisorStartDate, setSupervisorStartDate] = useState<string>(() => getRelativeOperationalDate(-30));
+  const [supervisorEndDate, setSupervisorEndDate] = useState<string>(() => getCurrentOperationalDate());
 
   // Modal states for Supervisor editing and auditing
   const [selectedMaterialLesson, setSelectedMaterialLesson] = useState<Lesson | null>(null);
@@ -338,8 +461,6 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   const [selectedEditLesson, setSelectedEditLesson] = useState<Lesson | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [isNewLessonModalOpen, setIsNewLessonModalOpen] = useState<boolean>(false);
-
-
 
   const filteredLessons = lessons
     .filter(l => {
@@ -368,24 +489,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
         if (l.safetyStatus === 'Audited' || l.safetyStatus === 'Safe') return false;
       }
 
-      // Timeframe filter - guarantees today's lessons and upcoming timezone dates are never hidden!
-      if (supervisorTimeMode === 'all') return true;
-
-      const lessonTime = new Date(l.date).getTime();
-      const nowTime = Date.now();
-      const diffDays = (nowTime - lessonTime) / (1000 * 60 * 60 * 24);
-
-      if (supervisorTimeMode === 'weekly') {
-        // Safe: include today, future timezone dates, and up to 7 days past
-        return diffDays <= 7;
-      } else if (supervisorTimeMode === 'monthly') {
-        // Safe: include today, future timezone dates, and up to 31 days past
-        return diffDays <= 31;
-      } else if (supervisorTimeMode === 'custom') {
-        if (supervisorStartDate && l.date < supervisorStartDate) return false;
-        if (supervisorEndDate && l.date > supervisorEndDate) return false;
-      }
-      return true;
+      return isLessonInDateRange(l.date, supervisorTimeMode, supervisorStartDate, supervisorEndDate);
     })
     .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
 
@@ -625,10 +729,19 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                 <option value="all">All Classrooms ({sortedObserveTutors.length})</option>
                 <option value="running">🟢 Running Classes (Tutor & Student Joined) ({supervisorStatusCounts.running})</option>
                 <option value="tutor_waiting">🟡 Tutor in Room (Waiting for Student) ({supervisorStatusCounts.tutorWaiting})</option>
-                <option value="student_waiting">🟠 Student Waiting (Waiting for Tutor) ({supervisorStatusCounts.studentWaiting})</option>
+                <option value="student_waiting">🟠 Student Waiting (In Queue / Waiting Lounge) ({supervisorStatusCounts.studentWaiting})</option>
                 <option value="scheduled_now">🔵 Scheduled Class Right Now ({supervisorStatusCounts.scheduledNow})</option>
                 <option value="idle">⚪ Idle / Room Ready ({supervisorStatusCounts.idle})</option>
               </select>
+              <button
+                type="button"
+                onClick={() => refreshSupervisorLiveStatus()}
+                className="px-3 py-2 bg-[#FAF9F7] hover:bg-emerald-50 border border-[#D5D0C6] hover:border-emerald-300 rounded-xl text-xs font-bold text-[#161F1A] flex items-center space-x-1.5 transition-colors cursor-pointer"
+                title="Refresh live classroom status immediately"
+              >
+                <RotateCw className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                <span>Refresh Live</span>
+              </button>
             </div>
           </div>
 
@@ -675,12 +788,12 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                           ) : computed.status === 'tutor_waiting' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 border border-amber-300 text-amber-900 flex items-center space-x-1">
                               <span className="w-2 h-2 rounded-full bg-amber-500" />
-                              <span>Tutor in Room (Waiting for Student)</span>
+                              <span>Tutor Waiting for Student</span>
                             </span>
                           ) : computed.status === 'student_waiting' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-100 border border-orange-300 text-orange-900 flex items-center space-x-1">
-                              <span className="w-2 h-2 rounded-full bg-orange-500" />
-                              <span>Student in Waiting Room</span>
+                              <span className="w-2 h-2 rounded-full bg-orange-500 animate-ping" />
+                              <span>Student Waiting ({computed.waitingCount || 1} in Queue)</span>
                             </span>
                           ) : computed.status === 'scheduled_now' ? (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 border border-blue-300 text-blue-900 flex items-center space-x-1">
@@ -689,7 +802,14 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                             </span>
                           ) : (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700">
-                              Idle / Ready
+                              Room Ready
+                            </span>
+                          )}
+
+                          {/* Secondary Queue Pill when a class is RUNNING AND the next student is waiting in queue */}
+                          {computed.status === 'running' && computed.hasStudentWaitingInQueue && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-orange-100 border border-orange-400 text-orange-900 flex items-center space-x-1 shadow-2xs">
+                              <span>⏳ +{computed.waitingCount} in Waiting Lounge</span>
                             </span>
                           )}
                         </div>
@@ -715,7 +835,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                           <span className="text-[10px] bg-emerald-200/60 text-emerald-900 px-1.5 py-0.2 rounded font-mono">Live Call</span>
                         </div>
                         <p className="text-[11px] text-emerald-800">
-                          <strong>Active Student:</strong> {computed.studentsInRoom.length > 0 ? computed.studentsInRoom.join(', ') : (computed.scheduledStudentName || 'Assigned Student')}
+                          <strong>In Classroom:</strong> {computed.tutorNameInRoom || t.tutorId} + <strong>{computed.liveStudentsInRoom.length > 0 ? computed.liveStudentsInRoom.join(', ') : (computed.scheduledStudentName || 'Assigned Student')}</strong>
                         </p>
                         {computed.scheduledCourse && (
                           <p className="text-[10px] text-emerald-700 font-medium">
@@ -728,26 +848,81 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                     {/* Tutor Waiting Alert */}
                     {computed.status === 'tutor_waiting' && (
                       <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
-                        <div className="flex items-center space-x-1 font-bold text-amber-950">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
-                          <span>Tutor In Room • Waiting for Student to Join</span>
+                        <div className="flex items-center justify-between font-bold text-amber-950">
+                          <span className="flex items-center space-x-1">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                            <span>Tutor In Room • Waiting for Student</span>
+                          </span>
+                          <span className="text-[9px] bg-amber-200/70 text-amber-950 px-1.5 py-0.5 rounded font-mono">Room Open</span>
                         </div>
                         <p className="text-[11px] text-amber-800">
-                          Scheduled: <strong>{computed.scheduledStudentName || 'Assigned Student'}</strong> {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
+                          Scheduled: <strong>{computed.scheduledStudentName || 'Next Assigned Student'}</strong> {computed.scheduledTimeText ? `(${computed.scheduledTimeText})` : ''}
                         </p>
                       </div>
                     )}
 
-                    {/* Student Waiting Alert */}
-                    {computed.status === 'student_waiting' && (
-                      <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-900 space-y-1">
-                        <div className="flex items-center space-x-1 font-bold text-orange-950">
-                          <AlertTriangle className="w-3.5 h-3.5 text-orange-600 animate-pulse" />
-                          <span>Student Waiting in Queue • Tutor Not in Room</span>
+                    {/* Next Student Lounge / Waiting Queue Box (Shown whenever ANY student is waiting — whether class is running or tutor is absent) */}
+                    {(computed.hasStudentWaitingInQueue || computed.status === 'student_waiting') && (
+                      <div className="p-2.5 bg-orange-50 border border-orange-300 rounded-xl text-xs text-orange-950 space-y-2 shadow-2xs">
+                        <div className="flex items-center justify-between font-bold text-orange-950">
+                          <span className="flex items-center space-x-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-orange-600 animate-pulse shrink-0" />
+                            <span>
+                              {computed.status === 'running'
+                                ? `⏳ Next Student Ready in Queue (${computed.waitingCount})`
+                                : `🟠 Student Waiting in Room/Queue • Tutor Not Joined`}
+                            </span>
+                          </span>
+                          <span className="text-[10px] bg-orange-200/80 text-orange-950 px-1.5 py-0.5 rounded font-mono font-bold">
+                            {computed.status === 'running' ? '1-on-1 Lock' : 'Waiting'}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-orange-800">
-                          Waiting: <strong>{computed.waitingStudents.join(', ') || computed.scheduledStudentName || 'Student'}</strong>
-                        </p>
+
+                        {computed.waitingDetails && computed.waitingDetails.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {computed.waitingDetails.map((wItem, wIdx) => {
+                              const mins = Math.floor((wItem.waitingSeconds || 0) / 60);
+                              const secs = (wItem.waitingSeconds || 0) % 60;
+                              const waitTimeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                              return (
+                                <div
+                                  key={wItem.id || wIdx}
+                                  className="flex items-center justify-between gap-2 bg-white/90 px-2.5 py-1.5 rounded-lg border border-orange-200"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="px-1.5 py-0.2 bg-orange-100 text-orange-900 rounded text-[10px] font-mono font-extrabold">
+                                        #{wItem.queuePosition || wIdx + 1}
+                                      </span>
+                                      <strong className="text-[11px] text-[#161F1A] truncate">{wItem.name}</strong>
+                                    </div>
+                                    <span className="text-[10px] text-orange-800 block">
+                                      Waiting {waitTimeStr} • {wItem.reason === 'NEXT_STUDENT_QUEUE' ? 'Next Student Lounge' : 'Waiting for Tutor'}
+                                    </span>
+                                  </div>
+                                  {wItem.reason === 'NEXT_STUDENT_QUEUE' && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const canonicalRoom = getCanonicalRoomName({ tutorId: t.tutorId });
+                                        await admitFromWaitingRoom(canonicalRoom, wItem.id);
+                                        await refreshSupervisorLiveStatus();
+                                      }}
+                                      className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-[10px] font-bold shrink-0 cursor-pointer transition-colors"
+                                      title="Allow this waiting student into the live classroom immediately"
+                                    >
+                                      Allow In Now
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-orange-800">
+                            Waiting: <strong>{computed.waitingStudents.join(', ') || computed.scheduledStudentName || 'Student'}</strong>
+                          </p>
+                        )}
                       </div>
                     )}
 
@@ -994,125 +1169,307 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       {/* TAB 3: TUTOR ATTENDANCE & LATENESS */}
       {currentTab === 'supervisor_attendance' && (
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E3DFD7] pb-3">
             <div>
-              <h3 className="text-base font-bold text-[#161F1A]">Tutor Punctuality & Attendance Audit</h3>
+              <h3 className="text-base font-bold text-[#161F1A]">Academy Attendance & Punctuality Audit</h3>
               <p className="text-xs text-[#5A6B61]">
-                Record shifts, monitor login punctuality, and audit monthly attendance summaries across all tutors.
+                Audit student lesson attendance logs and monitor faculty shift punctuality.
               </p>
             </div>
-            <button
-              onClick={() => {
-                setSelectedAttendanceRecord(null);
-                setIsAttendanceModalOpen(true);
-              }}
-              className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-bold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Record Tutor Attendance</span>
-            </button>
-          </div>
 
-          {/* Monthly Attendance Summary per Tutor (Item 13) */}
-          <div className="space-y-2">
-            <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
-              Faculty Monthly Attendance Summaries
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {tutors.map(t => {
-                const s = tutorSummaryMap[t.tutorId] || { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
-                return (
-                  <div key={t.id} className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-1.5">
-                        <span className="text-xs font-bold text-[#2D8B5C]">{t.tutorId}</span>
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.availabilityStatus === 'Available' ? 'bg-[#25D366] animate-pulse' : 'bg-amber-500'}`} title={t.availabilityStatus || 'Busy'} />
-                      </div>
-                      <span className="text-[10px] text-[#5A6B61] font-bold">{t.realName}</span>
-                    </div>
-                    <div className="grid grid-cols-4 gap-1 text-center pt-1 border-t border-[#EAE6DE]">
-                      <div className="bg-[#FAF9F7] p-1.5 rounded">
-                        <span className="text-[10px] text-[#5A6B61] block">Total</span>
-                        <strong className="text-xs text-[#161F1A]">{s.total}</strong>
-                      </div>
-                      <div className="bg-emerald-50 p-1.5 rounded">
-                        <span className="text-[10px] text-emerald-800 block">Pres.</span>
-                        <strong className="text-xs text-emerald-800">{s.present}</strong>
-                      </div>
-                      <div className="bg-amber-50 p-1.5 rounded">
-                        <span className="text-[10px] text-amber-800 block">Late</span>
-                        <strong className="text-xs text-amber-800">{s.late}</strong>
-                      </div>
-                      <div className="bg-red-50 p-1.5 rounded">
-                        <span className="text-[10px] text-red-800 block">Abs.</span>
-                        <strong className="text-xs text-red-800">{s.absent}</strong>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            {/* Sub-tab Switcher */}
+            <div className="inline-flex rounded-lg border border-[#D5D0C6] p-0.5 bg-[#FAF9F7] text-xs">
+              <button
+                type="button"
+                onClick={() => setSupervisorAttendanceSubTab('students')}
+                className={`px-3 py-1.5 rounded-md font-semibold transition-all cursor-pointer ${
+                  supervisorAttendanceSubTab === 'students'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                🎓 Student Class Attendance
+              </button>
+              <button
+                type="button"
+                onClick={() => setSupervisorAttendanceSubTab('tutors')}
+                className={`px-3 py-1.5 rounded-md font-semibold transition-all cursor-pointer ${
+                  supervisorAttendanceSubTab === 'tutors'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                ⏰ Tutor Shifts & Attendance
+              </button>
             </div>
           </div>
 
-          {/* Audit Table */}
-          <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                <tr>
-                  <th className="py-3 px-4">Tutor ID</th>
-                  <th className="py-3 px-4">Faculty Name</th>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Time In (PKT)</th>
-                  <th className="py-3 px-4">Time Out</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Lateness</th>
-                  <th className="py-3 px-4">Marked By</th>
-                  <th className="py-3 px-4">Notes</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EAE6DE]">
-                {tutorAttendance.map(ta => (
-                  <tr key={ta.id} className="hover:bg-[#FAF9F7]/60">
-                    <td className="py-3 px-4 font-bold text-[#2D8B5C]">{ta.tutorId}</td>
-                    <td className="py-3 px-4 font-semibold text-[#161F1A]">{ta.tutorName}</td>
-                    <td className="py-3 px-4">{ta.date}</td>
-                    <td className="py-3 px-4 font-mono">{ta.timeIn || ta.loginTime || '—'}</td>
-                    <td className="py-3 px-4 font-mono">{ta.timeOut || '—'}</td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        ta.status === 'Present' || ta.status === 'On Time'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : ta.status === 'Late'
-                          ? 'bg-amber-100 text-amber-800'
-                          : ta.status === 'Absent'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}>
-                        {ta.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-[#5A6B61]">
-                      {ta.lateDurationMinutes && ta.lateDurationMinutes > 0 ? `${ta.lateDurationMinutes} mins` : '0 min'}
-                    </td>
-                    <td className="py-3 px-4 text-[#5A6B61] text-[11px]">{ta.markedBy || 'System'}</td>
-                    <td className="py-3 px-4 text-[#5A6B61]">{ta.notes || '—'}</td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={() => {
-                          setSelectedAttendanceRecord(ta);
-                          setIsAttendanceModalOpen(true);
-                        }}
-                        className="px-2.5 py-1 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors cursor-pointer"
+          {supervisorAttendanceSubTab === 'students' ? (
+            <div className="space-y-4">
+              {/* Filter Panel & Stats */}
+              <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#161F1A]">Student Attendance Overview</h4>
+                    <p className="text-xs text-[#5A6B61]">
+                      Real-time attendance automatically consolidated from lesson submissions.
+                    </p>
+                  </div>
+
+                  {/* Search Box & Student Selector */}
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Search Input Box */}
+                    <div className="flex items-center space-x-1.5 bg-[#FAF9F7] border border-[#D5D0C6] px-2.5 py-1.5 rounded-lg">
+                      <Search className="w-3.5 h-3.5 text-[#5A6B61]" />
+                      <input
+                        type="text"
+                        placeholder="Search Student Name or ID..."
+                        value={supervisorStudentAttSearchQuery}
+                        onChange={(e) => setSupervisorStudentAttSearchQuery(e.target.value)}
+                        className="bg-transparent border-none text-xs focus:outline-none w-44 sm:w-56"
+                      />
+                    </div>
+
+                    <div className="flex items-center space-x-1.5">
+                      <select
+                        value={supervisorStudentAttFilter}
+                        onChange={(e) => setSupervisorStudentAttFilter(e.target.value)}
+                        className="text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C] outline-none"
                       >
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                        <option value="all">All Students ({sanitizedStudents.length})</option>
+                        {sanitizedStudents.map(s => (
+                          <option key={s.studentId} value={s.studentId}>{s.name} ({s.studentId})</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  <div className="bg-[#FAF9F7] p-3 rounded-xl border border-[#E3DFD7] text-left">
+                    <span className="text-[10px] font-bold text-[#5A6B61] uppercase tracking-wider block">Total Sessions</span>
+                    <span className="text-lg font-bold text-[#161F1A] mt-0.5 block">{supervisorStudentAttStats.total}</span>
+                  </div>
+                  <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 text-left">
+                    <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Present</span>
+                    <span className="text-lg font-bold text-emerald-800 mt-0.5 block">{supervisorStudentAttStats.present}</span>
+                  </div>
+                  <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 text-left">
+                    <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Late</span>
+                    <span className="text-lg font-bold text-amber-800 mt-0.5 block">{supervisorStudentAttStats.late}</span>
+                  </div>
+                  <div className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-left">
+                    <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block">Absent</span>
+                    <span className="text-lg font-bold text-rose-800 mt-0.5 block">{supervisorStudentAttStats.absent}</span>
+                  </div>
+                  <div className="bg-[#EEF8F3] p-3 rounded-xl border border-[#2D8B5C]/30 text-left col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold text-[#1E5C3D] uppercase tracking-wider block">Attendance Rate</span>
+                    <span className="text-lg font-extrabold text-[#1E5C3D] mt-0.5 block">{supervisorStudentAttStats.rate}%</span>
+                  </div>
+                </div>
+
+                {/* Status Pills */}
+                <div className="flex items-center space-x-1.5 pt-1 border-t border-[#EAE6DE]">
+                  <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
+                  {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setSupervisorStatusAttFilter(st)}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                        supervisorStatusAttFilter === st
+                          ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                          : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                      }`}
+                    >
+                      {st === 'all' ? 'All Records' : st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="bg-white border border-[#E3DFD7] rounded-2xl overflow-hidden shadow-xs">
+                {filteredSupervisorStudentAttendance.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-[#5A6B61] italic">
+                    No student attendance logs match the selected filters.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                        <tr>
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Student</th>
+                          <th className="py-3 px-4">Tutor</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">Class Details / Reason</th>
+                          <th className="py-3 px-4">Source</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#EAE6DE]">
+                        {filteredSupervisorStudentAttendance.map(a => (
+                          <tr key={a.id} className="hover:bg-[#FAF9F7]/60">
+                            <td className="py-3 px-4 font-mono font-semibold text-[#161F1A]">{a.date}</td>
+                            <td className="py-3 px-4">
+                              <span className="font-bold text-[#161F1A] block">{a.studentName}</span>
+                              <span className="text-[10px] text-[#5A6B61] font-mono">{a.studentId}</span>
+                            </td>
+                            <td className="py-3 px-4 font-medium text-[#2D8B5C]">{a.tutorId || '—'}</td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center space-x-1 ${
+                                a.status === 'Present'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : a.status === 'Late'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : a.status === 'Absent'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-blue-100 text-blue-800 border border-blue-200'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  a.status === 'Present' ? 'bg-emerald-600' :
+                                  a.status === 'Late' ? 'bg-amber-600' :
+                                  a.status === 'Absent' ? 'bg-rose-600' : 'bg-blue-600'
+                                }`} />
+                                <span>{a.status}</span>
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-[#161F1A] max-w-xs truncate font-medium">
+                              {a.details || '—'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="text-[10px] font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded border border-gray-200">
+                                {a.source}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Tutor Shifts Audit */
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className="text-sm font-bold text-[#161F1A]">Tutor Shift Punctuality &amp; Lateness</h4>
+                <button
+                  onClick={() => {
+                    setSelectedAttendanceRecord(null);
+                    setIsAttendanceModalOpen(true);
+                  }}
+                  className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-bold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Record Tutor Attendance</span>
+                </button>
+              </div>
+
+              {/* Monthly Attendance Summary per Tutor (Item 13) */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
+                  Faculty Monthly Attendance Summaries
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {tutors.map(t => {
+                    const s = tutorSummaryMap[t.tutorId] || { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
+                    return (
+                      <div key={t.id} className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-xs font-bold text-[#2D8B5C]">{t.tutorId}</span>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.availabilityStatus === 'Available' ? 'bg-[#25D366] animate-pulse' : 'bg-amber-500'}`} title={t.availabilityStatus || 'Busy'} />
+                          </div>
+                          <span className="text-[10px] text-[#5A6B61] font-bold">{t.realName}</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 text-center pt-1 border-t border-[#EAE6DE]">
+                          <div className="bg-[#FAF9F7] p-1.5 rounded">
+                            <span className="text-[10px] text-[#5A6B61] block">Total</span>
+                            <strong className="text-xs text-[#161F1A]">{s.total}</strong>
+                          </div>
+                          <div className="bg-emerald-50 p-1.5 rounded">
+                            <span className="text-[10px] text-emerald-800 block">Pres.</span>
+                            <strong className="text-xs text-emerald-800">{s.present}</strong>
+                          </div>
+                          <div className="bg-amber-50 p-1.5 rounded">
+                            <span className="text-[10px] text-amber-800 block">Late</span>
+                            <strong className="text-xs text-amber-800">{s.late}</strong>
+                          </div>
+                          <div className="bg-red-50 p-1.5 rounded">
+                            <span className="text-[10px] text-red-800 block">Abs.</span>
+                            <strong className="text-xs text-red-800">{s.absent}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Audit Table */}
+              <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                    <tr>
+                      <th className="py-3 px-4">Tutor ID</th>
+                      <th className="py-3 px-4">Faculty Name</th>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Time In (PKT)</th>
+                      <th className="py-3 px-4">Time Out</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Lateness</th>
+                      <th className="py-3 px-4">Marked By</th>
+                      <th className="py-3 px-4">Notes</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#EAE6DE]">
+                    {tutorAttendance.map(ta => (
+                      <tr key={ta.id} className="hover:bg-[#FAF9F7]/60">
+                        <td className="py-3 px-4 font-bold text-[#2D8B5C]">{ta.tutorId}</td>
+                        <td className="py-3 px-4 font-semibold text-[#161F1A]">{ta.tutorName}</td>
+                        <td className="py-3 px-4">{ta.date}</td>
+                        <td className="py-3 px-4 font-mono">{ta.timeIn || ta.loginTime || '—'}</td>
+                        <td className="py-3 px-4 font-mono">{ta.timeOut || '—'}</td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            ta.status === 'Present' || ta.status === 'On Time'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : ta.status === 'Late'
+                              ? 'bg-amber-100 text-amber-800'
+                              : ta.status === 'Absent'
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {ta.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-[#5A6B61]">
+                          {ta.lateDurationMinutes && ta.lateDurationMinutes > 0 ? `${ta.lateDurationMinutes} mins` : '0 min'}
+                        </td>
+                        <td className="py-3 px-4 text-[#5A6B61] text-[11px]">{ta.markedBy || 'System'}</td>
+                        <td className="py-3 px-4 text-[#5A6B61]">{ta.notes || '—'}</td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => {
+                              setSelectedAttendanceRecord(ta);
+                              setIsAttendanceModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1256,18 +1613,19 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                 </div>
 
                 {/* Time Mode Pills */}
-                <div className="flex items-center space-x-1 bg-white p-1 rounded-lg border border-[#E3DFD7]">
-                  {(['weekly', 'monthly', 'custom', 'all'] as const).map(mode => (
+                <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-[#E3DFD7]">
+                  {(['weekly', 'monthly', '60days', 'custom', 'all'] as const).map(mode => (
                     <button
                       key={mode}
                       type="button"
                       disabled={isLoadingOlderLessons}
                       onClick={async () => {
                         setSupervisorTimeMode(mode);
-                        if (mode === 'monthly' || mode === 'all' || mode === 'custom') {
+                        if (mode === 'monthly' || mode === '60days' || mode === 'all' || mode === 'custom') {
                           setIsLoadingOlderLessons(true);
                           try {
-                            await loadOlderLessonsArchive({ daysBack: mode === 'monthly' ? 35 : 365 });
+                            const days = mode === 'monthly' ? 35 : mode === '60days' ? 65 : mode === 'custom' ? 180 : 365;
+                            await loadOlderLessonsArchive({ daysBack: days });
                             if (onRefreshData) await onRefreshData();
                           } finally {
                             setIsLoadingOlderLessons(false);
@@ -1280,15 +1638,17 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                           : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-gray-100'
                       }`}
                     >
-                      {mode === 'monthly'
-                        ? 'Monthly (31d)'
-                        : mode === 'weekly'
+                      {mode === 'weekly'
                         ? 'Last 7 Days'
+                        : mode === 'monthly'
+                        ? 'Last 30 Days'
+                        : mode === '60days'
+                        ? 'Last 60 Days'
                         : mode === 'custom'
                         ? 'Custom'
                         : isLoadingOlderLessons
                         ? 'Loading Archive...'
-                        : 'Load Older (All)'}
+                        : 'All Time'}
                     </button>
                   ))}
                 </div>

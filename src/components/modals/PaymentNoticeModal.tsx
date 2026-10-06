@@ -384,7 +384,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                 <span className="text-[10px] font-normal text-[#5A6B61]">(Optional photo or screenshot)</span>
               </label>
               <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> Auto-WebP Compressed
+                <Sparkles className="w-3 h-3" /> Fast Upload Ready
               </span>
             </div>
 

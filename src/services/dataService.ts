@@ -182,14 +182,23 @@ const SHARED_LISTENERS = new Map<string, SharedListenerEntry>();
 
 function getQueryKey(ref: any, pathHint?: string): string {
   try {
-    if (pathHint && (ref as any)._query) {
-      const q = (ref as any)._query;
-      return `${pathHint}_${JSON.stringify(q.filters || [])}_${q.limit || 'all'}`;
+    if (ref && typeof ref.path === 'string' && !ref._query) {
+      return `doc:${ref.path}`;
     }
-    if (ref.path) return ref.path;
-    if ((ref as any)._query?.path?.segments) return (ref as any)._query.path.segments.join('/');
+    const q = ref?._query || ref?._delegate?._query;
+    if (q) {
+      const pathStr = q.path?.segments ? q.path.segments.join('/') : (pathHint || 'query');
+      const filtersStr = Array.isArray(q.filters)
+        ? q.filters.map((f: any) => `${f.field?.segments?.join('.') || f.field || ''}:${f.op || ''}:${JSON.stringify(f.value)}`).join('|')
+        : '';
+      const orderStr = Array.isArray(q.explicitOrderBy)
+        ? q.explicitOrderBy.map((o: any) => `${o.field?.segments?.join('.') || ''}:${o.dir || ''}`).join('|')
+        : '';
+      const limitStr = q.limit ?? 'all';
+      return `q:${pathHint || pathStr}:f(${filtersStr}):o(${orderStr}):l(${limitStr})`;
+    }
   } catch (_) {}
-  return pathHint || 'global_listener';
+  return pathHint || `listener_${Math.random().toString(36).slice(2)}`;
 }
 
 /**
@@ -638,7 +647,123 @@ export function validateClassBooking(
 // Enforce strict location/timezone privacy:
 // Tutors & Supervisors are NEVER provided student local time, country, or timezone.
 // ==========================================
+const inMemoryPendingTutorAssignments = new Set<string>();
+const inMemoryDismissedTutorAssignments = new Set<string>();
+
+export function getDismissedTutorAssignmentKeys(): string[] {
+  try {
+    const raw = localStorage.getItem('it_dismissed_tutor_assignments_v2');
+    const fromStorage: string[] = raw ? JSON.parse(raw) : [];
+    fromStorage.forEach(k => inMemoryDismissedTutorAssignments.add(k));
+  } catch {}
+  return Array.from(inMemoryDismissedTutorAssignments);
+}
+
+export function getPendingTutorAssignmentKeys(): string[] {
+  try {
+    const raw = localStorage.getItem('it_new_tutor_assignments_v2');
+    const fromStorage: string[] = raw ? JSON.parse(raw) : [];
+    fromStorage.forEach(k => inMemoryPendingTutorAssignments.add(k));
+  } catch {}
+  return Array.from(inMemoryPendingTutorAssignments);
+}
+
+export function markNewStudentAssignmentForTutor(tutorId?: string, studentId?: string, studentName?: string): void {
+  if (!tutorId || (!studentId && !studentName)) return;
+  const normTutor = normalizeTutorId(tutorId);
+  const idUpper = (studentId || '').trim().toUpperCase();
+  const nameLower = (studentName || '').trim().toLowerCase();
+  const keyId = `${normTutor}__${idUpper}`;
+  const keyName = `${normTutor}__${nameLower}`;
+
+  if (idUpper) {
+    inMemoryPendingTutorAssignments.add(keyId);
+    inMemoryDismissedTutorAssignments.delete(keyId);
+    inMemoryDismissedTutorAssignments.delete(idUpper);
+  }
+  if (nameLower) {
+    inMemoryPendingTutorAssignments.add(keyName);
+    inMemoryDismissedTutorAssignments.delete(keyName);
+    inMemoryDismissedTutorAssignments.delete(nameLower);
+  }
+
+  try {
+    localStorage.setItem('it_new_tutor_assignments_v2', JSON.stringify(Array.from(inMemoryPendingTutorAssignments)));
+    localStorage.setItem('it_dismissed_tutor_assignments_v2', JSON.stringify(Array.from(inMemoryDismissedTutorAssignments)));
+  } catch {}
+}
+
+export function dismissNewStudentAssignmentForTutor(tutorId: string, studentIdentifiers: string[]): void {
+  const normTutor = normalizeTutorId(tutorId);
+  const keysToDismiss: string[] = [];
+  studentIdentifiers.forEach(ident => {
+    if (!ident) return;
+    const upper = ident.trim().toUpperCase();
+    const lower = ident.trim().toLowerCase();
+    keysToDismiss.push(`${normTutor}__${upper}`);
+    keysToDismiss.push(`${normTutor}__${lower}`);
+    keysToDismiss.push(upper);
+    keysToDismiss.push(lower);
+  });
+
+  // Always update in-memory sets first (works even inside cross-origin / sandboxed preview iframes)
+  keysToDismiss.forEach(k => {
+    inMemoryDismissedTutorAssignments.add(k);
+    inMemoryPendingTutorAssignments.delete(k);
+  });
+
+  try {
+    const rawDismissed = localStorage.getItem('it_dismissed_tutor_assignments_v2');
+    const dismissedList: string[] = rawDismissed ? JSON.parse(rawDismissed) : [];
+    dismissedList.forEach(k => inMemoryDismissedTutorAssignments.add(k));
+    localStorage.setItem('it_dismissed_tutor_assignments_v2', JSON.stringify(Array.from(inMemoryDismissedTutorAssignments)));
+
+    const rawPending = localStorage.getItem('it_new_tutor_assignments_v2');
+    if (rawPending) {
+      const pendingList: string[] = JSON.parse(rawPending);
+      const dismissSet = new Set(keysToDismiss);
+      const remaining = pendingList.filter(k => !dismissSet.has(k));
+      inMemoryPendingTutorAssignments.clear();
+      remaining.forEach(k => inMemoryPendingTutorAssignments.add(k));
+      localStorage.setItem('it_new_tutor_assignments_v2', JSON.stringify(remaining));
+    }
+  } catch {}
+
+  // Also clear isNewTutorAssignment flag in CACHE.students and Firestore so it never reappears across refreshes
+  const idSet = new Set(studentIdentifiers.filter(Boolean).map(s => s.trim().toLowerCase()));
+  if (CACHE.students) {
+    const matchedDocs: Student[] = [];
+    CACHE.students = CACHE.students.map(s => {
+      const matchId = s.studentId && idSet.has(s.studentId.trim().toLowerCase());
+      const matchName = s.name && idSet.has(s.name.trim().toLowerCase());
+      if (matchId || matchName) {
+        matchedDocs.push(s);
+        return { ...s, isNewTutorAssignment: false };
+      }
+      return s;
+    });
+    if (matchedDocs.length > 0) {
+      saveCachedCollection('students', CACHE.students);
+      if (!isFirestoreQuotaExceeded()) {
+        matchedDocs.forEach(s => {
+          if (s.id && !s.id.startsWith('seed') && !s.id.startsWith('local')) {
+            updateDoc(doc(db, STUDENTS_COL, s.id), { isNewTutorAssignment: false }).catch(() => {});
+          }
+        });
+      }
+    }
+  }
+}
+
 export function sanitizeStudentForTutor(student: Student): TutorStudentView {
+  const dismissedKeys = getDismissedTutorAssignmentKeys();
+  const normTutor = normalizeTutorId(student.assignedTutorId || '');
+  const idUpper = (student.studentId || '').trim().toUpperCase();
+  const nameLower = (student.name || '').trim().toLowerCase();
+  const isDismissed =
+    (idUpper && (dismissedKeys.includes(idUpper) || (normTutor && dismissedKeys.includes(`${normTutor}__${idUpper}`)))) ||
+    (nameLower && (dismissedKeys.includes(nameLower) || (normTutor && dismissedKeys.includes(`${normTutor}__${nameLower}`))));
+
   return {
     studentId: student.studentId,
     name: student.name,
@@ -653,7 +778,8 @@ export function sanitizeStudentForTutor(student: Student): TutorStudentView {
     isOnLeave: student.isOnLeave,
     leaveStartDate: student.leaveStartDate,
     leaveEndDate: student.leaveEndDate,
-    leaveReason: student.leaveReason
+    leaveReason: student.leaveReason,
+    isNewTutorAssignment: isDismissed ? false : Boolean(student.isNewTutorAssignment)
   };
 }
 
@@ -887,8 +1013,12 @@ export async function addStudent(studentData: Omit<Student, 'id'>): Promise<stri
     joiningDate,
     trialStartDate,
     assignedTutorId,
-    studentId: finalStudentId
+    studentId: finalStudentId,
+    isNewTutorAssignment: true
   };
+  if (assignedTutorId && assignedTutorId !== 'Unassigned') {
+    markNewStudentAssignmentForTutor(assignedTutorId, finalStudentId, newStudent.name);
+  }
   CACHE.students = [newStudent, ...(CACHE.students || [])];
   saveCachedCollection('students', CACHE.students);
   recalculateAndPersistSummaryMetrics().catch(() => {});
@@ -919,6 +1049,10 @@ export async function addStudent(studentData: Omit<Student, 'id'>): Promise<stri
 
 export async function updateStudent(id: string, updates: Partial<Student>): Promise<void> {
   const current = CACHE.students?.find(s => s.id === id);
+  if (current && updates.assignedTutorId && updates.assignedTutorId !== 'Unassigned' && !isSameTutor(updates.assignedTutorId, current.assignedTutorId)) {
+    updates.isNewTutorAssignment = true;
+    markNewStudentAssignmentForTutor(updates.assignedTutorId, current.studentId, updates.name || current.name);
+  }
   // Optimistic cache update
   if (CACHE.students) {
     CACHE.students = CACHE.students.map(s => s.id === id ? { ...s, ...updates } : s);
@@ -1196,8 +1330,10 @@ export async function shiftStudentTutor(params: {
 
   const studentUpdates: Partial<Student> = {
     assignedTutorId: newTutorId,
-    privateAdminNotes: updatedNotes
+    privateAdminNotes: updatedNotes,
+    isNewTutorAssignment: true
   };
+  markNewStudentAssignmentForTutor(newTutorId, student.studentId, student.name);
 
   // 2. Optimistic local cache updates
   if (CACHE.students) {
@@ -2284,13 +2420,13 @@ export function deduplicateAttendance(records: AttendanceRecord[]): AttendanceRe
   );
 }
 
-export function getRecentLessonCutoffDate(days = 7): string {
+export function getRecentLessonCutoffDate(days = 90): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
 }
 
-export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string, daysWindow = 7): () => void {
+export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string, daysWindow = 90): () => void {
   const getFallback = () => deduplicateLessons(CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS));
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
@@ -2298,8 +2434,8 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
   }
   const cutoffDateStr = getRecentLessonCutoffDate(daysWindow);
   const q = filterTutorId
-    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(60))
-    : query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(250));
+    ? query(collection(db, LESSONS_COL), where('tutorId', '==', filterTutorId), limit(300))
+    : query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(600));
 
   return safeOnSnapshot(
     q,
@@ -2309,10 +2445,9 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
       const cleaned = cleanExpiredScreenshots(items);
       const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
       const mergedMap = new Map<string, Lesson>();
+      localItems.forEach(l => mergedMap.set(l.id, l));
+      currentList.forEach(l => mergedMap.set(l.id, l));
       cleaned.forEach(l => mergedMap.set(l.id, l));
-      localItems.forEach(l => {
-        if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
-      });
       const merged = deduplicateLessons(Array.from(mergedMap.values()));
       CACHE.lessons = merged;
       saveCachedCollection('lessons', merged);
@@ -2326,7 +2461,7 @@ export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filter
 }
 
 export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
-  if (CACHE.lessons && !forceRefresh) {
+  if (CACHE.lessons && !forceRefresh && CACHE.lessons.length > 0) {
     return deduplicateLessons(CACHE.lessons);
   }
   const localItems = loadCachedCollection<Lesson[]>('lessons') || [];
@@ -2337,18 +2472,16 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
-      const cutoffDateStr = getRecentLessonCutoffDate(7);
+      const cutoffDateStr = getRecentLessonCutoffDate(90);
       const snap = await getDocs(
-        query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(250))
+        query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(600))
       );
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
         const cleaned = cleanExpiredScreenshots(items);
         const mergedMap = new Map<string, Lesson>();
+        localItems.forEach(l => mergedMap.set(l.id, l));
         cleaned.forEach(l => mergedMap.set(l.id, l));
-        localItems.forEach(l => {
-          if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
-        });
         const merged = deduplicateLessons(Array.from(mergedMap.values()));
         CACHE.lessons = merged;
         saveCachedCollection('lessons', merged);
@@ -2367,22 +2500,28 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
 
 /**
  * On-demand historical lesson archive loader.
- * Only executes when a user explicitly clicks "Monthly (30 Days)" or "All Time / Load Older Archive",
- * keeping everyday page loads strictly scoped to the last 7 days.
+ * Loads lessons for 30 days, 60 days, custom ranges, or full historical archive.
  */
 export async function loadOlderLessonsArchive(
-  daysOrAll: 30 | 'all' | { daysBack?: number; tutorId?: string; studentIds?: string[] } = 30,
+  daysOrAll: number | 'all' | { daysBack?: number; tutorId?: string; studentIds?: string[]; startDate?: string; endDate?: string } = 60,
   filterTutorId?: string,
   filterStudentIds?: string[]
 ): Promise<Lesson[]> {
-  let resolvedDaysOrAll: 30 | 'all' = 30;
+  let resolvedDaysBack = 90;
+  let isAll = false;
+  let customStartDate = '';
+
   if (typeof daysOrAll === 'object' && daysOrAll !== null) {
     if (daysOrAll.tutorId) filterTutorId = daysOrAll.tutorId;
     if (daysOrAll.studentIds) filterStudentIds = daysOrAll.studentIds;
-    resolvedDaysOrAll = 'all';
-  } else if (daysOrAll === 'all' || daysOrAll === 30) {
-    resolvedDaysOrAll = daysOrAll;
+    if (daysOrAll.daysBack) resolvedDaysBack = daysOrAll.daysBack;
+    if (daysOrAll.startDate) customStartDate = daysOrAll.startDate;
+  } else if (daysOrAll === 'all') {
+    isAll = true;
+  } else if (typeof daysOrAll === 'number') {
+    resolvedDaysBack = daysOrAll;
   }
+
   const localItems = CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || [];
   if (isFirestoreQuotaExceeded()) {
     return deduplicateLessons(localItems);
@@ -2394,23 +2533,23 @@ export async function loadOlderLessonsArchive(
       q = query(
         collection(db, LESSONS_COL),
         where('studentId', 'in', validStudentIds),
-        limit(resolvedDaysOrAll === 'all' ? 300 : 100)
+        limit(isAll ? 600 : 250)
       );
     } else if (filterTutorId) {
       q = query(
         collection(db, LESSONS_COL),
         where('tutorId', '==', filterTutorId),
-        limit(resolvedDaysOrAll === 'all' ? 400 : 150)
+        limit(isAll ? 600 : 350)
       );
-    } else if (resolvedDaysOrAll === 30) {
-      const cutoff30 = getRecentLessonCutoffDate(31);
+    } else if (!isAll) {
+      const cutoffDate = customStartDate || getRecentLessonCutoffDate(resolvedDaysBack + 2);
       q = query(
         collection(db, LESSONS_COL),
-        where('date', '>=', cutoff30),
-        limit(600)
+        where('date', '>=', cutoffDate),
+        limit(800)
       );
     } else {
-      q = query(collection(db, LESSONS_COL), limit(1000));
+      q = query(collection(db, LESSONS_COL), limit(1200));
     }
 
     const snap = await getDocs(q);
@@ -2418,10 +2557,8 @@ export async function loadOlderLessonsArchive(
       const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Lesson));
       const cleaned = cleanExpiredScreenshots(items);
       const mergedMap = new Map<string, Lesson>();
+      localItems.forEach(l => mergedMap.set(l.id, l));
       cleaned.forEach(l => mergedMap.set(l.id, l));
-      localItems.forEach(l => {
-        if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
-      });
       const merged = deduplicateLessons(Array.from(mergedMap.values()));
       CACHE.lessons = merged;
       saveCachedCollection('lessons', merged);
@@ -3038,36 +3175,70 @@ export function isAnnouncementTargetedForRole(ann: Announcement, role: UserRole)
   return false;
 }
 
-export async function getAnnouncements(forceRefresh = false): Promise<Announcement[]> {
-  if (CACHE.announcements && !forceRefresh) {
-    return CACHE.announcements;
-  }
-  const localItems = loadCachedCollection<Announcement[]>('announcements') || [];
-  if (localItems.length > 0 && !forceRefresh) {
-    CACHE.announcements = localItems;
-    return localItems;
-  }
+const DELETED_ANNOUNCEMENTS_KEY = 'it_deleted_announcement_ids';
+
+function getDeletedAnnouncementIds(): Set<string> {
   try {
-    if (!isFirestoreQuotaExceeded()) {
-      const snap = await getDocs(collection(db, ANNOUNCEMENTS_COL));
-      if (!snap.empty) {
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Announcement));
-        const mergedMap = new Map<string, Announcement>();
-        items.forEach(a => mergedMap.set(a.id, a));
-        localItems.forEach(a => { if (!mergedMap.has(a.id)) mergedMap.set(a.id, a); });
-        const merged = Array.from(mergedMap.values());
-        CACHE.announcements = merged;
-        saveCachedCollection('announcements', merged);
-        return merged;
-      }
+    const raw = localStorage.getItem(DELETED_ANNOUNCEMENTS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
     }
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, ANNOUNCEMENTS_COL);
-  }
-  const fallback = localItems.length > 0 ? localItems : (isCleanDataMode() ? [] : SEED_ANNOUNCEMENTS);
-  CACHE.announcements = fallback;
-  saveCachedCollection('announcements', fallback);
-  return fallback;
+  } catch {}
+  return new Set();
+}
+
+function markAnnouncementIdDeleted(id: string): void {
+  try {
+    const set = getDeletedAnnouncementIds();
+    set.add(id);
+    localStorage.setItem(DELETED_ANNOUNCEMENTS_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+function unmarkAnnouncementIdDeleted(id: string): void {
+  try {
+    const set = getDeletedAnnouncementIds();
+    if (set.has(id)) {
+      set.delete(id);
+      localStorage.setItem(DELETED_ANNOUNCEMENTS_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch {}
+}
+
+export function getAnnouncements(forceRefresh = false): Promise<Announcement[]> {
+  return (async () => {
+    const deletedIds = getDeletedAnnouncementIds();
+    if (CACHE.announcements && !forceRefresh) {
+      const filtered = CACHE.announcements.filter(a => !deletedIds.has(a.id));
+      CACHE.announcements = filtered;
+      return filtered;
+    }
+    const localItems = (loadCachedCollection<Announcement[]>('announcements') || []).filter(a => !deletedIds.has(a.id));
+    if (localItems.length > 0 && !forceRefresh && isCachedCollectionFresh('announcements', 30000)) {
+      CACHE.announcements = localItems;
+      return localItems;
+    }
+    try {
+      if (!isFirestoreQuotaExceeded()) {
+        const snap = await getDocs(collection(db, ANNOUNCEMENTS_COL));
+        const liveItems = snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as Announcement))
+          .filter(a => !deletedIds.has(a.id));
+        liveItems.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        CACHE.announcements = liveItems;
+        saveCachedCollection('announcements', liveItems);
+        return liveItems;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, ANNOUNCEMENTS_COL);
+    }
+    const fallback = (localItems.length > 0 ? localItems : (isCleanDataMode() ? [] : SEED_ANNOUNCEMENTS))
+      .filter(a => !deletedIds.has(a.id));
+    CACHE.announcements = fallback;
+    saveCachedCollection('announcements', fallback);
+    return fallback;
+  })();
 }
 
 export async function getAnnouncementsForRole(role: UserRole, forceRefresh = false): Promise<Announcement[]> {
@@ -3075,36 +3246,158 @@ export async function getAnnouncementsForRole(role: UserRole, forceRefresh = fal
   return all.filter(a => isAnnouncementTargetedForRole(a, role));
 }
 
+export function subscribeToAnnouncements(
+  callback: (announcements: Announcement[]) => void,
+  role?: UserRole
+): () => void {
+  const emitFiltered = (allItems: Announcement[]) => {
+    const deletedIds = getDeletedAnnouncementIds();
+    const clean = (allItems || [])
+      .filter(a => a && a.id && !deletedIds.has(a.id))
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    CACHE.announcements = clean;
+    saveCachedCollection('announcements', clean);
+    const result = role ? clean.filter(a => isAnnouncementTargetedForRole(a, role)) : clean;
+    callback(result);
+  };
+
+  const handleLocalEvent = (e: Event) => {
+    const custom = e as CustomEvent<Announcement[]>;
+    if (custom.detail && Array.isArray(custom.detail)) {
+      const deletedIds = getDeletedAnnouncementIds();
+      const clean = custom.detail.filter(a => a && a.id && !deletedIds.has(a.id));
+      const result = role ? clean.filter(a => isAnnouncementTargetedForRole(a, role)) : clean;
+      callback(result);
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('it_announcements_updated', handleLocalEvent);
+  }
+
+  if (isFirestoreQuotaExceeded()) {
+    const initial = CACHE.announcements || loadCachedCollection<Announcement[]>('announcements') || [];
+    emitFiltered(initial);
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('it_announcements_updated', handleLocalEvent);
+      }
+    };
+  }
+
+  const unsub = safeOnSnapshot(
+    collection(db, ANNOUNCEMENTS_COL),
+    (snap) => {
+      if (snap && snap.docs) {
+        const liveItems = snap.docs.map((d: any) => ({ id: d.id, ...d.data() } as Announcement));
+        emitFiltered(liveItems);
+      }
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, ANNOUNCEMENTS_COL);
+      const fallback = CACHE.announcements || loadCachedCollection<Announcement[]>('announcements') || [];
+      emitFiltered(fallback);
+    },
+    `${ANNOUNCEMENTS_COL}_live_stream`
+  );
+
+  return () => {
+    unsub();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('it_announcements_updated', handleLocalEvent);
+    }
+  };
+}
+
+function broadcastAnnouncementsUpdate(items: Announcement[]): void {
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('it_announcements_updated', { detail: items }));
+    } catch {}
+  }
+}
+
 export async function addAnnouncement(announcement: Omit<Announcement, 'id'>): Promise<string> {
   const docRef = doc(collection(db, ANNOUNCEMENTS_COL));
   const docId = docRef.id;
+  unmarkAnnouncementIdDeleted(docId);
   const newAnn: Announcement = { id: docId, ...announcement };
-  CACHE.announcements = [newAnn, ...(CACHE.announcements || [])];
+  CACHE.announcements = [newAnn, ...(CACHE.announcements || []).filter(a => a.id !== docId)];
   saveCachedCollection('announcements', CACHE.announcements);
+  broadcastAnnouncementsUpdate(CACHE.announcements);
 
   if (!isFirestoreQuotaExceeded()) {
-    setDoc(docRef, sanitizeFirestoreObject(announcement)).catch((err) => {
+    try {
+      await setDoc(docRef, sanitizeFirestoreObject(announcement));
+    } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, ANNOUNCEMENTS_COL);
-    });
+    }
   }
   return docId;
 }
 
+export async function updateAnnouncement(id: string, updates: Partial<Announcement>): Promise<void> {
+  const existingList = CACHE.announcements || loadCachedCollection<Announcement[]>('announcements') || [];
+  const existing = existingList.find(a => a.id === id);
+
+  const updatedAnn: Announcement = {
+    ...(existing || {
+      id,
+      title: '',
+      content: '',
+      targetRoles: ['student', 'parent', 'tutor', 'supervisor'],
+      targetRole: 'all',
+      pinned: false,
+      authorName: 'Academic Directorate',
+      createdAt: new Date().toISOString()
+    }),
+    ...updates,
+    targetRoles: updates.targetRoles || existing?.targetRoles || ['student', 'parent', 'tutor', 'supervisor'],
+    id
+  };
+
+  if (updates.startDate === '' || updates.startDate === undefined) {
+    delete updatedAnn.startDate;
+  }
+  if (updates.endDate === '' || updates.endDate === undefined) {
+    delete updatedAnn.endDate;
+  }
+
+  CACHE.announcements = existingList.map(a => (a.id === id ? updatedAnn : a));
+  saveCachedCollection('announcements', CACHE.announcements);
+  broadcastAnnouncementsUpdate(CACHE.announcements);
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const annRef = doc(db, ANNOUNCEMENTS_COL, id);
+      const { id: _ignoreId, ...docPayload } = updatedAnn;
+      await setDoc(annRef, sanitizeFirestoreObject(docPayload));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, ANNOUNCEMENTS_COL);
+    }
+  }
+}
+
 export async function deleteAnnouncement(id: string): Promise<string> {
   try {
-    let annData = CACHE.announcements?.find(a => a.id === id) || null;
+    markAnnouncementIdDeleted(id);
+    const currentList = CACHE.announcements || loadCachedCollection<Announcement[]>('announcements') || [];
+    let annData = currentList.find(a => a.id === id) || null;
     const annRef = doc(db, ANNOUNCEMENTS_COL, id);
 
-    if (!annData) {
-      const snap = await getDoc(annRef);
-      if (snap.exists()) {
-        annData = { id: snap.id, ...snap.data() } as Announcement;
-      }
+    if (!annData && !isFirestoreQuotaExceeded()) {
+      try {
+        const snap = await getDoc(annRef);
+        if (snap.exists()) {
+          annData = { id: snap.id, ...snap.data() } as Announcement;
+        }
+      } catch {}
     }
 
-    if (CACHE.announcements) {
-      CACHE.announcements = CACHE.announcements.filter(a => a.id !== id);
-    }
+    const updatedAnnouncements = currentList.filter(a => a.id !== id);
+    CACHE.announcements = updatedAnnouncements;
+    saveCachedCollection('announcements', updatedAnnouncements);
+    broadcastAnnouncementsUpdate(updatedAnnouncements);
 
     if (annData) {
       const trashItem: Omit<TrashRecord, 'id'> = {
@@ -3116,21 +3409,30 @@ export async function deleteAnnouncement(id: string): Promise<string> {
         deletedAt: new Date().toISOString()
       };
       let trashId = `trash-${Date.now()}`;
-      try {
-        const trashDoc = await addDoc(collection(db, TRASH_COL), trashItem);
-        trashId = trashDoc.id;
-      } catch (err) {
-        console.warn('Could not persist to deleted_records, saving locally:', err);
+      if (!isFirestoreQuotaExceeded()) {
+        try {
+          const trashDoc = await addDoc(collection(db, TRASH_COL), trashItem);
+          trashId = trashDoc.id;
+        } catch (err) {
+          console.warn('Could not persist to deleted_records, saving locally:', err);
+        }
       }
       const record = { id: trashId, ...trashItem };
       MEMORY_TRASH.unshift(record);
-      if (CACHE.trash) CACHE.trash.unshift(record);
+      if (CACHE.trash) {
+        CACHE.trash.unshift(record);
+        saveCachedCollection('trash', CACHE.trash);
+      }
 
-      await deleteDoc(annRef);
+      if (!isFirestoreQuotaExceeded()) {
+        await deleteDoc(annRef);
+      }
       return trashId;
     }
 
-    await deleteDoc(annRef);
+    if (!isFirestoreQuotaExceeded()) {
+      await deleteDoc(annRef);
+    }
     return '';
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, ANNOUNCEMENTS_COL);
@@ -3141,41 +3443,170 @@ export async function deleteAnnouncement(id: string): Promise<string> {
 // ==========================================
 // INTERNAL CHAT / MESSAGING (Attachments, Voice Notes, Read Receipts, WhatsApp Status)
 // ==========================================
-export function subscribeToMessages(threadId: string, callback: (messages: ChatMessage[]) => void, messageLimit = 35) {
-  if (isFirestoreQuotaExceeded()) {
-    const cached = getCachedMessages(threadId);
-    callback(cached);
-    return () => {};
+export function canonicalizeChatThreadId(threadId: string): string {
+  const raw = (threadId || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('desk_tutor_')) {
+    const suffix = raw.replace(/^desk_tutor_/i, '').trim();
+    const numMatch = suffix.match(/\d+/);
+    if (numMatch) {
+      return `desk_tutor_tutor_${numMatch[0]}`;
+    }
+    return `desk_tutor_${suffix.replace(/\s+/g, '_').toLowerCase()}`;
+  }
+  if (raw.startsWith('dm_admin_student_')) {
+    const suffix = raw.replace(/^dm_admin_student_/i, '').trim();
+    return `dm_admin_student_${suffix.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  }
+  if (raw.startsWith('dm_admin_parent_')) {
+    const suffix = raw.replace(/^dm_admin_parent_/i, '').trim();
+    return `dm_admin_parent_${suffix.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  }
+  return raw;
+}
+
+export function getThreadIdVariants(threadId: string): string[] {
+  const raw = (threadId || '').trim();
+  if (!raw) return [];
+  const canonical = canonicalizeChatThreadId(raw);
+  const variants = new Set<string>([raw, canonical]);
+
+  if (raw.startsWith('desk_tutor_') || canonical.startsWith('desk_tutor_')) {
+    const numMatch = raw.match(/\d+/);
+    if (numMatch) {
+      const num = numMatch[0];
+      variants.add(`desk_tutor_tutor_${num}`);
+      variants.add(`desk_tutor_Tutor ${num}`);
+      variants.add(`desk_tutor_tutor ${num}`);
+      variants.add(`desk_tutor_tutor${num}`);
+      variants.add(`desk_tutor_tutor-${num}`);
+    }
+  } else if (raw.startsWith('dm_admin_student_') || canonical.startsWith('dm_admin_student_')) {
+    const suffix = raw.replace(/^dm_admin_student_/i, '');
+    variants.add(`dm_admin_student_${suffix}`);
+    variants.add(`dm_admin_student_${suffix.toUpperCase()}`);
+    variants.add(`dm_admin_student_${suffix.toLowerCase()}`);
+    variants.add(`dm_admin_student_${suffix.toLowerCase().replace(/[^a-z0-9]/g, '_')}`);
+    variants.add(`dm_admin_student_${suffix.toUpperCase().replace(/_/g, '-')}`);
+  }
+  return Array.from(variants).filter(Boolean).slice(0, 10);
+}
+
+export function subscribeToMessages(threadId: string, callback: (messages: ChatMessage[]) => void, messageLimit = 100) {
+  const canonicalThreadId = canonicalizeChatThreadId(threadId) || threadId;
+  const variants = getThreadIdVariants(threadId);
+
+  const mergeAndSortMessages = (liveMsgs: ChatMessage[]): ChatMessage[] => {
+    const cached = getCachedMessages(canonicalThreadId);
+    const variantCached = canonicalThreadId !== threadId ? getCachedMessages(threadId) : [];
+    const allLocal = [...cached, ...variantCached];
+
+    const map = new Map<string, ChatMessage>();
+    // 1. Add live Firestore messages first (authoritative)
+    liveMsgs.forEach(m => {
+      if (m && m.id) {
+        map.set(m.id, m);
+      }
+    });
+
+    // 2. Preserve any very recent local/optimistic messages not yet echoed by Firestore
+    const nowMs = Date.now();
+    allLocal.forEach(localMsg => {
+      if (!localMsg || !localMsg.id) return;
+      if (map.has(localMsg.id)) return;
+
+      const isLocalTemp = localMsg.id.startsWith('local_msg_') || localMsg.id.startsWith('temp_');
+      const msgTimeMs = localMsg.timestamp ? new Date(localMsg.timestamp).getTime() : 0;
+      const isRecent = msgTimeMs > 0 && Math.abs(nowMs - msgTimeMs) < 30000;
+
+      // Check if an equivalent live message already exists in map (same sender, text, and close timestamp)
+      const hasEquivalentLive = liveMsgs.some(live =>
+        live.senderId === localMsg.senderId &&
+        live.text === localMsg.text &&
+        Math.abs((new Date(live.timestamp).getTime() || 0) - msgTimeMs) < 15000
+      );
+
+      if (!hasEquivalentLive && (isFirestoreQuotaExceeded() || isLocalTemp || isRecent)) {
+        map.set(localMsg.id, localMsg);
+      }
+    });
+
+    const combined = Array.from(map.values());
+    combined.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+    const windowed = messageLimit > 0 && combined.length > messageLimit
+      ? combined.slice(-messageLimit)
+      : combined;
+
+    saveCachedMessages(canonicalThreadId, windowed);
+    if (canonicalThreadId !== threadId) {
+      saveCachedMessages(threadId, windowed);
+    }
+    return windowed;
+  };
+
+  const handleLocalChatEvent = (e: Event) => {
+    const custom = e as CustomEvent<{ threadId: string; messages?: ChatMessage[] }>;
+    if (custom.detail && variants.includes(custom.detail.threadId)) {
+      const cached = getCachedMessages(canonicalThreadId);
+      callback(cached);
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('it_chat_messages_updated', handleLocalChatEvent);
   }
 
-  const q = query(
-    collection(db, MESSAGES_COL),
-    where('threadId', '==', threadId),
-    limit(messageLimit)
-  );
-  return safeOnSnapshot(
+  if (isFirestoreQuotaExceeded()) {
+    const cached = getCachedMessages(canonicalThreadId);
+    callback(cached);
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('it_chat_messages_updated', handleLocalChatEvent);
+      }
+    };
+  }
+
+  // Serve cached messages immediately on mount so UI is never blank while snapshot initializes
+  const initialCached = getCachedMessages(canonicalThreadId);
+  if (initialCached.length > 0) {
+    callback(initialCached);
+  }
+
+  const q = variants.length > 1
+    ? query(collection(db, MESSAGES_COL), where('threadId', 'in', variants))
+    : query(collection(db, MESSAGES_COL), where('threadId', '==', canonicalThreadId));
+
+  const unsub = safeOnSnapshot(
     q,
     (snapshot) => {
-      const msgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ChatMessage));
-      msgs.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
-      saveCachedMessages(threadId, msgs);
-      callback(msgs);
+      const liveMsgs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as ChatMessage));
+      const finalMsgs = mergeAndSortMessages(liveMsgs);
+      callback(finalMsgs);
     },
     (_error) => {
-      const cached = getCachedMessages(threadId);
+      const cached = getCachedMessages(canonicalThreadId);
       callback(cached);
     },
-    MESSAGES_COL
+    `${MESSAGES_COL}_thread_${canonicalThreadId}`
   );
+
+  return () => {
+    unsub();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('it_chat_messages_updated', handleLocalChatEvent);
+    }
+  };
 }
 
 export async function sendMessage(messageData: Omit<ChatMessage, 'id'>): Promise<string> {
   const now = new Date().toISOString();
+  const canonicalThreadId = canonicalizeChatThreadId(messageData.threadId) || messageData.threadId;
   const initialSeenBy = messageData.senderId ? [messageData.senderId] : [];
   const initialDeliveredTo = messageData.senderId ? [messageData.senderId] : [];
   
   const payload = sanitizeFirestoreObject({
     ...messageData,
+    threadId: canonicalThreadId,
     status: 'sent',
     delivered: true,
     read: false,
@@ -3186,37 +3617,58 @@ export async function sendMessage(messageData: Omit<ChatMessage, 'id'>): Promise
     listenedBy: messageData.listenedBy || []
   });
 
-  const localMsgId = `local_msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const localMsg: ChatMessage = { id: localMsgId, ...payload } as ChatMessage;
-  appendLocalMessage(messageData.threadId, localMsg);
-
   if (!isFirestoreQuotaExceeded()) {
     try {
       const docRef = await addDoc(collection(db, MESSAGES_COL), payload);
+      const savedMsg: ChatMessage = { id: docRef.id, ...payload } as ChatMessage;
+      appendLocalMessage(canonicalThreadId, savedMsg);
+      if (canonicalThreadId !== messageData.threadId) {
+        appendLocalMessage(messageData.threadId, savedMsg);
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('it_chat_messages_updated', { detail: { threadId: canonicalThreadId } }));
+      }
       return docRef.id;
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, MESSAGES_COL);
+      const localMsgId = `local_msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const localMsg: ChatMessage = { id: localMsgId, ...payload } as ChatMessage;
+      appendLocalMessage(canonicalThreadId, localMsg);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('it_chat_messages_updated', { detail: { threadId: canonicalThreadId } }));
+      }
       return localMsgId;
     }
   }
 
+  const localMsgId = `local_msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const localMsg: ChatMessage = { id: localMsgId, ...payload } as ChatMessage;
+  appendLocalMessage(canonicalThreadId, localMsg);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('it_chat_messages_updated', { detail: { threadId: canonicalThreadId } }));
+  }
   return localMsgId;
 }
 
 export async function markMessagesAsDelivered(threadId: string, currentUserId: string): Promise<void> {
   if (isFirestoreQuotaExceeded()) return;
   try {
-    const q = query(
-      collection(db, MESSAGES_COL),
-      where('threadId', '==', threadId),
-      where('read', '==', false),
-      limit(25)
-    );
+    const variants = getThreadIdVariants(threadId);
+    const q = variants.length > 1
+      ? query(
+          collection(db, MESSAGES_COL),
+          where('threadId', 'in', variants)
+        )
+      : query(
+          collection(db, MESSAGES_COL),
+          where('threadId', '==', canonicalizeChatThreadId(threadId) || threadId)
+        );
     const snap = await getDocs(q);
     const now = new Date().toISOString();
     const updates = snap.docs
       .filter(d => {
         const data = d.data() as ChatMessage;
+        if (data.read) return false;
         if (data.senderId === currentUserId) return false;
         const delList = Array.isArray(data.deliveredTo) ? data.deliveredTo : [];
         return !delList.includes(currentUserId);
@@ -3243,12 +3695,16 @@ export async function markMessagesAsDelivered(threadId: string, currentUserId: s
 export async function markThreadMessagesAsRead(threadId: string, currentUserId: string): Promise<void> {
   if (isFirestoreQuotaExceeded()) return;
   try {
-    const q = query(
-      collection(db, MESSAGES_COL),
-      where('threadId', '==', threadId),
-      where('read', '==', false),
-      limit(25)
-    );
+    const variants = getThreadIdVariants(threadId);
+    const q = variants.length > 1
+      ? query(
+          collection(db, MESSAGES_COL),
+          where('threadId', 'in', variants)
+        )
+      : query(
+          collection(db, MESSAGES_COL),
+          where('threadId', '==', canonicalizeChatThreadId(threadId) || threadId)
+        );
     const snap = await getDocs(q);
     const now = new Date().toISOString();
     const updates = snap.docs
@@ -3519,13 +3975,12 @@ export function subscribeToUnreadMessages(
   const q = scopedThreads && scopedThreads.length > 0
     ? query(
         collection(db, MESSAGES_COL),
-        where('threadId', 'in', scopedThreads),
-        limit(40)
+        where('threadId', 'in', scopedThreads)
       )
     : query(
         collection(db, MESSAGES_COL),
         where('read', '==', false),
-        limit(60)
+        limit(100)
       );
 
   return safeOnSnapshot(
@@ -3541,6 +3996,7 @@ export function subscribeToUnreadMessages(
 
         // 1. Ignore own messages, system calls, deleted messages
         if (msg.senderId === userId || msg.senderId === 'system_call') return;
+        if (userRole === 'tutor' && msg.senderRole === 'tutor' && isSameTutor(msg.senderId, userId)) return;
         if (msg.deletedForEveryone) return;
         if (userRole === 'admin' && msg.senderRole === 'admin' && (msg.senderId === 'admin' || msg.senderId === userId)) return;
 
@@ -3552,8 +4008,12 @@ export function subscribeToUnreadMessages(
         // 3. Check authorization for thread
         if (!isUserAuthorizedForThread(msg.threadId, userId, userRole)) return;
 
+        const canonicalTid = canonicalizeChatThreadId(msg.threadId) || msg.threadId;
         total++;
-        byThread[msg.threadId] = (byThread[msg.threadId] || 0) + 1;
+        byThread[canonicalTid] = (byThread[canonicalTid] || 0) + 1;
+        if (canonicalTid !== msg.threadId) {
+          byThread[msg.threadId] = (byThread[msg.threadId] || 0) + 1;
+        }
       });
 
       callback(total, byThread);
@@ -3561,7 +4021,7 @@ export function subscribeToUnreadMessages(
     (_err) => {
       callback(0, {});
     },
-    MESSAGES_COL
+    `${MESSAGES_COL}_unread_${userRole}_${userId}`
   );
 }
 
@@ -3628,13 +4088,12 @@ export function subscribeToIncomingMessages(
   const q = scopedThreads && scopedThreads.length > 0
     ? query(
         collection(db, MESSAGES_COL),
-        where('threadId', 'in', scopedThreads),
-        limit(25)
+        where('threadId', 'in', scopedThreads)
       )
     : query(
         collection(db, MESSAGES_COL),
         orderBy('timestamp', 'desc'),
-        limit(10)
+        limit(25)
       );
 
   let isInitialLoad = true;
@@ -3651,19 +4110,26 @@ export function subscribeToIncomingMessages(
           const msg = { id: change.doc.id, ...change.doc.data() } as ChatMessage;
           if (!msg || !msg.threadId) return;
 
+          const canonicalTid = canonicalizeChatThreadId(msg.threadId) || msg.threadId;
+          appendLocalMessage(canonicalTid, msg);
+          if (canonicalTid !== msg.threadId) {
+            appendLocalMessage(msg.threadId, msg);
+          }
+
           // Ignore if sent by self
           if (msg.senderId === userId) return;
+          if (userRole === 'tutor' && msg.senderRole === 'tutor' && isSameTutor(msg.senderId, userId)) return;
           if (userRole === 'admin' && msg.senderRole === 'admin' && (msg.senderId === 'admin' || msg.senderId === userId)) return;
 
           // Check if user is recipient or authorized for this thread
           if (isUserAuthorizedForThread(msg.threadId, userId, userRole)) {
-            onNewMessage(msg);
+            onNewMessage({ ...msg, threadId: canonicalTid });
           }
         }
       });
     },
     (_err) => {},
-    MESSAGES_COL
+    `${MESSAGES_COL}_incoming_${userRole}_${userId}`
   );
 }
 
@@ -5035,8 +5501,11 @@ export async function restoreTrashRecord(trashId: string): Promise<{ success: bo
     // 6. Restore Announcement
     else if (itemType === 'announcement') {
       const { id, ...cleanData } = data;
+      unmarkAnnouncementIdDeleted(originalId);
       const restoredAnn: Announcement = { id: originalId, ...cleanData };
-      CACHE.announcements = [restoredAnn, ...(CACHE.announcements || [])];
+      CACHE.announcements = [restoredAnn, ...(CACHE.announcements || []).filter(a => a.id !== originalId)];
+      saveCachedCollection('announcements', CACHE.announcements);
+      broadcastAnnouncementsUpdate(CACHE.announcements);
       await setDoc(doc(db, ANNOUNCEMENTS_COL, originalId), sanitizeFirestoreObject(cleanData));
     }
     // 7. Restore Tutor Attendance
@@ -5448,7 +5917,7 @@ export async function getStudentAndParentScopedData(
     if (finalStudentIds.length > 0) {
       const [clsSnap, lesSnap] = await Promise.all([
         getDocs(query(collection(db, CLASSES_COL), where('studentId', 'in', finalStudentIds))),
-        getDocs(query(collection(db, LESSONS_COL), where('studentId', 'in', finalStudentIds), limit(30)))
+        getDocs(query(collection(db, LESSONS_COL), where('studentId', 'in', finalStudentIds), limit(150)))
       ]);
 
       let mergedClasses = baseClasses;
@@ -5623,7 +6092,7 @@ export async function fetchAllAcademyData(
       getTutors(forceRefresh).catch(() => fallbackData.tutors),
       getClassesForTutor(targetId, forceRefresh).catch(() => fallbackData.classes.filter(c => isSameTutor(c.tutorId, targetId))),
       getStudentsForTutorDirect(targetId, forceRefresh).catch(() => fallbackData.students.filter(s => isSameTutor(s.assignedTutorId, targetId))),
-      getLessonsForTutor(targetId, 25).catch(() => fallbackData.lessons.filter(l => isSameTutor(l.tutorId, targetId))),
+      getLessonsForTutor(targetId, 300).catch(() => fallbackData.lessons.filter(l => isSameTutor(l.tutorId, targetId))),
       getAnnouncementsForRole('tutor', forceRefresh).catch(() => fallbackData.announcements),
       getAcademySettings(forceRefresh).catch(() => fallbackData.settings)
     ]);

@@ -39,9 +39,11 @@ import {
   subscribeToLessons,
   subscribeToStudents,
   subscribeToClasses,
+  subscribeToAnnouncements,
   subscribeToStudentAndParentLiveUpdates,
   loadCachedCollection,
   deduplicateTutors,
+  deduplicateLessons,
   ensureFeesLoaded,
   ensureSalariesLoaded,
   ensureReferralsLoaded,
@@ -122,9 +124,22 @@ const MainPortal: React.FC = () => {
     return true;
   });
 
+  const resolvedTutorIdForSession = React.useMemo(() => {
+    if (role !== 'tutor') return '';
+    if (adminViewingRole === 'tutor' && adminViewingTargetId) {
+      return adminViewingTargetId;
+    }
+    if (userProfile?.tutorId) return userProfile.tutorId;
+    const emailMatch = (userProfile?.email || '').match(/tutor\s*[_-]?(\d+)/i);
+    if (emailMatch) return `Tutor ${emailMatch[1]}`;
+    const nameMatch = (userProfile?.displayName || '').match(/tutor\s*[_-]?(\d+)/i);
+    if (nameMatch) return `Tutor ${nameMatch[1]}`;
+    return '';
+  }, [role, adminViewingRole, adminViewingTargetId, userProfile?.tutorId, userProfile?.email, userProfile?.displayName]);
+
   const currentUserId = (adminViewingRole && adminViewingTargetId)
-    ? `${role}_${adminViewingTargetId}`
-    : (role === 'tutor' && userProfile?.tutorId ? userProfile.tutorId : (userProfile?.uid || 'user'));
+    ? (role === 'tutor' ? resolvedTutorIdForSession : `${role}_${adminViewingTargetId}`)
+    : (role === 'tutor' && resolvedTutorIdForSession ? resolvedTutorIdForSession : (userProfile?.uid || 'user'));
 
   // Auto-request desktop notifications for workplace/academy devices
   useEffect(() => {
@@ -305,7 +320,7 @@ const MainPortal: React.FC = () => {
       if (data.students && data.students.length > 0) setStudents(data.students);
       if (data.tutors && data.tutors.length > 0) setTutors(deduplicateTutors(data.tutors));
       if (data.classes && data.classes.length > 0) setClasses(data.classes);
-      if (data.lessons) setLessons(data.lessons);
+      if (data.lessons) setLessons(prev => deduplicateLessons([...(data.lessons || []), ...prev]));
       if (data.fees && data.fees.length > 0) setFees(data.fees);
       if (data.salaries && data.salaries.length > 0) setSalaries(data.salaries);
       if (data.referrals && data.referrals.length > 0) setReferrals(data.referrals);
@@ -358,6 +373,16 @@ const MainPortal: React.FC = () => {
     }
   }, [currentTab, role]);
 
+  // Real-time subscribe to announcements for ALL roles (Admin, Supervisor, Tutor, Student, Parent)
+  // Ensures edits and deletions by Admin immediately take effect across every dashboard
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = subscribeToAnnouncements((liveAnnouncements) => {
+      setAnnouncements(liveAnnouncements);
+    }, role);
+    return () => unsub();
+  }, [currentUser, role]);
+
   // Real-time subscribe to tutors list to capture Live Availability Status immediately (Admin & Supervisor only)
   useEffect(() => {
     if (!currentUser) return;
@@ -399,7 +424,7 @@ const MainPortal: React.FC = () => {
     if (role !== 'admin' && role !== 'supervisor' && role !== 'tutor') return;
     const filterTutorId = role === 'tutor' ? (userProfile?.tutorId || currentUserId) : undefined;
     const unsub = subscribeToLessons((updatedLessons) => {
-      setLessons(updatedLessons);
+      setLessons(prev => deduplicateLessons([...updatedLessons, ...prev]));
     }, filterTutorId);
     return () => unsub();
   }, [currentUser, role, userProfile?.tutorId, currentUserId]);
@@ -570,14 +595,36 @@ const MainPortal: React.FC = () => {
     switch (role) {
       case 'admin':
         return 'IslamicTuition — Director Administration';
-      case 'tutor':
-        return `Faculty Portal — ${userProfile?.displayName || 'Tutor'}`;
+      case 'tutor': {
+        const activeTutorObj = tutors.find(t =>
+          (adminViewingRole === 'tutor' && adminViewingTargetId && (t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)) ||
+          (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
+          (userProfile?.email && t.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+        ) || tutors[0];
+        const assignedId = activeTutorObj?.tutorId || userProfile?.tutorId || 'Tutor 1';
+        const originalName = activeTutorObj?.realName || userProfile?.displayName || 'Faculty';
+        return originalName && originalName !== assignedId
+          ? `${assignedId} (${originalName}) — Faculty Portal`
+          : `${assignedId} — Faculty Portal`;
+      }
       case 'supervisor':
         return 'Academic Supervision & Quality Control';
-      case 'student':
-        return `Student Academy Portal — ${userProfile?.displayName || 'Student'}`;
-      case 'parent':
-        return `Parent Guardian Portal — ${userProfile?.displayName || 'Parent'}`;
+      case 'student': {
+        const activeStu = students.find(s =>
+          (adminViewingRole === 'student' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+          (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
+          (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+        );
+        return `Student Academy Portal — ${activeStu?.name || (!adminViewingRole && userProfile?.displayName) || 'Student'}`;
+      }
+      case 'parent': {
+        const activeParStu = students.find(s =>
+          (adminViewingRole === 'parent' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)) ||
+          (!adminViewingRole && userProfile?.linkedStudentIds?.includes(s.studentId)) ||
+          (!adminViewingRole && userProfile?.email && s.parentEmail?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+        );
+        return `Parent Guardian Portal — ${activeParStu?.parentName || (!adminViewingRole && userProfile?.displayName) || 'Parent'}`;
+      }
       default:
         return 'IslamicTuition Portal';
     }
@@ -610,6 +657,7 @@ const MainPortal: React.FC = () => {
           onClose={() => setIsSidebarOpen(false)}
           unreadCount={unreadMessagesTotal}
           tutors={tutors}
+          students={students}
         />
       </div>
 
@@ -636,7 +684,7 @@ const MainPortal: React.FC = () => {
 
         <Header
           title={getHeaderTitle()}
-          subtitle="Real-Time Persistent Quran Academy Management System"
+          subtitle={role === 'admin' || role === 'supervisor' ? 'Academy Operations & Faculty Management Portal' : 'Online Quran & Islamic Studies Learning Portal'}
           tutors={tutors}
           students={students}
           announcements={announcements}
@@ -690,7 +738,7 @@ const MainPortal: React.FC = () => {
               <TutorDashboard
                 currentTab={currentTab}
                 setCurrentTab={setCurrentTab}
-                currentTutorId={adminViewingTargetId || userProfile?.tutorId || ''}
+                currentTutorId={adminViewingTargetId || resolvedTutorIdForSession || userProfile?.tutorId || ''}
                 tutors={tutors}
                 students={students}
                 classes={classes}

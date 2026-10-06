@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { StudentFee, Lesson, Student } from '../types';
+import { getTutorDisplayId } from './tutorPrivacy';
 
 /**
  * Generates an official IslamicTuition Fee Invoice / Receipt PDF
@@ -205,8 +206,13 @@ export function generateStudentReportPDF(
   doc.text(`Student ID: ${student.studentId}`, 25, y + 16);
   doc.text(`Course: ${student.courseType}`, 25, y + 23);
 
-  doc.text(`Assigned Tutor: ${student.assignedTutorId}`, 110, y + 8);
-  doc.text(`Status: ${student.status} (${student.trialSessionsCompleted}/${student.trialSessionsTotal} Trials)`, 110, y + 16);
+  doc.text(`Assigned Tutor: ${getTutorDisplayId(student.assignedTutorId) || 'Assigned Tutor'}`, 110, y + 8);
+  const statusDisplay = student.isOnLeave
+    ? 'On Leave'
+    : student.status === 'Trial'
+    ? `Trial (${student.trialSessionsCompleted || 0}/${student.trialSessionsTotal || 5} Sessions)`
+    : (student.status || 'Active');
+  doc.text(`Status: ${statusDisplay}`, 110, y + 16);
   doc.text(`Country/TZ: ${student.country} (${student.timezone})`, 110, y + 23);
 
   y += 38;
@@ -402,7 +408,7 @@ export function generateWeeklyProgressReportPDF(data: WeeklyReportData): void {
   doc.text(`Course: ${data.student.courseType}`, 25, y + 24);
 
   doc.text(`Parent: ${data.student.parentName || 'Guardian'}`, 110, y + 8);
-  doc.text(`Assigned Faculty: ${data.tutorName || data.student.assignedTutorId}`, 110, y + 16);
+  doc.text(`Assigned Faculty: ${getTutorDisplayId(data.student.assignedTutorId || data.tutorName) || 'Tutor'}`, 110, y + 16);
   doc.text(`Country / Timezone: ${data.student.country} (${data.student.timezone})`, 110, y + 24);
 
   // Section 1: Weekly Attendance & Punctuality Breakdown
@@ -556,7 +562,7 @@ Here is the weekly Quran & Islamic Studies performance summary for *${data.stude
 
 📅 *Period:* ${data.startDate} to ${data.endDate}
 📖 *Course:* ${data.student.courseType}
-👳 *Tutor:* ${data.tutorName || data.student.assignedTutorId}
+👳 *Tutor:* ${getTutorDisplayId(data.student.assignedTutorId || data.tutorName) || 'Tutor'}
 
 --------------------------------------
 📈 *Attendance & Punctuality:*

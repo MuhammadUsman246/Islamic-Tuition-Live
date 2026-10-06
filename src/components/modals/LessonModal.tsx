@@ -13,6 +13,7 @@ import { loadCachedCollection, updateLesson, isSameTutor } from '../../services/
 import { compressAndConvertToWebP } from '../../utils/chatMediaUtils';
 import { getCurrentOperationalDate } from '../../utils/timezone';
 import { SmartTextCorrectionInput } from '../common/SmartTextCorrectionInput';
+import { getTutorDisplayId } from '../../utils/tutorPrivacy';
 
 // Helper to get current operational date aligned with Academy shift
 // (e.g. before 12:00 PM PKT corresponds to previous calendar date, matching student US working day)
@@ -97,7 +98,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
       .map(s => ({
         value: s.studentId,
         label: `${s.name} (${s.studentId}${s.age !== undefined ? ` • Age: ${s.age}` : ''})`,
-        subLabel: `${s.courseType || 'Quran'}${s.age !== undefined ? ` • ${s.age} yrs` : ''} • Tutor: ${s.assignedTutorId || 'Unassigned'}`,
+        subLabel: `${s.courseType || 'Quran'}${s.age !== undefined ? ` • ${s.age} yrs` : ''} • Tutor: ${getTutorDisplayId(s.assignedTutorId) || 'Unassigned'}`,
         badge: s.status === 'Trial' ? 'Trial' : s.status,
         badgeColor:
           s.status === 'Trial'
@@ -1343,7 +1344,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                       Norani Qaida Selection (Page → Lesson → Section → Line) <span className="text-red-500">*</span>
                     </span>
                     <span className="text-[10px] text-[#5A6B61] bg-white px-2 py-0.5 rounded border border-[#D5D0C6]">
-                      Canonically Validated
+                      Standard Qaida Pages
                     </span>
                   </div>
 
@@ -1533,7 +1534,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({
                     <span>Lesson Page / Screenshots (Max 3)</span>
                   </label>
                   <span className="text-[10px] text-[#5A6B61]">
-                    Auto-converted to WebP & compressed
+                    Up to 3 images per lesson
                   </span>
                 </div>
 

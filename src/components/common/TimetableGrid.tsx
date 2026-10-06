@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TimetableClass, DayOfWeek, UserRole, PKT_TIME_SLOTS, Student, Tutor } from '../../types';
-import { Sparkles, Plus, Clock, Calendar, Filter, Search, LayoutGrid, List, Star, X } from 'lucide-react';
+import { Sparkles, Plus, Clock, Calendar, Filter, Search, LayoutGrid, List, Star, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ClassDetailModal } from '../modals/ClassDetailModal';
 import { getCurrentTeachingDay } from '../../utils/timezone';
+import { getTutorDisplayId } from '../../utils/tutorPrivacy';
+import { isSameTutor } from '../../services/dataService';
 
 interface TimetableGridProps {
   classes: TimetableClass[];
@@ -454,9 +456,65 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
     (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
   );
 
+  // Horizontal scroll & mouse wheel / drag navigation for Faculty Colors bar
+  const facultyBarScrollRef = useRef<HTMLDivElement | null>(null);
+  const isDraggingFacultyBarRef = useRef<boolean>(false);
+  const didDragFacultyBarRef = useRef<boolean>(false);
+  const dragStartXRef = useRef<number>(0);
+  const dragStartScrollLeftRef = useRef<number>(0);
+
+  useEffect(() => {
+    const el = facultyBarScrollRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const rawDelta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (rawDelta !== 0) {
+        e.preventDefault();
+        // Move ~5-6 tutor badges (~650px) per wheel notch
+        const step = Math.sign(rawDelta) * Math.max(640, Math.abs(rawDelta) * 5.5);
+        el.scrollBy({ left: step, behavior: 'smooth' });
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [uniqueTutors.length, selectedTutorFilter]);
+
+  const handleFacultyBarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = facultyBarScrollRef.current;
+    if (!el) return;
+    isDraggingFacultyBarRef.current = true;
+    didDragFacultyBarRef.current = false;
+    dragStartXRef.current = e.pageX - el.offsetLeft;
+    dragStartScrollLeftRef.current = el.scrollLeft;
+  };
+
+  const handleFacultyBarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDraggingFacultyBarRef.current) return;
+    const el = facultyBarScrollRef.current;
+    if (!el) return;
+    const x = e.pageX - el.offsetLeft;
+    const walk = x - dragStartXRef.current;
+    if (Math.abs(walk) > 4) {
+      didDragFacultyBarRef.current = true;
+    }
+    el.scrollLeft = dragStartScrollLeftRef.current - walk * 2.8;
+  };
+
+  const handleFacultyBarMouseUpOrLeave = () => {
+    isDraggingFacultyBarRef.current = false;
+  };
+
+  const scrollFacultyBar = (direction: 'left' | 'right') => {
+    const el = facultyBarScrollRef.current;
+    if (!el) return;
+    // Scroll ~5-6 tutor names (~650px) at once
+    el.scrollBy({ left: direction === 'left' ? -650 : 650, behavior: 'smooth' });
+  };
+
   // Selected detail class student & tutor references
   const detailStudent = selectedDetailClass ? students.find(s => s.studentId === selectedDetailClass.studentId) : null;
-  const detailTutor = selectedDetailClass ? tutors.find(t => t.tutorId === selectedDetailClass.tutorId) : null;
+  const detailTutor = selectedDetailClass ? tutors.find(t => isSameTutor(t.tutorId, selectedDetailClass.tutorId)) : null;
 
   return (
     <div id="master_timetable_container" className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
@@ -467,7 +525,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-[#2D8B5C]"></span>
             <h3 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
-              {role === 'tutor' ? 'Faculty Timetable (PKT)' : 'Master Timetable (PKT)'}
+              {role === 'tutor' ? 'My Teaching Schedule (PKT)' : role === 'student' || role === 'parent' ? 'Weekly Class Schedule' : 'Master Timetable (PKT)'}
             </h3>
           </div>
 
@@ -526,7 +584,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
           </div>
 
           {/* Tutor Filter for Admin & Supervisor */}
-          {role !== 'tutor' && (
+          {(role === 'admin' || role === 'supervisor') && (
             <div className="flex items-center space-x-1">
               <Filter className="w-3.5 h-3.5 text-[#5A6B61]" />
               <select
@@ -545,7 +603,9 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                   [...tutors]
                     .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
                     .map((t, idx) => (
-                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
+                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
+                        {(role === 'admin' || role === 'supervisor') && t.realName ? `${t.tutorId} (${t.realName})` : t.tutorId}
+                      </option>
                     ))
                 ) : (
                   uniqueTutors.map((tId, idx) => (
@@ -574,35 +634,87 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
         </div>
       </div>
 
-      {/* Interactive Faculty Color Bar */}
-      {selectedTutorFilter === 'all' && uniqueTutors.length > 0 && (
-        <div className="px-3.5 py-1.5 bg-[#FAF9F7] border-b border-[#E3DFD7] flex items-center gap-2 overflow-x-auto text-[11px]">
-          <span className="font-bold text-[#5A6B61] text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1.5">
+      {/* Interactive Faculty Color Bar with Left/Right Buttons + Mouse Wheel & Drag Navigation */}
+      {uniqueTutors.length > 0 && (role === 'admin' || role === 'supervisor') && (
+        <div className="px-2.5 sm:px-3.5 py-1.5 bg-[#FAF9F7] border-b border-[#E3DFD7] flex items-center gap-1.5 text-[11px] select-none">
+          <span className="font-bold text-[#5A6B61] text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1.5 pr-1">
             <span className="w-2 h-2 rounded-full bg-[#2D8B5C]"></span>
             Faculty Colors:
           </span>
-          <div className="flex items-center gap-1.5 min-w-max">
+
+          {/* Small Left Scroll Button */}
+          <button
+            type="button"
+            onClick={() => scrollFacultyBar('left')}
+            className="w-6 h-6 rounded-md border border-[#D5D0C6] bg-white hover:bg-emerald-50 hover:border-[#2D8B5C] text-[#5A6B61] hover:text-[#1E5C3D] flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-3xs active:scale-95"
+            title="Scroll faculty list left (or use mouse wheel / drag on tutors)"
+            aria-label="Scroll faculty left"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Horizontal Scrollable Tutor Chips (Supports Mouse Wheel & Mouse Drag) */}
+          <div
+            ref={facultyBarScrollRef}
+            onMouseDown={handleFacultyBarMouseDown}
+            onMouseMove={handleFacultyBarMouseMove}
+            onMouseUp={handleFacultyBarMouseUpOrLeave}
+            onMouseLeave={handleFacultyBarMouseUpOrLeave}
+            className="flex-1 flex items-center gap-1.5 overflow-x-auto cursor-grab active:cursor-grabbing py-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+            title="Scroll with mouse wheel, drag left/right, or click any tutor to filter"
+          >
+            {selectedTutorFilter !== 'all' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (didDragFacultyBarRef.current) return;
+                  setSelectedTutorFilter('all');
+                  if (onTutorFilterChange) onTutorFilterChange('all');
+                }}
+                className="px-2 py-0.5 rounded-md border border-[#2D8B5C] bg-[#2D8B5C] text-white font-bold text-[10.5px] shrink-0 flex items-center gap-1 transition-all cursor-pointer shadow-2xs active:scale-95"
+                title="Show all faculty schedules"
+              >
+                <span>All Faculty</span>
+              </button>
+            )}
             {uniqueTutors.map(tId => {
               const theme = getSlotColorTheme({ tutorId: tId });
               const tutorObj = tutors.find(t => t.tutorId === tId);
-              const displayName = tutorObj?.realName ? `${tId} (${tutorObj.realName.split(' ')[0]})` : tId;
+              const isInHouse = role === 'admin' || role === 'supervisor' || role === 'tutor';
+              const displayName = isInHouse && tutorObj?.realName ? `${tId} (${tutorObj.realName.split(' ')[0]})` : tId;
+              const isActiveTutor = selectedTutorFilter === tId;
               return (
                 <button
                   key={tId}
                   type="button"
                   onClick={() => {
-                    setSelectedTutorFilter(tId);
-                    if (onTutorFilterChange) onTutorFilterChange(tId);
+                    if (didDragFacultyBarRef.current) return;
+                    const nextFilter = isActiveTutor ? 'all' : tId;
+                    setSelectedTutorFilter(nextFilter);
+                    if (onTutorFilterChange) onTutorFilterChange(nextFilter);
                   }}
-                  className={`px-2 py-0.5 rounded-md border flex items-center gap-1.5 transition-all cursor-pointer hover:shadow-2xs active:scale-95 ${theme.bg} ${theme.border}`}
-                  title={`Click to filter schedule to ${tId} only`}
+                  className={`px-2 py-0.5 rounded-md border flex items-center gap-1.5 shrink-0 transition-all cursor-pointer hover:shadow-2xs active:scale-95 ${theme.bg} ${theme.border} ${
+                    isActiveTutor ? 'ring-2 ring-[#2D8B5C] shadow-xs scale-[1.02]' : ''
+                  }`}
+                  title={isActiveTutor ? `Currently filtered to ${tId} (click to show all)` : `Click to filter schedule to ${tId} only`}
                 >
                   <span className={`w-2 h-2 rounded-full ${theme.dot} shrink-0`} />
-                  <span className={`font-bold text-[10.5px] ${theme.text}`}>{displayName}</span>
+                  <span className={`font-bold text-[10.5px] whitespace-nowrap ${theme.text}`}>{displayName}</span>
                 </button>
               );
             })}
           </div>
+
+          {/* Small Right Scroll Button */}
+          <button
+            type="button"
+            onClick={() => scrollFacultyBar('right')}
+            className="w-6 h-6 rounded-md border border-[#D5D0C6] bg-white hover:bg-emerald-50 hover:border-[#2D8B5C] text-[#5A6B61] hover:text-[#1E5C3D] flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-3xs active:scale-95"
+            title="Scroll faculty list right (or use mouse wheel / drag on tutors)"
+            aria-label="Scroll faculty right"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -785,7 +897,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                   {cls.studentName}
                                 </span>
                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
-                                  {cls.tutorId}
+                                  {role === 'student' || role === 'parent' ? getTutorDisplayId(cls.tutorId, tutors) : cls.tutorId}
                                 </span>
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
@@ -821,7 +933,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                             <div className="flex items-center justify-between mt-1 text-[11px] text-[#5A6B61]">
                               <span>ID: <strong className="text-[#161F1A] font-mono">{cls.studentId}</strong></span>
                               <span className={`font-semibold ${isLongSession ? 'text-amber-900 font-bold' : theme.text}`}>
-                                {isLongSession ? `${cls.durationMinutes}m Class (${formatTime12H(cls.startTimePKT)} – ${calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})` : cls.tutorId}
+                                {isLongSession ? `${cls.durationMinutes}m Class (${formatTime12H(cls.startTimePKT)} – ${calculateEndTime12H(cls.startTimePKT, cls.durationMinutes)})` : (role === 'student' || role === 'parent' ? getTutorDisplayId(cls.tutorId, tutors) : cls.tutorId)}
                               </span>
                             </div>
                             {cls.notes && (
@@ -851,7 +963,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                                   <span>⤷ {cls.studentName}</span>
                                 </span>
                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shadow-3xs ${theme.tutorBadgeBg}`}>
-                                  {cls.tutorId}
+                                  {role === 'student' || role === 'parent' ? getTutorDisplayId(cls.tutorId, tutors) : cls.tutorId}
                                 </span>
                               </div>
                               <span className="text-[9.5px] font-black text-amber-900 bg-amber-200/90 border border-amber-300 px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-3xs">
@@ -1257,7 +1369,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
             return (
               <span key={tId} className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md border text-[10.5px] ${theme.bg} ${theme.border}`}>
                 <span className={`w-2 h-2 rounded-full ${theme.dot}`}></span>
-                <span className={`font-bold ${theme.text}`}>{tId}</span>
+                <span className={`font-bold ${theme.text}`}>{role === 'student' || role === 'parent' ? getTutorDisplayId(tId, tutors) : tId}</span>
               </span>
             );
           })}
@@ -1487,7 +1599,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
 
                         {/* Tutor badge */}
                         <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold tracking-wide shrink-0 border ${theme.tutorBadgeBg}`}>
-                          {cls.tutorId}
+                          {role === 'student' || role === 'parent' ? getTutorDisplayId(cls.tutorId, tutors) : cls.tutorId}
                         </span>
                       </div>
 

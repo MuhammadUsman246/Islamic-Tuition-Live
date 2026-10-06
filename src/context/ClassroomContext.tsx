@@ -32,6 +32,8 @@ interface ClassroomContextType {
   // Controls & Action Handlers
   joinClassroomSession: (tokenData: LiveKitRoomTokenResponse, userRole: string, participantName: string) => Promise<void>;
   leaveClassroomSession: () => void;
+  finishCurrentStudentLesson: () => Promise<void>;
+  endClassForEveryone: () => Promise<void>;
   handleToggleAudio: () => Promise<void>;
   handleToggleScreenShare: () => Promise<void>;
   handleToggleCamera: () => Promise<void>;
@@ -59,6 +61,16 @@ interface ClassroomContextType {
   activeVisibleParticipantsCount: number;
   elapsedSeconds: number;
   formatChronometerTime: (secs: number) => string;
+  presenceToast: {
+    id: string;
+    name: string;
+    role: string;
+    type: 'join' | 'leave';
+    timestamp: string;
+  } | null;
+  setPresenceToast: (val: any) => void;
+  waitingQueue: WaitingRoomParticipant[];
+  handleWaitingRoomAction: (waitingId: string, action: 'ADMIT' | 'REJECT') => Promise<void>;
 
   // Hardware & Modals
   audioInputDevices: MediaDeviceInfo[];
@@ -86,6 +98,37 @@ interface ClassroomContextType {
 }
 
 const ClassroomContext = createContext<ClassroomContextType | null>(null);
+
+function playContextStudioChime(type: 'connect' | 'peer_join' | 'peer_leave' = 'connect') {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx: AudioContext = new AudioCtx();
+    const now = ctx.currentTime;
+    const notes =
+      type === 'connect'
+        ? [440, 554.37, 659.25]
+        : type === 'peer_join'
+          ? [523.25, 659.25, 783.99]
+          : [587.33, 440];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.09);
+      gain.gain.setValueAtTime(0.001, now + idx * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.065, now + idx * 0.09 + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.09 + 0.45);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.09);
+      osc.stop(now + idx * 0.09 + 0.48);
+    });
+    setTimeout(() => {
+      if (ctx.state !== 'closed') ctx.close().catch(() => {});
+    }, 1200);
+  } catch {}
+}
 
 export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Session Identity
@@ -140,6 +183,103 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
   const [filteredParticipants, setFilteredParticipants] = useState<ParticipantInfo[]>([]);
   const [activeVisibleParticipantsCount, setActiveVisibleParticipantsCount] = useState<number>(1);
+  const [presenceToast, setPresenceToast] = useState<{
+    id: string;
+    name: string;
+    role: string;
+    type: 'join' | 'leave';
+    timestamp: string;
+  } | null>(null);
+  const presenceToastTimerRef = useRef<any>(null);
+  const notifiedPeersRef = useRef<Set<string>>(new Set());
+  const peerCustomNamesRef = useRef<Record<string, { name: string; role: string }>>({});
+  const [waitingQueue, setWaitingQueue] = useState<WaitingRoomParticipant[]>([]);
+  const notifiedWaitingIdsRef = useRef<Set<string>>(new Set());
+
+  const handleWaitingRoomAction = useCallback(async (waitingId: string, action: 'ADMIT' | 'REJECT') => {
+    try {
+      await fetch('/api/livekit/waiting-room/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ waitingId, action })
+      });
+      setWaitingQueue(prev => prev.filter(w => w.id !== waitingId));
+    } catch (e) {}
+  }, []);
+
+  // Periodic heartbeat while ClassroomContext session is active (keeps live status & waiting queue synced even when minimized)
+  useEffect(() => {
+    if (!isActive || !roomName || tokenData?.isMockSession) return;
+    let cancelled = false;
+
+    const sendContextHeartbeat = () => {
+      fetch('/api/livekit/rooms/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          identity: tokenData?.participantIdentity || participantName,
+          name: participantName,
+          role: userRole
+        })
+      })
+        .then(r => {
+          const ct = r.headers.get('content-type') || '';
+          return r.ok && ct.includes('application/json') ? r.json() : null;
+        })
+        .then(data => {
+          if (cancelled || !data) return;
+          if (userRole !== 'tutor' && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) {
+            if (roomRef.current) {
+              try { roomRef.current.disconnect(); } catch {}
+            }
+            if (pipWindowRef.current && !pipWindowRef.current.closed) {
+              try { pipWindowRef.current.close(); } catch {}
+            }
+            setTokenData(null);
+            setIsActive(false);
+            setWaitingQueue([]);
+            setConnectionStatus(ConnectionState.Disconnected);
+            setElapsedSeconds(0);
+            setIsTimerRunning(false);
+            return;
+          }
+          if (userRole === 'tutor' && Array.isArray(data.waitingList)) {
+            setWaitingQueue(data.waitingList);
+            data.waitingList.forEach((w: WaitingRoomParticipant) => {
+              if (!notifiedWaitingIdsRef.current.has(w.id)) {
+                notifiedWaitingIdsRef.current.add(w.id);
+                playContextStudioChime('connect');
+              }
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    sendContextHeartbeat();
+    const interval = setInterval(sendContextHeartbeat, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isActive, roomName, tokenData, participantName, userRole]);
+
+  const triggerPresenceToast = useCallback((name: string, roleLabel: string, type: 'join' | 'leave') => {
+    if (presenceToastTimerRef.current) {
+      clearTimeout(presenceToastTimerRef.current);
+    }
+    setPresenceToast({
+      id: `toast_${Date.now()}`,
+      name,
+      role: roleLabel,
+      type,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
+    presenceToastTimerRef.current = setTimeout(() => {
+      setPresenceToast(null);
+    }, 6500);
+  }, []);
 
   // Hardware
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -281,29 +421,47 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
       });
 
+      let isHidden = false;
       let pRole = 'Student';
       try {
         if (p.metadata) {
           const meta = JSON.parse(p.metadata);
+          isHidden = Boolean(meta.hidden || ((meta.role === 'admin' || meta.role === 'supervisor') && meta.hidden));
           if (meta.role === 'tutor') pRole = 'Tutor';
           else if (meta.role === 'admin') pRole = 'Admin';
+          else if (meta.role === 'supervisor') pRole = 'Supervisor';
         }
       } catch {}
+      if (isHidden) return;
+
+      const cached = peerCustomNamesRef.current[p.identity];
+      if (cached?.role) pRole = cached.role;
+      else if (pRole === 'Student') {
+        const idOrName = `${p.identity || ''} ${p.name || ''}`.toLowerCase();
+        if (idOrName.includes('tutor') || idOrName.includes('ustadh') || idOrName.includes('teacher')) {
+          pRole = 'Tutor';
+        }
+      }
+      let pDisplayName = cached?.name || p.name || p.identity;
+      if (pRole === 'Tutor' && (userRole === 'student' || userRole === 'parent' || userRole === 'guest')) {
+        const match = `${p.identity || ''} ${pDisplayName} ${roomName}`.match(/(\d+)/);
+        pDisplayName = match ? `Tutor ${match[1]}` : 'Tutor';
+      }
 
       const micPub = p.getTrackPublication(Track.Source.Microphone);
       const camPub = p.getTrackPublication(Track.Source.Camera);
       const screenPub = p.getTrackPublication(Track.Source.ScreenShare);
 
       if (screenPub?.track && !screenPub.isMuted) {
-        foundScreenShare = p.name || p.identity;
+        foundScreenShare = pDisplayName;
       }
       if (camPub?.track && !camPub.isMuted) {
-        foundCameraShare = p.name || p.identity;
+        foundCameraShare = pDisplayName;
       }
 
       visibleList.push({
         id: p.identity,
-        name: p.name || p.identity,
+        name: pDisplayName,
         role: pRole,
         isSpeaking: p.isSpeaking,
         isMuted: micPub ? micPub.isMuted : true,
@@ -322,7 +480,7 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (visibleList.length >= 2) {
       setIsTimerRunning(true);
     }
-  }, [participantName, userRole, attachRemoteAudioTrack]);
+  }, [participantName, userRole, roomName, attachRemoteAudioTrack]);
 
   // Load Devices
   useEffect(() => {
@@ -345,7 +503,7 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     loadDevices();
   }, [selectedAudioInput, selectedAudioOutput, selectedVideoInput]);
 
-  // Attach Remote Screen Share & Camera Video tracks
+  // Attach Remote or Local Screen Share & Camera Video tracks
   useEffect(() => {
     const room = roomRef.current;
     if (!room || room.state !== ConnectionState.Connected) return;
@@ -358,8 +516,15 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           remoteScreenTrack = pub.track;
         }
       });
-      if (remoteScreenTrack && !isScreenSharing && userRole !== 'tutor' && !isLocalBrowserSharingScreen) {
+      const localScreenPub = room.localParticipant?.getTrackPublication(Track.Source.ScreenShare);
+      const localScreenTrack = localScreenPub?.track && !localScreenPub.isMuted ? localScreenPub.track : undefined;
+
+      if (remoteScreenTrack) {
         remoteScreenTrack.attach(screenShareVideoRef.current);
+        screenShareVideoRef.current.muted = true;
+      } else if (isScreenSharing && localScreenTrack) {
+        localScreenTrack.attach(screenShareVideoRef.current);
+        screenShareVideoRef.current.muted = true;
       } else {
         screenShareVideoRef.current.srcObject = null;
       }
@@ -402,20 +567,27 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ctx.lineWidth = 2;
       ctx.strokeRect(0, 0, canvas.width, canvas.height);
 
-      // Line 1: Live Status & Timer
-      ctx.fillStyle = '#34D399';
-      ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.fillText('● LIVE', 10, 18);
+      // Line 1: Live Participant Presence Pill & Timer
+      const studentPeers = filteredParticipants.filter(p => p.role === 'Student' || p.role === 'Guest');
+      const tutorPeer = filteredParticipants.find(p => p.role === 'Tutor');
+      const tName = tutorPeer?.name || (userRole === 'tutor' ? participantName : 'Tutor');
+      const sNames = studentPeers.map(s => s.name).join(', ');
+      const bothPresent = Boolean(tutorPeer && studentPeers.length > 0);
 
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = bothPresent ? '#34D399' : '#FBBF24';
       ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.fillText('Islamic Tuition', 58, 18);
+      const line1Text = bothPresent
+        ? `🟢 ${tName} + ${sNames}`.slice(0, 34)
+        : userRole === 'tutor'
+          ? `⏳ ${tName} · Waiting Student`
+          : `⏳ Waiting Tutor...`;
+      ctx.fillText(line1Text, 10, 18);
 
       ctx.fillStyle = '#F59E0B';
       ctx.font = 'bold 11px monospace';
       ctx.fillText(formatChronometerTime(elapsedSeconds), 280, 18);
 
-      // Line 2: Mic Status & Chat
+      // Line 2: Mic Status & Toast / Chat
       if (isAudioMuted) {
         ctx.fillStyle = '#EF4444';
         ctx.font = 'bold 11px system-ui, sans-serif';
@@ -426,15 +598,22 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         ctx.fillText('🎙️ MIC LIVE', 10, 38);
       }
 
-      const lastMsg = chatMessages[chatMessages.length - 1];
-      if (lastMsg) {
-        ctx.fillStyle = '#9CA3AF';
-        ctx.font = '10px system-ui, sans-serif';
-        ctx.fillText(`💬 ${lastMsg.sender}: ${lastMsg.text.slice(0, 24)}`, 100, 38);
+      if (presenceToast) {
+        ctx.fillStyle = presenceToast.type === 'join' ? '#34D399' : '#FBBF24';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        const tMsg = presenceToast.type === 'join' ? `🟢 ${presenceToast.name} joined!` : `🟠 ${presenceToast.name} left`;
+        ctx.fillText(tMsg.slice(0, 28), 100, 38);
       } else {
-        ctx.fillStyle = '#6B7280';
-        ctx.font = '10px system-ui, sans-serif';
-        ctx.fillText(`💬 In Class (${activeVisibleParticipantsCount})`, 100, 38);
+        const lastMsg = chatMessages[chatMessages.length - 1];
+        if (lastMsg) {
+          ctx.fillStyle = '#9CA3AF';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.fillText(`💬 ${lastMsg.sender}: ${lastMsg.text.slice(0, 24)}`, 100, 38);
+        } else {
+          ctx.fillStyle = '#6B7280';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.fillText(`💬 In Class (${activeVisibleParticipantsCount})`, 100, 38);
+        }
       }
 
       animId = requestAnimationFrame(renderMicroPillFrame);
@@ -454,7 +633,7 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [elapsedSeconds, isAudioMuted, isScreenSharing, activeVisibleParticipantsCount, chatMessages]);
+  }, [elapsedSeconds, isAudioMuted, isScreenSharing, activeVisibleParticipantsCount, chatMessages, filteredParticipants, userRole, participantName, presenceToast]);
   const joinClassroomSession = useCallback(async (
     tokenRes: LiveKitRoomTokenResponse,
     roleStr: string,
@@ -486,14 +665,66 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setConnectionStatus(state);
       });
 
+      const broadcastPresenceHello = () => {
+        try {
+          if (room.state === ConnectionState.Connected && room.localParticipant) {
+            const helloPayload = new TextEncoder().encode(JSON.stringify({
+              type: 'PRESENCE_HELLO',
+              identity: room.localParticipant.identity || pName,
+              name: pName,
+              role: roleStr === 'tutor' ? 'Tutor' : 'Student'
+            }));
+            room.localParticipant.publishData(helloPayload as any, { reliable: true }).catch(() => {});
+          }
+        } catch {}
+      };
+
       room.on(RoomEvent.Connected, () => {
         setConnectionStatus(ConnectionState.Connected);
+        playContextStudioChime('connect');
         room.startAudio().catch(() => {});
+        syncParticipantsState(room);
+        broadcastPresenceHello();
+      });
+
+      room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+        let isHidden = false;
+        let pRole = 'Student';
+        try {
+          if (participant.metadata) {
+            const meta = JSON.parse(participant.metadata);
+            isHidden = Boolean(meta.hidden);
+            if (meta.role === 'tutor') pRole = 'Tutor';
+          }
+        } catch {}
+        if (!isHidden && !notifiedPeersRef.current.has(participant.identity)) {
+          notifiedPeersRef.current.add(participant.identity);
+          playContextStudioChime('peer_join');
+          triggerPresenceToast(participant.name || participant.identity || 'Participant', pRole, 'join');
+          setTimeout(() => broadcastPresenceHello(), 200);
+        }
         syncParticipantsState(room);
       });
 
-      room.on(RoomEvent.ParticipantConnected, () => syncParticipantsState(room));
-      room.on(RoomEvent.ParticipantDisconnected, () => syncParticipantsState(room));
+      room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+        let isHidden = false;
+        let pRole = 'Student';
+        try {
+          if (participant.metadata) {
+            const meta = JSON.parse(participant.metadata);
+            isHidden = Boolean(meta.hidden);
+            if (meta.role === 'tutor') pRole = 'Tutor';
+          }
+        } catch {}
+        if (!isHidden) {
+          notifiedPeersRef.current.delete(participant.identity);
+          const pNameDisplay = peerCustomNamesRef.current[participant.identity]?.name || participant.name || participant.identity || 'Participant';
+          delete peerCustomNamesRef.current[participant.identity];
+          playContextStudioChime('peer_leave');
+          triggerPresenceToast(pNameDisplay, pRole, 'leave');
+        }
+        syncParticipantsState(room);
+      });
       room.on(RoomEvent.ActiveSpeakersChanged, () => syncParticipantsState(room));
       room.on(RoomEvent.TrackMuted, () => syncParticipantsState(room));
       room.on(RoomEvent.TrackUnmuted, () => syncParticipantsState(room));
@@ -520,6 +751,32 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             }]);
             setUnreadChatCount(prev => prev + 1);
+          } else if (msgObj.type === 'PRESENCE_HELLO') {
+            const peerId = msgObj.identity || participant?.identity;
+            const peerName = msgObj.name || participant?.name || peerId || 'Participant';
+            const peerRole = msgObj.role || 'Student';
+            if (peerId) {
+              peerCustomNamesRef.current[peerId] = { name: peerName, role: peerRole };
+              if (!notifiedPeersRef.current.has(peerId)) {
+                notifiedPeersRef.current.add(peerId);
+                playContextStudioChime('peer_join');
+                triggerPresenceToast(peerName, peerRole, 'join');
+              }
+            }
+            syncParticipantsState(room);
+          } else if (msgObj.type === 'END_CLASS_FOR_ALL' || msgObj.type === 'FINISH_STUDENT_LESSON') {
+            if (roleStr !== 'tutor') {
+              try { room.disconnect(); } catch {}
+              if (pipWindowRef.current && !pipWindowRef.current.closed) {
+                try { pipWindowRef.current.close(); } catch {}
+              }
+              setTokenData(null);
+              setIsActive(false);
+              setWaitingQueue([]);
+              setConnectionStatus(ConnectionState.Disconnected);
+              setElapsedSeconds(0);
+              setIsTimerRunning(false);
+            }
           }
         } catch (e) {}
       });
@@ -544,6 +801,16 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Leave Session
   const leaveClassroomSession = useCallback(() => {
+    if (roomName) {
+      fetch('/api/livekit/rooms/leave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          identity: tokenData?.participantIdentity || participantName
+        })
+      }).catch(() => {});
+    }
     if (roomRef.current) {
       try { roomRef.current.disconnect(); } catch {}
     }
@@ -552,10 +819,93 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
     setTokenData(null);
     setIsActive(false);
+    setWaitingQueue([]);
     setConnectionStatus(ConnectionState.Disconnected);
     setElapsedSeconds(0);
     setIsTimerRunning(false);
-  }, []);
+  }, [roomName, tokenData, participantName]);
+
+  // Tutor Option 1: Finish Current Student's Class & Stay Ready for Next Student
+  const finishCurrentStudentLesson = useCallback(async () => {
+    setShowLeaveConfirmModal(false);
+    try {
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        const payload = new TextEncoder().encode(JSON.stringify({
+          type: 'FINISH_STUDENT_LESSON',
+          sender: participantName
+        }));
+        await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+      }
+      if (roomName) {
+        const res = await fetch('/api/livekit/rooms/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomName,
+            action: 'FINISH_STUDENT_LESSON'
+          })
+        });
+        const data = await res.json().catch(() => null);
+        if (data?.waitingList) {
+          setWaitingQueue(data.waitingList);
+        }
+      }
+    } catch {}
+
+    notifiedPeersRef.current.clear();
+    peerCustomNamesRef.current = {};
+    setElapsedSeconds(0);
+    setIsTimerRunning(false);
+    setChatMessages([]);
+    setUnreadChatCount(0);
+    if (roomRef.current) {
+      syncParticipantsState(roomRef.current);
+    }
+    triggerPresenceToast(
+      waitingQueue.length > 0
+        ? `Lesson finished — Auto-admitting ${waitingQueue[0].guest_name}...`
+        : 'Lesson finished — Standby ready for next student',
+      'Classroom',
+      'join'
+    );
+  }, [roomName, participantName, syncParticipantsState, triggerPresenceToast, waitingQueue]);
+
+  // Tutor Option 2: End Class for Everyone
+  const endClassForEveryone = useCallback(async () => {
+    setShowLeaveConfirmModal(false);
+    try {
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        const payload = new TextEncoder().encode(JSON.stringify({
+          type: 'END_CLASS_FOR_ALL',
+          sender: participantName
+        }));
+        await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+      }
+      if (roomName) {
+        await fetch('/api/livekit/rooms/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomName,
+            action: 'END_CLASS_FOR_ALL'
+          })
+        }).catch(() => {});
+      }
+    } catch {}
+
+    if (roomRef.current) {
+      try { roomRef.current.disconnect(); } catch {}
+    }
+    if (pipWindowRef.current && !pipWindowRef.current.closed) {
+      try { pipWindowRef.current.close(); } catch {}
+    }
+    setTokenData(null);
+    setIsActive(false);
+    setWaitingQueue([]);
+    setConnectionStatus(ConnectionState.Disconnected);
+    setElapsedSeconds(0);
+    setIsTimerRunning(false);
+  }, [roomName, participantName]);
 
   // Audio Toggle
   const handleToggleAudio = async () => {
@@ -790,6 +1140,8 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         joinClassroomSession,
         leaveClassroomSession,
+        finishCurrentStudentLesson,
+        endClassForEveryone,
         handleToggleAudio,
         handleToggleScreenShare,
         handleToggleCamera,
@@ -814,6 +1166,10 @@ export const ClassroomProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         activeVisibleParticipantsCount,
         elapsedSeconds,
         formatChronometerTime,
+        presenceToast,
+        setPresenceToast,
+        waitingQueue,
+        handleWaitingRoomAction,
 
         audioInputDevices,
         audioOutputDevices,

@@ -21,7 +21,7 @@ export const TrialSmsModal: React.FC<TrialSmsModalProps> = ({
 
   const parentPhone = student.parentPhone || student.phone || '+1 (555) 019-2834';
   const parentName = student.parentName || 'Parent / Guardian';
-  const tutorName = tutor ? `${tutor.tutorId} (${tutor.realName})` : 'Assigned Academy Tutor';
+  const tutorName = tutor ? tutor.tutorId : (student.assignedTutorId || 'Assigned Academy Tutor');
 
   const defaultMessage = `Assalamu Alaykum ${parentName},\n\nThis is a reminder from Islamic Tuition Quran Academy for ${student.name}'s upcoming trial class scheduled with ${tutorName}.\n\nPlease ensure the student is ready 5 minutes prior on Zoom.\nMay Allah grant barakah in their Quran journey!\n\nIslamic Tuition Academy`;
 

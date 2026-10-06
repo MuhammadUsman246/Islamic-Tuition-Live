@@ -1,4 +1,5 @@
 import { Lesson, StudentFee } from '../types';
+import { getTutorDisplayId } from './tutorPrivacy';
 
 /**
  * Utility to export clean, professional CSV lesson reports
@@ -15,7 +16,7 @@ export const exportLessonsToCSV = (
     'Topic / Course',
     'Student Name',
     'Student ID',
-    'Tutor Name / ID',
+    'Tutor ID',
     'Attendance Status',
     'Portion Covered',
     'Mushaf Page No.',
@@ -29,7 +30,7 @@ export const exportLessonsToCSV = (
     l.lessonType || '—',
     l.studentName || '—',
     l.studentId || '—',
-    l.tutorId || '—',
+    getTutorDisplayId(l.tutorId) || '—',
     l.attendanceStatus || 'Present',
     l.lessonCovered || '—',
     l.mushafPage || l.quranDetails?.mushafPage || '—',
@@ -49,16 +50,18 @@ export const exportLessonsToCSV = (
     ...rows.map(row => row.map(sanitizeCell).join(','))
   ];
 
-  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.join('\n');
-  const encodedUri = encodeURI(csvContent);
+  const csvString = "\uFEFF" + csvRows.join('\n');
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
+  link.setAttribute("href", url);
   const cleanTitle = filenamePrefix.toLowerCase().replace(/[^a-z0-9]/g, '_');
   const filename = `${cleanTitle}_report_${Date.now()}.csv`;
   link.setAttribute("download", filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 /**

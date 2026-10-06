@@ -24,6 +24,7 @@ import {
   OptimizedImageResult
 } from '../../utils/imageOptimizer';
 import { updateStudent } from '../../services/dataService';
+import { getTutorDisplayId } from '../../utils/tutorPrivacy';
 
 interface StudentProfileCustomizerModalProps {
   isOpen: boolean;
@@ -272,18 +273,16 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                   </button>
 
                   <span className="text-[11px] text-[#5A6B61]">
-                    JPG, PNG or WEBP (auto-compressed to compact WebP)
+                    JPG, PNG or WEBP
                   </span>
                 </div>
 
-                {/* Real-time compression stats badge */}
+                {/* Real-time upload confirmation badge */}
                 {compressionStats && (
                   <div className="inline-flex items-center space-x-2 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-md text-[11px]">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                     <span>
-                      Original: <strong>{compressionStats.originalKb} KB</strong> ➔ WebP:{' '}
-                      <strong className="text-emerald-700">{compressionStats.compressedKb} KB</strong>{' '}
-                      ({compressionStats.savingsPercent}% lighter, zero server lag)
+                      Profile photo ready ({compressionStats.compressedKb} KB)
                     </span>
                   </div>
                 )}
@@ -473,7 +472,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
               </div>
               <div className="p-2 bg-white rounded-lg border border-[#E3DFD7]">
                 <span className="text-[#5A6B61] block text-[10px]">Assigned Tutor</span>
-                <strong className="text-[#161F1A] truncate block">{assignedTutor?.tutorId || student?.assignedTutorId || 'Assigned Tutor'}</strong>
+                <strong className="text-[#161F1A] truncate block">{getTutorDisplayId(assignedTutor || student?.assignedTutorId) || 'Assigned Tutor'}</strong>
               </div>
             </div>
           </div>

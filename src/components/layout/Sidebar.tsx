@@ -24,7 +24,7 @@ import {
   Lock
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { UserRole, Tutor } from '../../types';
+import { UserRole, Tutor, Student } from '../../types';
 import { subscribeToUnreadMessages } from '../../services/dataService';
 
 interface SidebarProps {
@@ -34,6 +34,7 @@ interface SidebarProps {
   onClose?: () => void;
   unreadCount?: number;
   tutors?: Tutor[];
+  students?: Student[];
 }
 
 interface NavItem {
@@ -42,7 +43,7 @@ interface NavItem {
   icon: React.ElementType;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onClose, unreadCount: passedUnreadCount, tutors: passedTutors }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onClose, unreadCount: passedUnreadCount, tutors: passedTutors = [], students: passedStudents = [] }) => {
   const { userProfile, activeRole, adminViewingRole, adminViewingTargetId, logout } = useAuth();
   const role: UserRole = activeRole || userProfile?.role || 'admin';
   const currentUserId = (adminViewingRole && adminViewingTargetId)
@@ -93,6 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'tutor_students', label: 'Assigned Students', icon: Users },
           { id: 'tutor_lessons', label: 'Lesson Reports', icon: BookOpen },
           { id: 'tutor_attendance', label: 'Attendance Tracking', icon: CheckSquare },
+          { id: 'tutor_training', label: 'Tutors Training Videos', icon: Video },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Academy Messages', icon: MessageSquare }
         ];
@@ -216,20 +218,56 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
       {/* User Profile & Logout */}
       <div className="p-4 border-t border-[#263e32] bg-[#14231b]">
         <div className="flex items-center justify-between">
-          <div className="min-w-0 pr-2">
-            <p className="text-xs font-medium text-white truncate">
-              {userProfile?.displayName || 'Authorized User'}
-            </p>
-            {role === 'tutor' ? (
-              <p className="text-[11px] text-[#7d9487] truncate">
-                Faculty Portal • {userProfile?.tutorId || 'Active'}
-              </p>
-            ) : (
-              <p className="text-[11px] text-[#7d9487] truncate">
-                {userProfile?.email}
-              </p>
-            )}
-          </div>
+          {(() => {
+            const activeTutorObj = role === 'tutor'
+              ? passedTutors.find(t =>
+                  (adminViewingRole === 'tutor' && adminViewingTargetId && (t.tutorId === adminViewingTargetId || t.id === adminViewingTargetId)) ||
+                  (userProfile?.tutorId && t.tutorId === userProfile.tutorId) ||
+                  (userProfile?.email && t.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+                )
+              : null;
+            const activeStudentObj = role === 'student'
+              ? passedStudents.find(s =>
+                  (adminViewingRole === 'student' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+                  (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
+                  (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+                )
+              : null;
+            const activeParentObj = role === 'parent'
+              ? passedStudents.find(s =>
+                  (adminViewingRole === 'parent' && adminViewingTargetId && (s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId)) ||
+                  (!adminViewingRole && userProfile?.linkedStudentIds?.includes(s.studentId)) ||
+                  (!adminViewingRole && userProfile?.email && s.parentEmail?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+                )
+              : null;
+
+            const footerPrimaryName = role === 'tutor'
+              ? (activeTutorObj?.realName || (!adminViewingRole && userProfile?.displayName) || 'Authorized Tutor')
+              : role === 'student'
+              ? (activeStudentObj?.name || (!adminViewingRole && userProfile?.displayName) || 'Student')
+              : role === 'parent'
+              ? (activeParentObj?.parentName || (!adminViewingRole && userProfile?.displayName) || 'Parent')
+              : (userProfile?.displayName || 'Authorized User');
+
+            const footerSecondaryText = role === 'tutor'
+              ? `Faculty Portal • ${activeTutorObj?.tutorId || userProfile?.tutorId || 'Active'}`
+              : role === 'student'
+              ? `Student Portal • ${activeStudentObj?.studentId || userProfile?.studentId || 'Active'}`
+              : role === 'parent'
+              ? `Parent Guardian Portal`
+              : (userProfile?.email || '');
+
+            return (
+              <div className="min-w-0 pr-2">
+                <p className="text-xs font-medium text-white truncate">
+                  {footerPrimaryName}
+                </p>
+                <p className="text-[11px] text-[#7d9487] truncate">
+                  {footerSecondaryText}
+                </p>
+              </div>
+            );
+          })()}
           <button
             id="sidebar_logout_button"
             onClick={logout}

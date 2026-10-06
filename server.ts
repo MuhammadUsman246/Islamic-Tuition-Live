@@ -4,7 +4,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
-import { AccessToken, TrackSource } from 'livekit-server-sdk';
+import { AccessToken, TrackSource, RoomServiceClient } from 'livekit-server-sdk';
 import { createServer as createViteServer } from 'vite';
 import {
   checkMessageSafety,
@@ -106,13 +106,15 @@ interface ServerWaitingGuest {
   id: string;
   room_slug: string;
   guest_name: string;
+  identity?: string;
   joined_at: string;
   status: 'WAITING' | 'ADMITTED' | 'REJECTED';
+  reason?: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
 }
 
 const CLASSROOM_CONFIG_FILE = path.resolve(process.cwd(), '.classroom-rooms-config.json');
 
-const SERVER_PERMANENT_ROOMS: ServerPermanentRoom[] = Array.from({ length: 25 }, (_, idx) => {
+const SERVER_PERMANENT_ROOMS: ServerPermanentRoom[] = Array.from({ length: 30 }, (_, idx) => {
   const num = idx + 1;
   const tutorId = `Tutor ${num}`;
   const slug = `tutor-${num}`;
@@ -288,10 +290,134 @@ function getTargetRoomIdentifier(baseRoomIdOrSlug: string, tutorId?: string, stu
   return { targetRoomId: permRoom.livekit_room_id, isOverrideActive: false, permRoom };
 }
 
+// Real-time Live Classroom Presence & Status Tracker
+interface ActiveRoomUser {
+  identity: string;
+  name: string;
+  role: string;
+  joinedAt: number;
+  lastSeen: number;
+  bookedEndTimeMs?: number;
+  fromCloud?: boolean;
+}
+const LIVE_ROOM_PARTICIPANTS: Record<string, Record<string, ActiveRoomUser>> = {};
+
+interface RoomControlSignal {
+  action: 'FINISH_STUDENT_LESSON' | 'END_CLASS_FOR_ALL';
+  timestamp: number;
+  targetIdentities?: string[];
+}
+const ROOM_CONTROL_SIGNALS: Record<string, RoomControlSignal> = {};
+
+/**
+ * Resolves active Tutor, active Students, current lesson remaining end time (ms),
+ * and active Waiting Room queue for any room name or tutor slug.
+ */
+function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
+  const raw = (roomNameOrSlug || '').toLowerCase().trim();
+  const { targetRoomId, permRoom } = getTargetRoomIdentifier(raw);
+  const numMatch = (permRoom?.room_slug || targetRoomId || raw).match(/\d+/);
+  const tutorNum = numMatch ? parseInt(numMatch[0], 10) : null;
+  const canonicalSlug = permRoom ? permRoom.room_slug.toLowerCase() : (tutorNum ? `tutor-${tutorNum}` : raw);
+  const normRoom = targetRoomId ? targetRoomId.toLowerCase().replace(/[^a-z0-9_\-]/g, '_') : (tutorNum ? `room_tutor_${tutorNum}` : raw.replace(/[^a-z0-9_\-]/g, '_'));
+
+  const nowMs = Date.now();
+
+  // 1. Clean up stale active participants (> 45s without heartbeat to support 20s Zero-Load Idle Standby Mode)
+  if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+    Object.keys(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(pid => {
+      if (nowMs - LIVE_ROOM_PARTICIPANTS[normRoom][pid].lastSeen > 45000) {
+        delete LIVE_ROOM_PARTICIPANTS[normRoom][pid];
+      }
+    });
+  }
+
+  const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
+  const activeTutor = participantsList.find(
+    p => p.role === 'tutor' || p.identity.toLowerCase().includes('tutor')
+  );
+  const activeStudents = participantsList.filter(
+    p => p.role === 'student' || p.role === 'guest' || p.role === 'parent'
+  );
+
+  // 2. Compute current lesson estimated end time (zero extra database reads)
+  let currentLessonEndTimeMs: number | undefined;
+  if (activeStudents.length > 0) {
+    const primaryStudent = activeStudents[0];
+    if (primaryStudent.bookedEndTimeMs && primaryStudent.bookedEndTimeMs > nowMs) {
+      currentLessonEndTimeMs = primaryStudent.bookedEndTimeMs;
+    } else if (activeTutor?.bookedEndTimeMs && activeTutor.bookedEndTimeMs > nowMs) {
+      currentLessonEndTimeMs = activeTutor.bookedEndTimeMs;
+    } else {
+      // Standard 30-minute academy class slot boundary or 30 mins from student join time
+      const halfHourBlockMs = 30 * 60 * 1000;
+      const nextHalfHourBoundaryMs = Math.ceil(nowMs / halfHourBlockMs) * halfHourBlockMs;
+      const joinedBasedEndMs = (primaryStudent.joinedAt || nowMs) + halfHourBlockMs;
+      const minsToBoundary = (nextHalfHourBoundaryMs - nowMs) / 60000;
+      const minsSinceJoined = (nowMs - (primaryStudent.joinedAt || nowMs)) / 60000;
+
+      if (minsToBoundary >= 1.5 && minsToBoundary <= 30) {
+        currentLessonEndTimeMs = nextHalfHourBoundaryMs;
+      } else if (minsSinceJoined < 30) {
+        currentLessonEndTimeMs = joinedBasedEndMs;
+      } else {
+        currentLessonEndTimeMs = nowMs + 3 * 60 * 1000; // Wrapping up final minutes
+      }
+    }
+  }
+
+  // 3. Clean up abandoned waiting entries older than 45 minutes
+  for (let i = SERVER_WAITING_ROOM.length - 1; i >= 0; i--) {
+    const joinedMs = new Date(SERVER_WAITING_ROOM[i].joined_at).getTime();
+    if (nowMs - joinedMs > 45 * 60 * 1000) {
+      SERVER_WAITING_ROOM.splice(i, 1);
+    }
+  }
+
+  const waitingList = SERVER_WAITING_ROOM.filter(w => {
+    const wSlug = w.room_slug.toLowerCase();
+    return (wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING';
+  }).map((w, idx) => ({
+    ...w,
+    waiting_seconds: Math.max(0, Math.floor((nowMs - new Date(w.joined_at).getTime()) / 1000)),
+    queue_position: idx + 1
+  }));
+
+  const resolvedTutorName = tutorNum ? `Tutor ${tutorNum}` : 'Tutor';
+
+  return {
+    normRoom,
+    canonicalSlug,
+    activeTutor,
+    activeStudents,
+    currentLessonEndTimeMs,
+    waitingList,
+    resolvedTutorName,
+    participantsList
+  };
+}
+
+/**
+ * Automatically promotes the #1 waiting student to ADMITTED as soon as the current student leaves
+ * (or when 0 students are in the room and the tutor is ready).
+ */
+function autoPromoteNextWaitingStudentIfRoomFree(roomNameOrSlug: string) {
+  const { canonicalSlug, normRoom, activeStudents, activeTutor } = getRoomQueueAndLessonTiming(roomNameOrSlug);
+  if (activeStudents.length === 0) {
+    const nextWaiting = SERVER_WAITING_ROOM.find(w => {
+      const wSlug = w.room_slug.toLowerCase();
+      return (wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING';
+    });
+    if (nextWaiting && (nextWaiting.reason === 'NEXT_STUDENT_QUEUE' || Boolean(activeTutor))) {
+      nextWaiting.status = 'ADMITTED';
+    }
+  }
+}
+
 // Method 1 & Universal Token Issuance Endpoint
 app.post('/api/livekit/token', async (req: Request, res: Response) => {
   try {
-    const { roomId, identity, participantName, role, classId, customServerUrl, forceSimulation, isHiddenAdmin } = req.body;
+    const { roomId, identity, participantName, role, classId, customServerUrl, forceSimulation, isHiddenAdmin, admittedWaitingId, bookedEndTimeMs } = req.body;
 
     if (!roomId || typeof roomId !== 'string') {
       res.status(400).json({ error: 'Missing or invalid roomId' });
@@ -337,6 +463,121 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
     const isAdminObserver = (userRole === 'admin' || userRole === 'supervisor') && Boolean(isHiddenAdmin);
     const isStudentOrGuest = userRole === 'student' || userRole === 'guest' || userRole === 'parent';
 
+    // Smart 1-on-1 Room Lock & "Next Student Lounge" Queue Check for Students:
+    // If another student is ALREADY inside this tutor's room, place the incoming student into the Next Student Lounge
+    // unless they have already been admitted (either automatically when the previous student left or via Tutor's [Allow 2nd Student In Now] sibling button).
+    let inWaitingRoom = false;
+    let waitingId: string | undefined;
+    let waitingReason: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT' | undefined;
+    let queuePosition: number | undefined;
+    let tutorNameForLounge: string | undefined;
+    let lessonEndTimeForLounge: number | undefined;
+    let loungeMessage: string | undefined;
+
+    if (isStudentOrGuest) {
+      let { canonicalSlug, activeTutor, activeStudents, currentLessonEndTimeMs, resolvedTutorName } = getRoomQueueAndLessonTiming(cleanRoom);
+      if (!activeTutor) {
+        await syncLiveKitCloudRooms();
+        const refreshed = getRoomQueueAndLessonTiming(cleanRoom);
+        canonicalSlug = refreshed.canonicalSlug;
+        activeTutor = refreshed.activeTutor;
+        activeStudents = refreshed.activeStudents;
+        currentLessonEndTimeMs = refreshed.currentLessonEndTimeMs;
+        resolvedTutorName = refreshed.resolvedTutorName;
+      }
+
+      const isAlreadyAdmitted = Boolean(
+        (admittedWaitingId && SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')) ||
+        SERVER_WAITING_ROOM.some(
+          w =>
+            w.room_slug.toLowerCase() === canonicalSlug &&
+            w.status === 'ADMITTED' &&
+            (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+        )
+      );
+
+      const otherActiveStudents = activeStudents.filter(
+        s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase() && s.name.toLowerCase() !== cleanName.toLowerCase()
+      );
+
+      if (!isAlreadyAdmitted && otherActiveStudents.length > 0) {
+        let existingWaiting = SERVER_WAITING_ROOM.find(
+          w =>
+            w.room_slug.toLowerCase() === canonicalSlug &&
+            w.status === 'WAITING' &&
+            (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+        );
+
+        if (!existingWaiting) {
+          existingWaiting = {
+            id: `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            room_slug: canonicalSlug,
+            guest_name: cleanName,
+            identity: cleanIdentity,
+            joined_at: new Date().toISOString(),
+            status: 'WAITING',
+            reason: 'NEXT_STUDENT_QUEUE'
+          };
+          SERVER_WAITING_ROOM.push(existingWaiting);
+        } else {
+          existingWaiting.reason = 'NEXT_STUDENT_QUEUE';
+        }
+
+        const roomQueue = SERVER_WAITING_ROOM.filter(
+          w => w.room_slug.toLowerCase() === canonicalSlug && w.status === 'WAITING'
+        );
+        const qPos = Math.max(1, roomQueue.findIndex(w => w.id === existingWaiting!.id) + 1);
+
+        inWaitingRoom = true;
+        waitingId = existingWaiting.id;
+        waitingReason = 'NEXT_STUDENT_QUEUE';
+        queuePosition = qPos;
+        tutorNameForLounge = resolvedTutorName;
+        lessonEndTimeForLounge = currentLessonEndTimeMs;
+        loungeMessage = `Ustadh ${resolvedTutorName} is currently wrapping up the previous student's lesson. You are #${qPos} in line — your class will start automatically as soon as the current lesson finishes!`;
+      } else if (!isAlreadyAdmitted && !activeTutor) {
+        // Zoom-style "Wait for Host": Tutor has not opened the classroom yet
+        let existingWaiting = SERVER_WAITING_ROOM.find(
+          w =>
+            w.room_slug.toLowerCase() === canonicalSlug &&
+            w.status === 'WAITING' &&
+            (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+        );
+
+        if (!existingWaiting) {
+          existingWaiting = {
+            id: `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            room_slug: canonicalSlug,
+            guest_name: cleanName,
+            identity: cleanIdentity,
+            joined_at: new Date().toISOString(),
+            status: 'WAITING',
+            reason: 'TUTOR_NOT_PRESENT'
+          };
+          SERVER_WAITING_ROOM.push(existingWaiting);
+        }
+
+        const roomQueue = SERVER_WAITING_ROOM.filter(
+          w => w.room_slug.toLowerCase() === canonicalSlug && w.status === 'WAITING'
+        );
+        const qPos = Math.max(1, roomQueue.findIndex(w => w.id === existingWaiting!.id) + 1);
+
+        inWaitingRoom = true;
+        waitingId = existingWaiting.id;
+        waitingReason = 'TUTOR_NOT_PRESENT';
+        queuePosition = qPos;
+        tutorNameForLounge = resolvedTutorName;
+        loungeMessage = `Ustadh ${resolvedTutorName} has not opened the classroom yet. You are in the Waiting Lounge — your class will start automatically as soon as your tutor joins!`;
+      } else if (isAlreadyAdmitted && bookedEndTimeMs) {
+        // Clean up consumed ADMITTED entry once used
+        SERVER_WAITING_ROOM.forEach(w => {
+          if (w.id === admittedWaitingId || (w.room_slug.toLowerCase() === canonicalSlug && w.identity === cleanIdentity)) {
+            w.status = 'ADMITTED';
+          }
+        });
+      }
+    }
+
     const canPublish = true;
     const canPublishSources: TrackSource[] = isStudentOrGuest
       ? [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
@@ -365,6 +606,26 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
 
     const jwt = await at.toJwt();
 
+    // Immediately register admitted non-observer participant in LIVE_ROOM_PARTICIPANTS to prevent race conditions
+    if (!inWaitingRoom && !isAdminObserver) {
+      const { normRoom } = getRoomQueueAndLessonTiming(cleanRoom);
+      if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+      }
+      const existing = LIVE_ROOM_PARTICIPANTS[normRoom][cleanIdentity];
+      LIVE_ROOM_PARTICIPANTS[normRoom][cleanIdentity] = {
+        identity: cleanIdentity,
+        name: cleanName,
+        role: userRole,
+        joinedAt: existing?.joinedAt || Date.now(),
+        lastSeen: Date.now(),
+        bookedEndTimeMs: bookedEndTimeMs || existing?.bookedEndTimeMs
+      };
+      if (userRole === 'tutor') {
+        autoPromoteNextWaitingStudentIfRoomFree(normRoom);
+      }
+    }
+
     res.json({
       token: jwt,
       serverUrl,
@@ -376,7 +637,14 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
       isMockSession: false,
       expiresInSeconds: 43200,
       isOverrideActive,
-      isHiddenAdmin: Boolean(isAdminObserver)
+      isHiddenAdmin: Boolean(isAdminObserver),
+      inWaitingRoom,
+      waitingId,
+      waitingReason,
+      queuePosition,
+      tutorName: tutorNameForLounge,
+      currentLessonEndTimeMs: lessonEndTimeForLounge,
+      message: loungeMessage
     });
   } catch (err: any) {
     console.error('[LiveKit Token Error]:', err);
@@ -425,49 +693,117 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     // Step 4: Check dynamic room override for today
     const { targetRoomId, isOverrideActive } = getTargetRoomIdentifier(permRoom.room_slug);
 
-    // Step 5: Waiting Room Isolation Intercept check
-    // Check both LIVE_ROOM_PARTICIPANTS (real-time heartbeats) and ACTIVE_ROOM_PARTICIPANTS
-    const normRoom = targetRoomId.toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
-    const liveParticipants = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
+    // Step 5: Smart 1-on-1 Room Lock & Waiting Room Isolation Intercept check
+    const {
+      normRoom,
+      canonicalSlug,
+      activeTutor,
+      activeStudents,
+      currentLessonEndTimeMs,
+      resolvedTutorName
+    } = getRoomQueueAndLessonTiming(targetRoomId);
+
     const webhookParticipants = Array.from(ACTIVE_ROOM_PARTICIPANTS[targetRoomId] || new Set<string>());
     const isTutorInRoom =
-      liveParticipants.some(p => p.role === 'tutor' || p.identity.toLowerCase().includes('tutor')) ||
+      Boolean(activeTutor) ||
       webhookParticipants.some(id => id.toLowerCase().includes('tutor') || id === permRoom.tutor_id);
 
-    // Check if this guest was already admitted by the tutor from the waiting room
+    const identity = sessionUserId || `guest_${Date.now()}`;
+    const cleanIdentity = identity.toString().replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const cleanName = guestName || sessionUserId || (isAdminOrSupervisor ? 'Admin Observer' : 'Classroom Member');
+
+    // Check if this student/guest was already admitted (automatically when previous student left OR via Tutor's [Allow 2nd Student In Now] button)
     const isAlreadyAdmitted = Boolean(
-      admittedWaitingId &&
-      SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')
+      (admittedWaitingId && SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')) ||
+      SERVER_WAITING_ROOM.some(
+        w =>
+          w.room_slug.toLowerCase() === canonicalSlug &&
+          w.status === 'ADMITTED' &&
+          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+      )
     );
 
-    // If user is an unauthenticated guest and Tutor is NOT yet in room (and not already admitted) -> Waiting Room State
-    const isGuestUser = !isMatchingSession || userRole === 'guest';
-    if (!isAdminOrSupervisor && isGuestUser && !isTutorInRoom && !isAlreadyAdmitted) {
-      const displayName = guestName || 'Guest Student';
-      const waitingParticipant: ServerWaitingGuest = {
-        id: `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        room_slug: permRoom.room_slug,
-        guest_name: displayName,
-        joined_at: new Date().toISOString(),
-        status: 'WAITING'
-      };
-      SERVER_WAITING_ROOM.push(waitingParticipant);
+    const isStudentOrGuestRole = !isAdminOrSupervisor && userRole !== 'tutor';
+    const otherActiveStudents = activeStudents.filter(
+      s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase() && s.name.toLowerCase() !== cleanName.toLowerCase()
+    );
+
+    // 5A. Smart 1-on-1 Room Lock: If another student is ALREADY inside this room, hold incoming student in Next Student Lounge!
+    if (isStudentOrGuestRole && otherActiveStudents.length > 0 && !isAlreadyAdmitted) {
+      let waitingParticipant = SERVER_WAITING_ROOM.find(
+        w =>
+          w.room_slug.toLowerCase() === canonicalSlug &&
+          w.status === 'WAITING' &&
+          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+      );
+
+      if (!waitingParticipant) {
+        waitingParticipant = {
+          id: `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          room_slug: permRoom.room_slug,
+          guest_name: cleanName,
+          identity: cleanIdentity,
+          joined_at: new Date().toISOString(),
+          status: 'WAITING',
+          reason: 'NEXT_STUDENT_QUEUE'
+        };
+        SERVER_WAITING_ROOM.push(waitingParticipant);
+      }
+
+      const roomQueue = SERVER_WAITING_ROOM.filter(
+        w => w.room_slug.toLowerCase() === canonicalSlug && w.status === 'WAITING'
+      );
+      const qPos = Math.max(1, roomQueue.findIndex(w => w.id === waitingParticipant!.id) + 1);
 
       res.json({
         inWaitingRoom: true,
+        waitingReason: 'NEXT_STUDENT_QUEUE',
         waitingId: waitingParticipant.id,
-        message: 'Your tutor is currently in another session or not yet connected. Please wait in the waiting room.',
+        queuePosition: qPos,
+        currentLessonEndTimeMs,
+        message: `Ustadh ${resolvedTutorName} is currently wrapping up the previous student's lesson. You are #${qPos} in line — your class will start automatically as soon as the current lesson finishes!`,
         roomSlug: permRoom.room_slug,
-        tutorName: permRoom.tutor_id
+        tutorName: resolvedTutorName
       });
       return;
     }
 
-    // Issue JWT Token with 120-minute expiration
+    // 5B. Zoom-style "Wait for Host": If Student/Guest joins and Tutor is NOT yet in room (and not already admitted) -> Waiting Lounge
+    if (!isAdminOrSupervisor && isStudentOrGuestRole && !isTutorInRoom && !isAlreadyAdmitted) {
+      const displayName = cleanName || guestName || 'Student';
+      let waitingParticipant = SERVER_WAITING_ROOM.find(
+        w =>
+          w.room_slug.toLowerCase() === canonicalSlug &&
+          w.status === 'WAITING' &&
+          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === displayName.toLowerCase())
+      );
+      if (!waitingParticipant) {
+        waitingParticipant = {
+          id: `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          room_slug: permRoom.room_slug,
+          guest_name: displayName,
+          identity: cleanIdentity,
+          joined_at: new Date().toISOString(),
+          status: 'WAITING',
+          reason: 'TUTOR_NOT_PRESENT'
+        };
+        SERVER_WAITING_ROOM.push(waitingParticipant);
+      }
+
+      res.json({
+        inWaitingRoom: true,
+        waitingReason: 'TUTOR_NOT_PRESENT',
+        waitingId: waitingParticipant.id,
+        queuePosition: 1,
+        message: `Ustadh ${resolvedTutorName} has not opened the classroom yet. You are in the Waiting Lounge — your class will start automatically as soon as your tutor joins!`,
+        roomSlug: permRoom.room_slug,
+        tutorName: resolvedTutorName
+      });
+      return;
+    }
+
+    // Issue JWT Token with 12-hour shift validity
     const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
-    const identity = sessionUserId || `guest_${Date.now()}`;
-    const cleanIdentity = identity.toString().replace(/[^a-zA-Z0-9_\-]/g, '_');
-    const cleanName = guestName || sessionUserId || (isAdminOrSupervisor ? 'Admin Observer' : 'Classroom Member');
 
     const isHiddenAdmin = isAdminOrSupervisor && Boolean(isObserveMode);
 
@@ -496,6 +832,24 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     });
 
     const jwt = await at.toJwt();
+
+    // Immediately register admitted non-observer participant in LIVE_ROOM_PARTICIPANTS to prevent race conditions
+    if (!isHiddenAdmin) {
+      if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+      }
+      const existing = LIVE_ROOM_PARTICIPANTS[normRoom][cleanIdentity];
+      LIVE_ROOM_PARTICIPANTS[normRoom][cleanIdentity] = {
+        identity: cleanIdentity,
+        name: cleanName,
+        role: isMatchingSession ? userRole : 'guest',
+        joinedAt: existing?.joinedAt || Date.now(),
+        lastSeen: Date.now()
+      };
+      if (userRole === 'tutor') {
+        autoPromoteNextWaitingStudentIfRoomFree(normRoom);
+      }
+    }
 
     res.json({
       token: jwt,
@@ -586,37 +940,80 @@ app.post('/api/guest/join', async (req: Request, res: Response) => {
 });
 
 // Waiting Room Status & Tutor Intercept Triggers (`/api/livekit/waiting-room`)
-app.get('/api/livekit/waiting-room', (req: Request, res: Response) => {
+app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
   const { roomSlug, waitingId } = req.query;
 
   if (waitingId) {
     const participant = SERVER_WAITING_ROOM.find(w => w.id === waitingId);
-    res.json({ participant });
+    if (!participant) {
+      res.json({ participant: null });
+      return;
+    }
+
+    await syncLiveKitCloudRooms();
+
+    // Check if room is now free so we can auto-promote #1 in queue immediately!
+    autoPromoteNextWaitingStudentIfRoomFree(participant.room_slug);
+
+    const {
+      waitingList,
+      currentLessonEndTimeMs,
+      resolvedTutorName,
+      activeTutor,
+      activeStudents
+    } = getRoomQueueAndLessonTiming(participant.room_slug);
+
+    if (activeStudents.length > 0 && participant.status === 'WAITING') {
+      participant.reason = 'NEXT_STUDENT_QUEUE';
+    }
+
+    const qIdx = waitingList.findIndex(w => w.id === participant.id);
+    const waitingSeconds = Math.max(0, Math.floor((Date.now() - new Date(participant.joined_at).getTime()) / 1000));
+
+    res.json({
+      participant: {
+        ...participant,
+        waiting_seconds: waitingSeconds,
+        queue_position: qIdx >= 0 ? qIdx + 1 : 1
+      },
+      queuePosition: qIdx >= 0 ? qIdx + 1 : 1,
+      currentLessonEndTimeMs,
+      tutorName: resolvedTutorName,
+      tutorPresent: Boolean(activeTutor),
+      activeStudentCount: activeStudents.length
+    });
     return;
   }
 
   if (roomSlug) {
-    const queryStr = (roomSlug as string).toLowerCase().trim();
-    const numMatch = queryStr.match(/\d+/);
-    const canonicalSlug = numMatch ? `tutor-${parseInt(numMatch[0], 10)}` : queryStr;
-
-    const list = SERVER_WAITING_ROOM.filter(w => {
-      const wSlug = w.room_slug.toLowerCase();
-      return (wSlug === queryStr || wSlug === canonicalSlug) && w.status === 'WAITING';
-    });
-    res.json({ waitingList: list });
+    const { waitingList, currentLessonEndTimeMs, resolvedTutorName } = getRoomQueueAndLessonTiming(roomSlug as string);
+    res.json({ waitingList, currentLessonEndTimeMs, tutorName: resolvedTutorName });
     return;
   }
 
-  res.json({ waitingList: SERVER_WAITING_ROOM.filter(w => w.status === 'WAITING') });
+  const nowMs = Date.now();
+  res.json({
+    waitingList: SERVER_WAITING_ROOM.filter(w => w.status === 'WAITING').map((w, idx) => ({
+      ...w,
+      waiting_seconds: Math.max(0, Math.floor((nowMs - new Date(w.joined_at).getTime()) / 1000)),
+      queue_position: idx + 1
+    }))
+  });
 });
 
 app.post('/api/livekit/waiting-room/action', (req: Request, res: Response) => {
-  const { waitingId, action } = req.body; // action: 'ADMIT' | 'REJECT'
+  const { waitingId, action } = req.body; // action: 'ADMIT' | 'REJECT' | 'CANCEL'
 
-  const participant = SERVER_WAITING_ROOM.find(w => w.id === waitingId);
-  if (!participant) {
+  const participantIdx = SERVER_WAITING_ROOM.findIndex(w => w.id === waitingId);
+  if (participantIdx === -1) {
     res.status(404).json({ error: 'Waiting participant not found' });
+    return;
+  }
+
+  const participant = SERVER_WAITING_ROOM[participantIdx];
+  if (action === 'CANCEL') {
+    SERVER_WAITING_ROOM.splice(participantIdx, 1);
+    res.json({ success: true });
     return;
   }
 
@@ -624,64 +1021,330 @@ app.post('/api/livekit/waiting-room/action', (req: Request, res: Response) => {
   res.json({ success: true, participant });
 });
 
-// Real-time Live Classroom Presence & Status Tracker
-interface ActiveRoomUser {
-  identity: string;
-  name: string;
-  role: string;
-  lastSeen: number;
-}
-const LIVE_ROOM_PARTICIPANTS: Record<string, Record<string, ActiveRoomUser>> = {};
+app.post('/api/livekit/waiting-room/admit', (req: Request, res: Response) => {
+  const { waitingId, studentId } = req.body;
+  const targetId = waitingId || studentId;
+  const participant = SERVER_WAITING_ROOM.find(w => w.id === targetId || w.identity === targetId);
+  if (!participant) {
+    res.status(404).json({ error: 'Waiting participant not found' });
+    return;
+  }
+  participant.status = 'ADMITTED';
+  res.json({ success: true, participant });
+});
 
 // Heartbeat from active classroom participants (also returns waitingList for tutors to halve polling requests)
 app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
-  const { roomName, identity, name, role } = req.body;
+  const { roomName, identity, name, role, bookedEndTimeMs } = req.body;
   if (!roomName || !identity) {
     res.status(400).json({ error: 'Missing roomName or identity' });
     return;
   }
 
-  const normRoom = roomName.toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
+  const { normRoom } = getRoomQueueAndLessonTiming(roomName);
+  const roleLower = (role || 'participant').toString().toLowerCase();
+  const isStudentOrGuest = roleLower === 'student' || roleLower === 'guest' || roleLower === 'parent';
+
+  // Check if Tutor recently triggered 'END_CLASS_FOR_ALL' or 'FINISH_STUDENT_LESSON' for this student
+  const activeSignal = ROOM_CONTROL_SIGNALS[normRoom];
+  if (activeSignal && Date.now() - activeSignal.timestamp < 25000 && isStudentOrGuest) {
+    if (activeSignal.action === 'END_CLASS_FOR_ALL') {
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+      }
+      res.json({
+        success: true,
+        roomAction: 'END_CLASS_FOR_ALL',
+        waitingList: [],
+        activeParticipants: []
+      });
+      return;
+    }
+    if (
+      activeSignal.action === 'FINISH_STUDENT_LESSON' &&
+      (!activeSignal.targetIdentities || activeSignal.targetIdentities.includes(identity))
+    ) {
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+      }
+      res.json({
+        success: true,
+        roomAction: 'FINISH_STUDENT_LESSON',
+        waitingList: [],
+        activeParticipants: []
+      });
+      return;
+    }
+  }
+
+  // If Tutor sends a normal heartbeat, clear any old END_CLASS_FOR_ALL signal so room is open again
+  if (roleLower === 'tutor' && activeSignal?.action === 'END_CLASS_FOR_ALL') {
+    delete ROOM_CONTROL_SIGNALS[normRoom];
+  }
+
   if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
     LIVE_ROOM_PARTICIPANTS[normRoom] = {};
   }
 
+  const existingUser = LIVE_ROOM_PARTICIPANTS[normRoom][identity];
   LIVE_ROOM_PARTICIPANTS[normRoom][identity] = {
     identity,
     name: name || identity,
     role: role || 'participant',
-    lastSeen: Date.now()
+    joinedAt: existingUser?.joinedAt || Date.now(),
+    lastSeen: Date.now(),
+    bookedEndTimeMs: bookedEndTimeMs || existingUser?.bookedEndTimeMs
   };
 
-  const numMatch = normRoom.match(/\d+/);
-  const canonicalSlug = numMatch ? `tutor-${parseInt(numMatch[0], 10)}` : normRoom;
-  const waitingList = SERVER_WAITING_ROOM.filter(w => {
-    const wSlug = w.room_slug.toLowerCase();
-    return (wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING';
-  });
+  // If this participant was previously in SERVER_WAITING_ROOM as ADMITTED/WAITING, remove their completed queue entry
+  for (let i = SERVER_WAITING_ROOM.length - 1; i >= 0; i--) {
+    const w = SERVER_WAITING_ROOM[i];
+    if (
+      (w.identity === identity || w.guest_name.toLowerCase() === (name || '').toLowerCase()) &&
+      (w.status === 'ADMITTED' || w.status === 'WAITING')
+    ) {
+      SERVER_WAITING_ROOM.splice(i, 1);
+    }
+  }
 
-  res.json({ success: true, waitingList });
+  // If tutor is in the room with 0 students, auto-promote any waiting student in queue
+  autoPromoteNextWaitingStudentIfRoomFree(normRoom);
+
+  const { waitingList, participantsList, currentLessonEndTimeMs } = getRoomQueueAndLessonTiming(normRoom);
+
+  res.json({
+    success: true,
+    waitingList,
+    activeParticipants: participantsList,
+    currentLessonEndTimeMs
+  });
+});
+
+// Tutor Room Control Endpoint:
+// 1. 'FINISH_STUDENT_LESSON': Disconnects only the current student(s), keeps Tutor in room, and auto-admits #1 waiting student!
+// 2. 'END_CLASS_FOR_ALL': Disconnects all students, rejects waiting queue, and closes the classroom for everyone.
+app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
+  try {
+    const { roomName, action } = req.body;
+    if (!roomName || !action) {
+      res.status(400).json({ error: 'Missing roomName or action' });
+      return;
+    }
+
+    const { normRoom, canonicalSlug, activeStudents } = getRoomQueueAndLessonTiming(roomName);
+    const currentStudentIds = activeStudents.map(s => s.identity);
+
+    if (action === 'FINISH_STUDENT_LESSON') {
+      // Remove current students from LIVE_ROOM_PARTICIPANTS while keeping Tutor in the room
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        currentStudentIds.forEach(sid => {
+          delete LIVE_ROOM_PARTICIPANTS[normRoom][sid];
+        });
+      }
+
+      ROOM_CONTROL_SIGNALS[normRoom] = {
+        action: 'FINISH_STUDENT_LESSON',
+        timestamp: Date.now(),
+        targetIdentities: currentStudentIds
+      };
+
+      // Immediately promote #1 waiting student in Next Student Lounge so they enter within ~1s!
+      autoPromoteNextWaitingStudentIfRoomFree(normRoom);
+
+      // Also ask LiveKit Cloud to remove the finished student(s) cleanly if configured
+      try {
+        const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+        if (apiKey && apiSecret && serverUrl && currentStudentIds.length > 0) {
+          const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+          const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+          await Promise.allSettled(
+            currentStudentIds.map(sid => roomService.removeParticipant(normRoom, sid))
+          );
+        }
+      } catch {}
+
+      const updated = getRoomQueueAndLessonTiming(normRoom);
+      res.json({
+        success: true,
+        action: 'FINISH_STUDENT_LESSON',
+        waitingList: updated.waitingList,
+        activeParticipants: updated.participantsList
+      });
+      return;
+    }
+
+    if (action === 'END_CLASS_FOR_ALL') {
+      // Clear all participants in this room
+      LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+
+      // Mark any waiting students for this room as REJECTED so they aren't left hanging
+      SERVER_WAITING_ROOM.forEach(w => {
+        const wSlug = w.room_slug.toLowerCase();
+        if ((wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING') {
+          w.status = 'REJECTED';
+        }
+      });
+
+      ROOM_CONTROL_SIGNALS[normRoom] = {
+        action: 'END_CLASS_FOR_ALL',
+        timestamp: Date.now()
+      };
+
+      // Also ask LiveKit Cloud to remove all remote students from the room
+      try {
+        const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+        if (apiKey && apiSecret && serverUrl && currentStudentIds.length > 0) {
+          const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+          const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+          await Promise.allSettled(
+            currentStudentIds.map(sid => roomService.removeParticipant(normRoom, sid))
+          );
+        }
+      } catch {}
+
+      res.json({
+        success: true,
+        action: 'END_CLASS_FOR_ALL'
+      });
+      return;
+    }
+
+    res.status(400).json({ error: 'Unsupported room control action' });
+  } catch (err: any) {
+    console.warn('[Room Control Error]:', err);
+    res.status(500).json({ error: 'Failed to execute room control action' });
+  }
 });
 
 // Explicit Leave notice from classroom participants
 app.post('/api/livekit/rooms/leave', (req: Request, res: Response) => {
   const { roomName, identity } = req.body;
   if (roomName && identity) {
-    const normRoom = roomName.toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
+    const { normRoom } = getRoomQueueAndLessonTiming(roomName);
     if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
       delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
     }
+    // Immediately auto-promote #1 waiting student in Next Student Lounge as soon as the current student leaves!
+    autoPromoteNextWaitingStudentIfRoomFree(normRoom);
   }
   res.json({ success: true });
 });
 
-// Live Room Status for Admin and Supervisor Dashboard Monitoring Deck
-app.get('/api/livekit/rooms/live-status', (req: Request, res: Response) => {
+// Sync real-time active rooms & participants directly from LiveKit Cloud (3s cache for zero rate-limit load)
+let lastLiveKitCloudSyncMs = 0;
+let liveKitCloudSyncPromise: Promise<void> | null = null;
+
+async function syncLiveKitCloudRooms(): Promise<void> {
   const now = Date.now();
-  // Prune dead participants older than 25 seconds
+  if (now - lastLiveKitCloudSyncMs < 3000) {
+    return;
+  }
+  if (liveKitCloudSyncPromise) {
+    return liveKitCloudSyncPromise;
+  }
+
+  liveKitCloudSyncPromise = (async () => {
+    try {
+      const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+      if (!apiKey || !apiSecret || !serverUrl) return;
+
+      const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+      const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+      const cloudRooms = await roomService.listRooms();
+      const activeCloudRooms = (cloudRooms || []).filter(r => (r.numParticipants || 0) > 0);
+
+      const seenCloudIdentitiesByRoom: Record<string, Set<string>> = {};
+
+      await Promise.allSettled(
+        activeCloudRooms.map(async (cRoom) => {
+          const { normRoom } = getRoomQueueAndLessonTiming(cRoom.name);
+          if (!seenCloudIdentitiesByRoom[normRoom]) {
+            seenCloudIdentitiesByRoom[normRoom] = new Set();
+          }
+          const participants = await roomService.listParticipants(cRoom.name);
+          if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
+            LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+          }
+
+          (participants || []).forEach((p) => {
+            let meta: any = {};
+            try {
+              if (p.metadata) meta = JSON.parse(p.metadata);
+            } catch {}
+
+            const idLower = (p.identity || '').toLowerCase();
+            const nameLower = (p.name || '').toLowerCase();
+            const metaRole = (meta.role || '').toString().toLowerCase();
+
+            // Skip stealth admin / supervisor observers
+            const isObserver =
+              Boolean(meta.hidden) ||
+              Boolean(p.permission?.hidden) ||
+              metaRole === 'admin' ||
+              metaRole === 'supervisor' ||
+              idLower.includes('admin_obs') ||
+              idLower.includes('supervisor_obs') ||
+              idLower.includes('observer') ||
+              nameLower.includes('invisible');
+
+            if (isObserver) return;
+
+            const isTutorPeer =
+              metaRole === 'tutor' ||
+              idLower.startsWith('tutor') ||
+              idLower.includes('tutor_') ||
+              /^tutor\s*\d+/i.test(p.name || '') ||
+              nameLower.includes('ustadh') ||
+              nameLower.includes('qari');
+
+            const resolvedRole = isTutorPeer ? 'tutor' : (metaRole || 'student');
+            seenCloudIdentitiesByRoom[normRoom].add(p.identity);
+
+            const existing = LIVE_ROOM_PARTICIPANTS[normRoom][p.identity];
+            LIVE_ROOM_PARTICIPANTS[normRoom][p.identity] = {
+              identity: p.identity,
+              name: p.name || existing?.name || p.identity,
+              role: resolvedRole,
+              joinedAt: existing?.joinedAt || (p.joinedAt ? Number(p.joinedAt) * 1000 : Date.now()),
+              lastSeen: Date.now(),
+              bookedEndTimeMs: existing?.bookedEndTimeMs,
+              fromCloud: true
+            };
+          });
+        })
+      );
+
+      // Reconcile any cloud-tracked participants who left LiveKit Cloud
+      Object.keys(LIVE_ROOM_PARTICIPANTS).forEach((rKey) => {
+        const activeSet = seenCloudIdentitiesByRoom[rKey];
+        Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
+          const u = LIVE_ROOM_PARTICIPANTS[rKey][pid];
+          if (u.fromCloud && (!activeSet || !activeSet.has(pid))) {
+            delete LIVE_ROOM_PARTICIPANTS[rKey][pid];
+            autoPromoteNextWaitingStudentIfRoomFree(rKey);
+          }
+        });
+      });
+
+      lastLiveKitCloudSyncMs = Date.now();
+    } catch (err) {
+      // Non-fatal if LiveKit Cloud HTTP endpoint is temporarily unreachable
+    } finally {
+      liveKitCloudSyncPromise = null;
+    }
+  })();
+
+  return liveKitCloudSyncPromise;
+}
+
+// Live Room Status for Admin and Supervisor Dashboard Monitoring Deck
+app.get('/api/livekit/rooms/live-status', async (req: Request, res: Response) => {
+  await syncLiveKitCloudRooms();
+  const now = Date.now();
+  // Prune dead participants older than 60 seconds (supports 20s Zero-Load Idle Standby heartbeats & background tabs)
   Object.keys(LIVE_ROOM_PARTICIPANTS).forEach(r => {
     Object.keys(LIVE_ROOM_PARTICIPANTS[r]).forEach(id => {
-      if (now - LIVE_ROOM_PARTICIPANTS[r][id].lastSeen > 25000) {
+      if (now - LIVE_ROOM_PARTICIPANTS[r][id].lastSeen > 60000) {
         delete LIVE_ROOM_PARTICIPANTS[r][id];
       }
     });
@@ -699,25 +1362,79 @@ app.get('/api/livekit/rooms/live-status', (req: Request, res: Response) => {
     };
 
     const participantsList = Object.values(participantsMap);
-    const tutorPresent = participantsList.some(p => p.role === 'tutor' || p.identity.includes('tutor'));
-    const studentsList = participantsList.filter(p => p.role === 'student' || p.role === 'guest' || (!p.identity.includes('tutor') && !p.identity.includes('admin') && !p.identity.includes('supervisor') && !p.identity.includes('observer')));
+    const tutorsInRoom = participantsList.filter(p => {
+      const rl = (p.role || '').toLowerCase();
+      const idl = (p.identity || '').toLowerCase();
+      const nml = (p.name || '').toLowerCase();
+      return rl === 'tutor' || idl.includes('tutor') || /^tutor\s*\d+/i.test(p.name || '') || nml.includes('ustadh');
+    });
+    const tutorPresent = tutorsInRoom.length > 0;
+    const tutorName = tutorsInRoom[0]?.name || r.tutor_id;
+
+    const studentsList = participantsList.filter(p => {
+      const rl = (p.role || '').toLowerCase();
+      const idl = (p.identity || '').toLowerCase();
+      const nml = (p.name || '').toLowerCase();
+      const isTut = rl === 'tutor' || idl.includes('tutor') || /^tutor\s*\d+/i.test(p.name || '') || nml.includes('ustadh');
+      const isObs = rl === 'admin' || rl === 'supervisor' || idl.includes('admin') || idl.includes('supervisor') || idl.includes('observer');
+      return !isTut && !isObs;
+    });
     const studentPresent = studentsList.length > 0;
 
-    const waitingGuests = SERVER_WAITING_ROOM.filter(w => 
-      w.room_slug.toLowerCase() === r.room_slug.toLowerCase() && w.status === 'WAITING'
-    );
+    // Match waiting room entries for this tutor's room
+    const waitingGuests = SERVER_WAITING_ROOM.filter(w => {
+      const wSlug = w.room_slug.toLowerCase().trim();
+      return (
+        w.status === 'WAITING' &&
+        (wSlug === r.room_slug.toLowerCase() ||
+          wSlug === normRoom ||
+          wSlug === canonicalRoom ||
+          wSlug === r.tutor_id.toLowerCase())
+      );
+    });
+
+    const waitingDetails: Array<{
+      id: string;
+      name: string;
+      waitingSeconds: number;
+      reason: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
+      queuePosition: number;
+    }> = waitingGuests.map((w, idx) => ({
+      id: w.id,
+      name: w.guest_name,
+      waitingSeconds: Math.max(0, Math.floor((now - new Date(w.joined_at).getTime()) / 1000)),
+      reason: w.reason || (tutorPresent && studentPresent ? 'NEXT_STUDENT_QUEUE' : 'TUTOR_NOT_PRESENT'),
+      queuePosition: idx + 1
+    }));
+
+    // If a student is already inside the LiveKit room waiting for the tutor (tutorPresent === false),
+    // also include them in waitingDetails so Admin/Supervisor sees them in the Waiting Queue!
+    if (!tutorPresent && studentPresent) {
+      studentsList.forEach((st) => {
+        if (!waitingDetails.some(wd => wd.name.toLowerCase() === st.name.toLowerCase())) {
+          waitingDetails.push({
+            id: st.identity,
+            name: st.name,
+            waitingSeconds: Math.max(0, Math.floor((now - st.joinedAt) / 1000)),
+            reason: 'TUTOR_NOT_PRESENT',
+            queuePosition: waitingDetails.length + 1
+          });
+        }
+      });
+    }
 
     let status: 'running' | 'tutor_waiting' | 'student_waiting' | 'idle' = 'idle';
     if (tutorPresent && studentPresent) {
       status = 'running';
     } else if (tutorPresent && !studentPresent) {
       status = 'tutor_waiting';
-    } else if (!tutorPresent && (studentPresent || waitingGuests.length > 0)) {
+    } else if (!tutorPresent && (studentPresent || waitingDetails.length > 0)) {
       status = 'student_waiting';
     }
 
     return {
       tutorId: r.tutor_id,
+      tutorName,
       roomSlug: r.room_slug,
       status,
       tutorPresent,
@@ -725,9 +1442,10 @@ app.get('/api/livekit/rooms/live-status', (req: Request, res: Response) => {
       participantCount: participantsList.length,
       studentCount: studentsList.length,
       students: studentsList.map(s => s.name),
-      waitingCount: waitingGuests.length,
-      waitingStudents: waitingGuests.map(w => w.guest_name),
-      lastActivity: participantsList.length > 0 ? new Date().toISOString() : null
+      waitingCount: waitingDetails.length,
+      waitingStudents: waitingDetails.map(w => w.name),
+      waitingDetails,
+      lastActivity: (participantsList.length > 0 || waitingDetails.length > 0) ? new Date().toISOString() : null
     };
   });
 
@@ -737,7 +1455,8 @@ app.get('/api/livekit/rooms/live-status', (req: Request, res: Response) => {
       totalTutors: SERVER_PERMANENT_ROOMS.length,
       runningCount: roomStatuses.filter(r => r.status === 'running').length,
       tutorWaitingCount: roomStatuses.filter(r => r.status === 'tutor_waiting').length,
-      studentWaitingCount: roomStatuses.filter(r => r.status === 'student_waiting').length,
+      // Count rooms where ANY student is waiting (either waiting for tutor OR waiting in Next Student Lounge queue while class is running)
+      studentWaitingCount: roomStatuses.filter(r => r.status === 'student_waiting' || r.waitingCount > 0).length,
       idleCount: roomStatuses.filter(r => r.status === 'idle').length,
     }
   });

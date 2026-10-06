@@ -1,16 +1,18 @@
 import React from 'react';
-import { Bell, Calendar, Megaphone, Trash2 } from 'lucide-react';
+import { Bell, Calendar, Megaphone, Pencil, Trash2 } from 'lucide-react';
 import { Announcement } from '../../types';
 
 interface AnnouncementsListProps {
   announcements: Announcement[];
   isAdmin?: boolean;
+  onEdit?: (announcement: Announcement) => void;
   onDelete?: (id: string) => void;
 }
 
 export const AnnouncementsList: React.FC<AnnouncementsListProps> = ({
   announcements,
   isAdmin = false,
+  onEdit,
   onDelete
 }) => {
   if (!announcements || announcements.length === 0) {
@@ -61,15 +63,29 @@ export const AnnouncementsList: React.FC<AnnouncementsListProps> = ({
                 </div>
               </div>
 
-              {isAdmin && onDelete && (
-                <button
-                  type="button"
-                  onClick={() => onDelete(ann.id)}
-                  className="text-gray-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                  title="Delete Announcement"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+              {isAdmin && (onEdit || onDelete) && (
+                <div className="flex items-center gap-1.5">
+                  {onEdit && (
+                    <button
+                      type="button"
+                      onClick={() => onEdit(ann)}
+                      className="text-gray-400 hover:text-emerald-700 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer"
+                      title="Edit Announcement"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(ann.id)}
+                      className="text-gray-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                      title="Delete Announcement"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
