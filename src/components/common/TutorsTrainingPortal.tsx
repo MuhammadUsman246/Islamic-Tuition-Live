@@ -19,9 +19,7 @@ export const TUTOR_TRAINING_PLAYLIST: TrainingVideoItem[] = [
   { index: 6, number: 7, id: 'hJ9OboLX-uc', title: 'Training 7: قرآن پاک پڑھانے کا طریقہ', description: 'Holy Quran Recitation & Nazra Methodology' },
   { index: 7, number: 8, id: 'tS16QyZMmuA', title: 'Training 8: Memorization Lesson and Islamic Studies', description: 'Hifz, Daily Duas & Islamic Studies Guide' },
   { index: 8, number: 9, id: 'W4MgdwaprRo', title: 'Training 9: Trial Classes & Lesson Sheet', description: 'Conducting Trial Classes & Sheet Logging' },
-  { index: 9, number: 10, id: 'gApxPYC_9N8', title: 'Training 10: Lesson Sheet Logging', description: 'Accurate Lesson Entry & Daily Tracking' },
-  { index: 10, number: 11, id: 'Caj3-9sds7I', title: 'Training 11: Rules & Regulations 1', description: 'Faculty Discipline & Shift Protocol — Part 1' },
-  { index: 11, number: 12, id: 'F3yX19erj3g', title: 'Training 12: Rules & Regulations 2', description: 'Faculty Discipline & Shift Protocol — Part 2' },
+  { index: 9, number: 10, id: 'F3yX19erj3g', title: 'Training 10: Rules & Regulations', description: 'Faculty Discipline & Shift Protocol' },
 ];
 
 export const TutorsTrainingPortal: React.FC = () => {
@@ -37,7 +35,7 @@ export const TutorsTrainingPortal: React.FC = () => {
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-[#1E5C3D] text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
               <Sparkles className="w-3 h-3" /> Training Series
             </span>
-            <span className="text-xs text-[#5A6B61] font-medium">12 Video Modules</span>
+            <span className="text-xs text-[#5A6B61] font-medium">10 Video Modules</span>
           </div>
           <h2 className="text-lg font-bold text-[#161F1A]">
             Tutors Training Videos
@@ -55,8 +53,8 @@ export const TutorsTrainingPortal: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setSelectedTrainingVideoIndex(prev => Math.min(11, prev + 1))}
-            disabled={selectedTrainingVideoIndex === 11}
+            onClick={() => setSelectedTrainingVideoIndex(prev => Math.min(9, prev + 1))}
+            disabled={selectedTrainingVideoIndex === 9}
             className="px-3 py-1.5 rounded-lg border border-[#D5D0C6] bg-white text-xs font-bold text-[#161F1A] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#FAF9F7] transition-colors cursor-pointer flex items-center space-x-1"
           >
             <span>Next Video &rarr;</span>
@@ -77,7 +75,7 @@ export const TutorsTrainingPortal: React.FC = () => {
       <div className="bg-black rounded-2xl overflow-hidden border border-[#E3DFD7] shadow-lg aspect-video w-full max-h-[780px] relative">
         <iframe
           key={currentVideo.id}
-          src={`https://www.youtube-nocookie.com/embed/${currentVideo.id}?list=PLbQ5G5gE6IK84pFoT1l8qFMNKA2sgltZp&rel=0&autoplay=1`}
+          src={`https://www.youtube-nocookie.com/embed/${currentVideo.id}?rel=0&autoplay=0`}
           title={currentVideo.title}
           className="w-full h-full border-0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
@@ -93,7 +91,7 @@ export const TutorsTrainingPortal: React.FC = () => {
           </span>
           <div className="min-w-0">
             <span className="text-[10px] uppercase font-bold text-[#5A6B61] tracking-wider block">
-              Currently Playing (Video {selectedTrainingVideoIndex + 1} of 12)
+              Currently Playing (Video {selectedTrainingVideoIndex + 1} of 10)
             </span>
             <p className="text-sm font-bold text-[#161F1A] truncate">
               {currentVideo.title}
@@ -107,10 +105,10 @@ export const TutorsTrainingPortal: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2 shrink-0">
-          {selectedTrainingVideoIndex < 11 && (
+          {selectedTrainingVideoIndex < 9 && (
             <button
               type="button"
-              onClick={() => setSelectedTrainingVideoIndex(prev => Math.min(11, prev + 1))}
+              onClick={() => setSelectedTrainingVideoIndex(prev => Math.min(9, prev + 1))}
               className="px-4 py-2 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold transition-colors cursor-pointer flex items-center space-x-1.5 shadow-2xs"
             >
               <span>Play Next Video (#{selectedTrainingVideoIndex + 2})</span>
@@ -124,11 +122,11 @@ export const TutorsTrainingPortal: React.FC = () => {
       <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
         <div className="flex items-center justify-between border-b border-[#EAE6DE] pb-3">
           <div>
-            <h3 className="text-sm font-bold text-[#161F1A]">Full Training Playlist (12 Videos)</h3>
+            <h3 className="text-sm font-bold text-[#161F1A]">Full Training Playlist (10 Videos)</h3>
             <p className="text-xs text-[#5A6B61]">Click any module below to load and play that video immediately</p>
           </div>
           <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-[#1E5C3D] border border-emerald-200 text-xs font-bold">
-            12 Modules Available
+            10 Modules Available
           </span>
         </div>
 

@@ -520,7 +520,7 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
           w =>
             w.room_slug.toLowerCase() === canonicalSlug &&
             w.status === 'ADMITTED' &&
-            (w.identity === cleanIdentity || (cleanName !== 'Classroom Member' && cleanName !== 'Guest Student' && cleanName !== 'Student' && w.guest_name.toLowerCase() === cleanName.toLowerCase()))
+            w.identity === cleanIdentity
         )
       );
 
@@ -706,12 +706,12 @@ const handleSlugAccess = async (req: Request, res: Response) => {
 
     const isAdminOrSupervisor = userRole === 'admin' || userRole === 'supervisor';
 
-    // Step 1: Check if client session matches student_id, tutor_id, or is authenticated role
-    const isMatchingSession = isAdminOrSupervisor || (Boolean(sessionUserId) &&
-      (sessionUserId === permRoom.tutor_id || sessionUserId === permRoom.student_id || userRole === 'tutor' || userRole === 'student' || userRole === 'parent'));
+    const isMatchingSession = Boolean(sessionUserId && sessionUserId.trim().length > 0);
+    const isTutorSession = userRole === 'tutor' || sessionUserId === permRoom.tutor_id;
+    const isStaff = isAdminOrSupervisor || isTutorSession;
 
-    // Step 2 & 3: If unauthenticated/guest, check 5-digit passcode
-    if (!isMatchingSession) {
+    // Enforce 5-digit passcode for ALL students, parents, and guests
+    if (!isStaff) {
       if (!passcode || passcode.toString().trim() !== permRoom.passcode) {
         res.status(401).json({ error: 'Invalid 5-digit passcode. Access rejected.' });
         return;
@@ -750,7 +750,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
         w =>
           w.room_slug.toLowerCase() === canonicalSlug &&
           w.status === 'ADMITTED' &&
-          (w.identity === cleanIdentity || (cleanName !== 'Classroom Member' && cleanName !== 'Guest Student' && cleanName !== 'Student' && w.guest_name.toLowerCase() === cleanName.toLowerCase()))
+          w.identity === cleanIdentity
       )
     );
 
@@ -1156,14 +1156,16 @@ app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
 // 2. 'END_CLASS_FOR_ALL': Disconnects all students, rejects waiting queue, and closes the classroom for everyone.
 app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
   try {
-    const { roomName, action } = req.body;
+    const { roomName, action, targetIdentities } = req.body;
     if (!roomName || !action) {
       res.status(400).json({ error: 'Missing roomName or action' });
       return;
     }
 
     const { normRoom, canonicalSlug, activeStudents } = getRoomQueueAndLessonTiming(roomName);
-    const currentStudentIds = activeStudents.map(s => s.identity);
+    const currentStudentIds = targetIdentities && Array.isArray(targetIdentities)
+      ? targetIdentities
+      : activeStudents.map(s => s.identity);
 
     if (action === 'FINISH_STUDENT_LESSON') {
       // Remove current students from LIVE_ROOM_PARTICIPANTS while keeping Tutor in the room

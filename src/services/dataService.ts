@@ -6272,6 +6272,10 @@ export async function fetchAllAcademyData(
 
   // 1. Role-specific optimization for TUTORS
   if (role === 'tutor' && targetId) {
+    if (!forceRefresh && fallbackData.students.length > 0 && fallbackData.classes.length > 0) {
+      console.log(`[DataService] fetchAllAcademyData (Tutor Scoped) serving from cache (forceRefresh = false)`);
+      return fallbackData;
+    }
     const tutorFetchPromise = Promise.all([
       getTutors(forceRefresh).catch(() => fallbackData.tutors),
       getClassesForTutor(targetId, forceRefresh).catch(() => fallbackData.classes.filter(c => isSameTutor(c.tutorId, targetId))),
@@ -6300,6 +6304,10 @@ export async function fetchAllAcademyData(
 
   // 2. Role-specific optimization for STUDENTS / PARENTS (Live Scoped Schedule, Profile & Lessons)
   if ((role === 'student' || role === 'parent') && targetId) {
+    if (!forceRefresh && fallbackData.students.length > 0 && fallbackData.classes.length > 0) {
+      console.log(`[DataService] fetchAllAcademyData (Student/Parent Live Scoped) serving from cache (forceRefresh = false)`);
+      return fallbackData;
+    }
     const studentFetchPromise = Promise.all([
       getStudentAndParentScopedData(targetId, { forceRefresh }).catch(() => ({
         students: fallbackData.students,
@@ -6329,6 +6337,10 @@ export async function fetchAllAcademyData(
 
   // 3. ADMIN / SUPERVISOR Core operational load (Students, Tutors, Classes, Announcements, lightweight Recent Lessons)
   // Secondary heavy collections (fees, salaries, referrals, attendance) are served from cache or loaded lazily on tab click
+  if (!forceRefresh && fallbackData.students.length > 0 && fallbackData.classes.length > 0) {
+    console.log(`[DataService] fetchAllAcademyData (Core Admin) serving from cache (forceRefresh = false)`);
+    return fallbackData;
+  }
   const adminFetchPromise = Promise.all([
     getStudents(forceRefresh).catch(() => fallbackData.students),
     getTutors(forceRefresh).catch(() => fallbackData.tutors),

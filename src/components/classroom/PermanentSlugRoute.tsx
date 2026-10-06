@@ -162,13 +162,15 @@ export const PermanentSlugRoute: React.FC = () => {
   }, [userProfile]);
 
   const isAdminOrSupervisor = activeRole === 'admin' || userProfile?.role === 'admin' || activeRole === 'supervisor' || userProfile?.role === 'supervisor';
+  const isTutorRole = activeRole === 'tutor' || userProfile?.role === 'tutor';
+  const isStaff = isAdminOrSupervisor || isTutorRole;
 
-  // Auto-connect logged-in users instantly (Tutor, Student, Admin)
+  // Auto-connect logged-in staff instantly (Tutor, Admin, Supervisor)
   useEffect(() => {
-    if (slug && userProfile && !tokenData && !isLoading && !errorMessage) {
+    if (slug && userProfile && isStaff && !tokenData && !isLoading && !errorMessage) {
       handleJoinClassroom('');
     }
-  }, [slug, userProfile]);
+  }, [slug, userProfile, isStaff]);
 
   // Poll waiting room status if in waiting room
   useEffect(() => {

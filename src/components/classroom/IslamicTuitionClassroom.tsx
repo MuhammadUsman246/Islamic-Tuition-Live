@@ -1144,6 +1144,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             } else if (msgObj.type === 'END_CLASS_FOR_ALL' || msgObj.type === 'FINISH_STUDENT_LESSON') {
               // Tutor ended class for everyone or finished this student's lesson -> immediately disconnect & exit student
               if (!isTutor) {
+                if (msgObj.type === 'FINISH_STUDENT_LESSON' && msgObj.targetIdentities && !msgObj.targetIdentities.includes(room.localParticipant.identity)) {
+                  // Not targeted to us, ignore!
+                  return;
+                }
                 isCancelled = true;
                 try { room.disconnect(); } catch {}
                 onLeave();
@@ -2165,6 +2169,56 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     );
   };
 
+  // Disconnect a specific selected student, keep tutor and other students in the room
+  const handleRemoveSelectedStudent = async (studentIdentity: string, studentName: string) => {
+    setShowLeaveConfirmModal(false);
+    try {
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        const payload = new TextEncoder().encode(JSON.stringify({
+          type: 'FINISH_STUDENT_LESSON',
+          sender: participantName,
+          targetIdentities: [studentIdentity]
+        }));
+        await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+      }
+      const res = await fetch('/api/livekit/rooms/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          action: 'FINISH_STUDENT_LESSON',
+          targetIdentities: [studentIdentity]
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.waitingList) {
+        updateTutorWaitingQueue(data.waitingList);
+      }
+    } catch {}
+
+    notifiedPeersRef.current.delete(studentIdentity);
+    delete peerCustomNamesRef.current[studentIdentity];
+    serverHeartbeatPeersRef.current = serverHeartbeatPeersRef.current.filter(hp => hp.identity !== studentIdentity);
+    
+    // Reset timer only if no students are left
+    const remainingStudents = activeStudentParticipants.filter(s => s.id !== studentIdentity);
+    if (remainingStudents.length === 0) {
+      setElapsedSeconds(0);
+      setIsTimerRunning(false);
+      setChatMessages([]);
+      setUnreadChatCount(0);
+    }
+    
+    if (roomRef.current) {
+      syncParticipantsState(roomRef.current);
+    }
+    triggerPresenceToast(
+      `Finished lesson for ${studentName}`,
+      'Classroom',
+      'leave'
+    );
+  };
+
   // Tutor Option 2: End Class for Everyone (Disconnects all students & closes classroom)
   const handleEndClassForEveryone = async () => {
     setShowLeaveConfirmModal(false);
@@ -2772,6 +2826,27 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       </header>
 
+      {/* MULTIPLE STUDENTS IN CLASS NOTICE FOR TUTOR */}
+      {isTutor && activeStudentParticipants.length >= 2 && (
+        <div
+          className={`px-3 py-1.5 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 animate-in slide-in-from-top duration-200 ${
+            isLight
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+              : 'bg-emerald-950/90 border-emerald-500/40 text-emerald-100'
+          }`}
+        >
+          <div className="flex items-center space-x-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="text-xs font-extrabold truncate">
+              📢 Multiple Students Joined: <span className="underline decoration-emerald-400/60 font-black">{connectedStudentsNames}</span> ({activeStudentParticipants.length} students currently in classroom)
+            </span>
+          </div>
+          <div className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-extrabold uppercase border border-emerald-400/35">
+            Active Group
+          </div>
+        </div>
+      )}
+
       {/* NON-INTRUSIVE TUTOR TOP BADGE FOR WAITING STUDENT IN LOUNGE (Zero Blocking Popup + Sibling [Allow 2nd Student In Now] Button) */}
       {isTutor && waitingQueue.length > 0 && (
         <div
@@ -3249,6 +3324,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     </div>
 
                     <div className="flex items-center space-x-1 shrink-0">
+                      {isTutor && (p.role === 'Student' || p.role === 'Guest') && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSelectedStudent(p.id, p.name)}
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/30 flex items-center space-x-0.5 cursor-pointer mr-1.5 transition-colors"
+                          title={`Finish lesson and remove ${p.name}`}
+                        >
+                          <span>Remove</span>
+                        </button>
+                      )}
                       {p.isMuted ? (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center space-x-0.5">
                           <MicOff className="w-2.5 h-2.5" />
@@ -3464,20 +3549,20 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           </button>
         )}
 
-        {/* Mobile Quick Button: Participants Drawer Below Screen */}
+        {/* Universal Headcount Indicator Button: Visible on both Desktop and Mobile */}
         <button
           type="button"
           onClick={handleToggleParticipantsDrawer}
-          className={`md:hidden min-h-[44px] px-3.5 py-2 rounded-xl text-[11px] font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs ${
-            isSidebarOpen && mobileDrawerTab === 'participants'
+          className={`min-h-[44px] px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs ${
+            isSidebarOpen && (mobileDrawerTab === 'participants' || (typeof window !== 'undefined' && window.innerWidth >= 768))
               ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
               : isLight
-                ? 'bg-[#FAF9F5] hover:bg-emerald-50 text-[#14231B] border-[#D5D0C6]'
+                ? 'bg-[#FAF9F5] hover:bg-gray-100 text-[#14231B] border-[#D5D0C6]'
                 : 'bg-[#15241B] hover:bg-[#1E3327] text-white border-[#2B4B39]'
           }`}
-          title="Show or Hide Participants Below Screen"
+          title="Show or Hide Participants"
         >
-          <Users className={`w-4 h-4 ${isSidebarOpen && mobileDrawerTab === 'participants' ? 'text-white' : 'text-emerald-400'}`} />
+          <Users className={`w-4 h-4 ${isSidebarOpen && (mobileDrawerTab === 'participants' || (typeof window !== 'undefined' && window.innerWidth >= 768)) ? 'text-white' : 'text-emerald-400'}`} />
           <span>{`In Class (${activeVisibleParticipantsCount})`}</span>
         </button>
 
@@ -3586,22 +3671,40 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             <div className="space-y-2.5 pt-2">
               {isTutor ? (
                 <>
-                  {/* Option 1: Finish Current Student's Class & Auto-Admit Next Student */}
-                  <button
-                    type="button"
-                    onClick={handleFinishCurrentStudentLesson}
-                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
-                  >
-                    <span className="flex items-center space-x-1.5">
-                      <UserCheck className="w-4 h-4" />
-                      <span>Finish Current Student&apos;s Class</span>
-                    </span>
-                    <span className="text-[10px] font-medium text-emerald-100/90">
-                      {waitingQueue.length > 0
-                        ? `Auto-admits ${waitingQueue[0].guest_name} & keeps classroom open`
-                        : 'Keeps your classroom open and ready for the next student'}
-                    </span>
-                  </button>
+                  {/* Show separate finish buttons for each active student, or default if empty */}
+                  {activeStudentParticipants.length > 0 ? (
+                    activeStudentParticipants.map((stu) => (
+                      <button
+                        type="button"
+                        key={stu.id}
+                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                        className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                      >
+                        <span className="flex items-center space-x-1.5">
+                          <UserCheck className="w-4 h-4" />
+                          <span>Finish Lesson for {stu.name}</span>
+                        </span>
+                        <span className="text-[10px] font-medium text-emerald-100/90">
+                          Disconnects {stu.name} only &amp; keeps tutor in the classroom
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    /* Default Fallback Button if no student is active in room */
+                    <button
+                      type="button"
+                      onClick={handleFinishCurrentStudentLesson}
+                      className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                    >
+                      <span className="flex items-center space-x-1.5">
+                        <UserCheck className="w-4 h-4" />
+                        <span>Finish Current Lesson</span>
+                      </span>
+                      <span className="text-[10px] font-medium text-emerald-100/90">
+                        Keeps your classroom open and ready for the next student
+                      </span>
+                    </button>
+                  )}
 
                   {/* Option 2: Simple End Class for Everyone (disconnects all students & closes room) */}
                   <button
