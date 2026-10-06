@@ -398,8 +398,21 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
         avatarText: 'AS'
       });
     } else if (role === 'student') {
-      // Student has 1-to-1 line with Admin ONLY
-      const currentStudentId = adminViewingTargetId || userProfile?.studentId || userProfile?.uid || (students.length > 0 ? students[0].studentId : 'student');
+      // Student has 1-to-1 line with Admin ONLY (resolve student record by ID, studentId, or email so thread ID matches Admin's view)
+      const matchedStu = students.find(
+        s =>
+          (adminViewingTargetId && (s.id === adminViewingTargetId || s.studentId === adminViewingTargetId)) ||
+          (userProfile?.studentId && (s.id === userProfile.studentId || s.studentId === userProfile.studentId)) ||
+          (userProfile?.uid && s.id === userProfile.uid) ||
+          (userProfile?.email && s.email && s.email.toLowerCase() === userProfile.email.toLowerCase())
+      );
+      const currentStudentId =
+        adminViewingTargetId ||
+        matchedStu?.studentId ||
+        matchedStu?.id ||
+        userProfile?.studentId ||
+        userProfile?.uid ||
+        (students.length > 0 ? students[0].studentId : 'student');
       const sKey = currentStudentId.toLowerCase().replace(/[^a-z0-9]/g, '_');
       channels.push({
         id: `dm_admin_student_${sKey}`,
@@ -1750,7 +1763,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                       >
                         {/* Message Bubble Container */}
                         <div
-                          className={`relative max-w-[88%] sm:max-w-md p-2.5 sm:p-3 rounded-2xl shadow-xs text-xs leading-relaxed transition-all hover:shadow-md ${
+                          className={`relative max-w-[88%] sm:max-w-md p-2.5 sm:p-3 rounded-2xl shadow-xs text-xs leading-relaxed transition-all hover:shadow-md break-words ${
                             isMe
                               ? 'bg-[#D9FDD3] text-[#111B21] rounded-tr-xs'
                               : 'bg-[#FFFFFF] text-[#111B21] rounded-tl-xs'
@@ -1915,7 +1928,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                               <span>This message was deleted</span>
                             </div>
                           ) : m.text ? (
-                            <p className="whitespace-pre-wrap select-text">
+                            <p className="whitespace-pre-wrap break-words select-text">
                               {m.text}
                               {m.isEdited && (
                                 <span className="text-[10px] text-gray-500 italic ml-1 select-none font-normal">
@@ -2122,7 +2135,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
               <button
                 type="button"
                 onClick={() => setShowAttachMenu(prev => !prev)}
-                className="p-2 rounded-full text-[#54656F] hover:bg-black/5 transition-colors cursor-pointer"
+                className="min-h-[44px] min-w-[44px] p-2.5 rounded-full text-[#54656F] hover:bg-black/5 transition-colors cursor-pointer flex items-center justify-center"
                 title="Attach photo or document"
               >
                 <Paperclip className="w-5 h-5" />
@@ -2130,23 +2143,23 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
 
               {/* WhatsApp Attachment Popup Menu */}
               {showAttachMenu && (
-                <div className="absolute bottom-12 left-0 bg-[#FFFFFF] rounded-2xl shadow-xl border border-[#E9EDEF] p-2 space-y-1 w-48 z-30 animate-in fade-in slide-in-from-bottom-2">
+                <div className="absolute bottom-14 left-0 bg-[#FFFFFF] rounded-2xl shadow-xl border border-[#E9EDEF] p-2 space-y-1 w-48 z-30 animate-in fade-in slide-in-from-bottom-2">
                   <button
                     type="button"
                     onClick={() => imageInputRef.current?.click()}
-                    className="w-full px-3 py-2 text-left text-xs font-medium text-[#111B21] hover:bg-[#F0F2F5] rounded-xl flex items-center space-x-2.5 cursor-pointer"
+                    className="min-h-[44px] w-full px-3 py-2 text-left text-xs font-medium text-[#111B21] hover:bg-[#F0F2F5] rounded-xl flex items-center space-x-2.5 cursor-pointer"
                   >
-                    <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center">
+                    <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center shrink-0">
                       <ImageIcon className="w-4 h-4" />
                     </div>
-                    <span>Photos & Videos</span>
+                    <span>Photos &amp; Videos</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full px-3 py-2 text-left text-xs font-medium text-[#111B21] hover:bg-[#F0F2F5] rounded-xl flex items-center space-x-2.5 cursor-pointer"
+                    className="min-h-[44px] w-full px-3 py-2 text-left text-xs font-medium text-[#111B21] hover:bg-[#F0F2F5] rounded-xl flex items-center space-x-2.5 cursor-pointer"
                   >
-                    <div className="w-7 h-7 rounded-full bg-violet-500 text-white flex items-center justify-center">
+                    <div className="w-7 h-7 rounded-full bg-violet-500 text-white flex items-center justify-center shrink-0">
                       <FileText className="w-4 h-4" />
                     </div>
                     <span>Document</span>
@@ -2162,7 +2175,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Type a message"
-                className="flex-1 bg-white text-[#111B21] placeholder-[#8696A0] text-xs sm:text-sm px-4 py-2.5 rounded-xl border-none focus:outline-none focus:ring-1 focus:ring-[#2D8B5C] shadow-2xs"
+                className="min-h-[44px] flex-1 bg-white text-[#111B21] placeholder-[#8696A0] text-xs sm:text-sm px-4 py-2.5 rounded-xl border-none focus:outline-none focus:ring-1 focus:ring-[#2D8B5C] shadow-2xs"
               />
 
               {/* Microphone or Send Button */}
@@ -2170,7 +2183,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                 <button
                   type="submit"
                   disabled={sending}
-                  className="w-10 h-10 rounded-full bg-[#00A884] hover:bg-[#008f6f] text-white flex items-center justify-center shrink-0 shadow-xs transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
+                  className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-full bg-[#00A884] hover:bg-[#008f6f] text-white flex items-center justify-center shrink-0 shadow-xs transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
                   title="Send message"
                 >
                   <Send className="w-4 h-4 ml-0.5" />
@@ -2180,7 +2193,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                   type="button"
                   onClick={startRecording}
                   disabled={isRecording}
-                  className="w-10 h-10 rounded-full bg-[#00A884] hover:bg-[#008f6f] text-white flex items-center justify-center shrink-0 shadow-xs transition-transform active:scale-95 cursor-pointer"
+                  className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-full bg-[#00A884] hover:bg-[#008f6f] text-white flex items-center justify-center shrink-0 shadow-xs transition-transform active:scale-95 cursor-pointer"
                   title="Record voice note"
                 >
                   <Mic className="w-4 h-4" />

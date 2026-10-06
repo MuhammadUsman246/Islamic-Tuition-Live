@@ -49,6 +49,7 @@ import { getCurrencySymbol } from '../../utils/currency';
 import { updateFee, loadOlderLessonsArchive } from '../../services/dataService';
 import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName, getTutorSlug, getTutorDisplayId } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
+import { IslamicReferralSection } from '../common/IslamicReferralSection';
 
 interface ParentDashboardProps {
   currentTab: string;
@@ -1608,6 +1609,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* ISLAMIC VALUES REFERRAL TAB */}
+      {currentTab === 'parent_referrals' && (
+        <IslamicReferralSection
+          referrerName={activeChild?.parentName || userProfile?.displayName || 'Respected Parent'}
+          referrerStudentId={activeChild?.studentId}
+          referrerRole="parent"
+          referrerEmail={activeChild?.parentEmail || userProfile?.email}
+        />
       )}
 
       {/* COMPLETE LESSON DETAIL POPUP MODAL */}

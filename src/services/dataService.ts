@@ -55,6 +55,7 @@ import {
   StudentFee,
   TutorSalary,
   Referral,
+  StudentReferralLead,
   Announcement,
   ChatMessage,
   AcademySettings,
@@ -345,6 +346,7 @@ const TUTOR_ATTENDANCE_COL = 'tutor_attendance';
 const FEES_COL = 'fees';
 const SALARIES_COL = 'salaries';
 const REFERRALS_COL = 'referrals';
+const REFERRAL_LEADS_COL = 'referral_leads';
 const ANNOUNCEMENTS_COL = 'announcements';
 const MESSAGES_COL = 'messages';
 const SETTINGS_COL = 'settings';
@@ -361,6 +363,7 @@ interface MemoryCacheStore {
   fees: StudentFee[] | null;
   salaries: TutorSalary[] | null;
   referrals: Referral[] | null;
+  referralLeads: StudentReferralLead[] | null;
   announcements: Announcement[] | null;
   attendance: AttendanceRecord[] | null;
   tutorAttendance: TutorAttendanceRecord[] | null;
@@ -378,6 +381,7 @@ const CACHE: MemoryCacheStore = {
   fees: null,
   salaries: null,
   referrals: null,
+  referralLeads: null,
   announcements: null,
   attendance: null,
   tutorAttendance: null,
@@ -3134,6 +3138,186 @@ export async function deleteReferral(id: string): Promise<string> {
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, REFERRALS_COL);
     return '';
+  }
+}
+
+/**
+ * Automatically syncs referral records between Student Enrollment and Referral Rewards.
+ */
+export async function syncStudentReferralRecord(student: Student): Promise<void> {
+  if (!student.referredByName && !student.referredByStudentId) return;
+
+  const referrerName = (student.referredByName || 'Referring Family').trim();
+  const rewardAmount = student.referralRewardAmount || 30; // Flat $30 reward
+  const status = student.referralStatus || 'Pending';
+
+  const allRefs = CACHE.referrals || await getReferrals();
+  const existing = allRefs.find(r => 
+    r.referredStudentId === student.studentId || 
+    (r.referredStudentName && r.referredStudentName.toLowerCase().trim() === student.name.toLowerCase().trim())
+  );
+
+  if (!existing) {
+    await addReferral({
+      referrerName,
+      referrerStudentId: student.referredByStudentId || '',
+      referredStudentId: student.studentId,
+      referredStudentName: student.name,
+      date: student.joiningDate || new Date().toISOString().slice(0, 10),
+      rewardAmount,
+      currency: 'USD',
+      status,
+      notes: `Auto-linked from Student Enrollment (${student.studentId}). $30 discount applies automatically upon 1st tuition payment.`
+    });
+  } else {
+    await updateReferral(existing.id, {
+      referrerName,
+      referrerStudentId: student.referredByStudentId || existing.referrerStudentId,
+      rewardAmount,
+      status
+    });
+  }
+}
+
+/**
+ * Automatically triggers flat $30 discount application onto the referrer's upcoming tuition invoice
+ * as soon as the referred student completes their initial 1st fee payment!
+ */
+export async function checkAndApplyReferralDiscountOnFirstPayment(referredStudentId: string, paidInvoiceNumber?: string): Promise<boolean> {
+  if (!referredStudentId) return false;
+
+  const allRefs = CACHE.referrals || await getReferrals();
+  const pendingRef = allRefs.find(r => 
+    (r.referredStudentId === referredStudentId || r.referredStudentId.toLowerCase() === referredStudentId.toLowerCase()) &&
+    (r.status === 'Pending' || r.status === 'Eligible' || r.status === 'Approved')
+  );
+
+  if (!pendingRef) return false;
+
+  const allStudents = CACHE.students || await getStudents();
+  const allFees = CACHE.fees || await getFees();
+
+  // 1. Locate the referring student or parent
+  const cleanRefName = pendingRef.referrerName.toLowerCase().trim();
+  const cleanRefId = (pendingRef.referrerStudentId || '').toLowerCase().trim();
+
+  const referrerStudent = allStudents.find(s => {
+    if (cleanRefId && (s.studentId.toLowerCase() === cleanRefId || s.id.toLowerCase() === cleanRefId)) return true;
+    if (s.name.toLowerCase().trim() === cleanRefName) return true;
+    if (s.parentName && s.parentName.toLowerCase().trim() === cleanRefName) return true;
+    if (s.familyGroupName && s.familyGroupName.toLowerCase().trim() === cleanRefName) return true;
+    return false;
+  });
+
+  const rewardVal = pendingRef.rewardAmount || 30; // Flat $30 discount
+
+  if (referrerStudent) {
+    // 2. Find the referrer's upcoming/pending or overdue tuition fee invoice
+    const targetFee = allFees.find(f => 
+      (f.studentId === referrerStudent.studentId || (f.studentIds && f.studentIds.includes(referrerStudent.studentId))) &&
+      (f.status === 'Pending' || f.status === 'Overdue')
+    );
+
+    if (targetFee) {
+      const currentDiscount = targetFee.discount || 0;
+      const newDiscount = currentDiscount + rewardVal;
+      const newAmount = Math.max(0, targetFee.amount - rewardVal);
+
+      await updateFee(targetFee.id, {
+        discount: newDiscount,
+        amount: newAmount,
+        notes: `${targetFee.notes ? `${targetFee.notes} | ` : ''}Auto Referral Discount Applied: -$${rewardVal} for referring ${pendingRef.referredStudentName} (${referredStudentId})`
+      });
+
+      await updateReferral(pendingRef.id, {
+        status: 'Paid/Applied',
+        appliedInvoiceNumber: targetFee.invoiceNumber,
+        appliedDate: new Date().toISOString().slice(0, 10),
+        notes: `Flat $${rewardVal} discount automatically deducted from Invoice ${targetFee.invoiceNumber} on ${new Date().toISOString().slice(0, 10)}.`
+      });
+      return true;
+    }
+  }
+
+  // Fallback: Mark referral as Approved/Eligible for discount on next generated invoice
+  await updateReferral(pendingRef.id, {
+    status: 'Eligible',
+    notes: `Verified 1st payment received (${paidInvoiceNumber || 'Payment Received'}). Eligible for $${rewardVal} discount on referrer's next invoice.`
+  });
+  return true;
+}
+
+// ==========================================
+// STUDENT & PARENT REFERRAL LEADS API
+// ==========================================
+export async function getStudentReferralLeads(forceRefresh = false): Promise<StudentReferralLead[]> {
+  if (CACHE.referralLeads && !forceRefresh) {
+    return CACHE.referralLeads;
+  }
+  const localItems = loadCachedCollection<StudentReferralLead[]>('referralLeads') || [];
+  if (localItems.length > 0 && !forceRefresh) {
+    CACHE.referralLeads = localItems;
+    return localItems;
+  }
+  try {
+    if (!isFirestoreQuotaExceeded()) {
+      const snap = await getDocs(collection(db, REFERRAL_LEADS_COL));
+      if (!snap.empty) {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StudentReferralLead));
+        items.sort((a, b) => (b.dateSubmitted || '').localeCompare(a.dateSubmitted || ''));
+        CACHE.referralLeads = items;
+        saveCachedCollection('referralLeads', items);
+        return items;
+      }
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, REFERRAL_LEADS_COL);
+  }
+  CACHE.referralLeads = localItems;
+  saveCachedCollection('referralLeads', localItems);
+  return localItems;
+}
+
+export async function addStudentReferralLead(lead: Omit<StudentReferralLead, 'id'>): Promise<string> {
+  const docRef = doc(collection(db, REFERRAL_LEADS_COL));
+  const docId = docRef.id;
+  const newLead: StudentReferralLead = { id: docId, ...lead };
+  CACHE.referralLeads = [newLead, ...(CACHE.referralLeads || [])];
+  saveCachedCollection('referralLeads', CACHE.referralLeads);
+
+  if (!isFirestoreQuotaExceeded()) {
+    setDoc(docRef, sanitizeFirestoreObject(lead)).catch((err) => {
+      handleFirestoreError(err, OperationType.CREATE, REFERRAL_LEADS_COL);
+    });
+  }
+  return docId;
+}
+
+export async function updateStudentReferralLead(id: string, updates: Partial<StudentReferralLead>): Promise<void> {
+  if (CACHE.referralLeads) {
+    CACHE.referralLeads = CACHE.referralLeads.map(l => l.id === id ? { ...l, ...updates } : l);
+    saveCachedCollection('referralLeads', CACHE.referralLeads);
+  }
+  if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
+    try {
+      await updateDoc(doc(db, REFERRAL_LEADS_COL, id), sanitizeFirestoreObject(updates));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `${REFERRAL_LEADS_COL}/${id}`);
+    }
+  }
+}
+
+export async function deleteStudentReferralLead(id: string): Promise<void> {
+  if (CACHE.referralLeads) {
+    CACHE.referralLeads = CACHE.referralLeads.filter(l => l.id !== id);
+    saveCachedCollection('referralLeads', CACHE.referralLeads);
+  }
+  if (!isFirestoreQuotaExceeded() && !id.startsWith('local')) {
+    try {
+      await deleteDoc(doc(db, REFERRAL_LEADS_COL, id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `${REFERRAL_LEADS_COL}/${id}`);
+    }
   }
 }
 

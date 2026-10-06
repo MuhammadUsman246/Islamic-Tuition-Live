@@ -21,7 +21,8 @@ import {
   FileSpreadsheet,
   Radio,
   Eye,
-  Lock
+  Lock,
+  X
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, Tutor, Student } from '../../types';
@@ -62,6 +63,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
 
   const unreadCount = passedUnreadCount !== undefined ? passedUnreadCount : internalUnreadCount;
 
+  const activeStudent = passedStudents.find(s =>
+    (adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+    (userProfile?.studentId && s.studentId === userProfile.studentId) ||
+    (userProfile?.email && s.email && s.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+  );
+  const showFeeToStudent = activeStudent ? activeStudent.showFeeToStudent !== false : true;
+
   const getNavItems = (): NavItem[] => {
     switch (role) {
       case 'admin':
@@ -92,8 +100,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
         return [
           { id: 'tutor_timetable', label: 'My Weekly Timetable', icon: Calendar },
           { id: 'tutor_students', label: 'Assigned Students', icon: Users },
-          { id: 'tutor_lessons', label: 'Lesson Reports', icon: BookOpen },
-          { id: 'tutor_attendance', label: 'Attendance Tracking', icon: CheckSquare },
           { id: 'tutor_training', label: 'Tutors Training Videos', icon: Video },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Academy Messages', icon: MessageSquare }
@@ -115,7 +121,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'student_schedule', label: 'My Schedule (Local Time)', icon: Calendar },
           { id: 'student_lessons', label: 'My Lessons & Homework', icon: BookOpen },
           { id: 'student_attendance', label: 'My Attendance', icon: CheckSquare },
-          { id: 'student_fees', label: 'Fee Receipts', icon: DollarSign },
+          ...(showFeeToStudent ? [{ id: 'student_fees', label: 'Fee Receipts', icon: DollarSign }] : []),
+          { id: 'student_referrals', label: 'Refer a Student (Sadaqah)', icon: Share2 },
           { id: 'student_profile', label: 'My Profile & Avatar', icon: User },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Contact Admin', icon: MessageSquare }
@@ -128,6 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'parent_lessons', label: 'Lesson History & Progress', icon: BookOpen },
           { id: 'parent_attendance', label: 'Attendance Records', icon: CheckSquare },
           { id: 'parent_fees', label: 'Tuition Invoices', icon: DollarSign },
+          { id: 'parent_referrals', label: 'Refer a Student (Sadaqah)', icon: Share2 },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Contact Admin', icon: MessageSquare }
         ];
@@ -164,6 +172,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
             </p>
           </div>
         </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close Menu"
+            className="lg:hidden min-h-[44px] min-w-[44px] rounded-lg text-[#95a89e] hover:text-white hover:bg-[#233a2e] flex items-center justify-center transition-colors cursor-pointer shrink-0"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Role Badge */}
@@ -195,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
                   onClose();
                 }
               }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors text-left cursor-pointer ${
+              className={`w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors text-left cursor-pointer ${
                 isActive
                   ? 'bg-[#2D8B5C] text-white shadow-sm font-semibold'
                   : 'text-[#c2d1c9] hover:bg-[#233a2e] hover:text-white'
@@ -272,7 +290,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
             id="sidebar_logout_button"
             onClick={logout}
             title={role === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out"}
-            className="p-1.5 text-[#95a89e] hover:text-white hover:bg-[#233a2e] rounded-md transition-colors cursor-pointer"
+            className="min-h-[44px] min-w-[44px] p-2 text-[#95a89e] hover:text-white hover:bg-[#233a2e] rounded-md transition-colors cursor-pointer flex items-center justify-center shrink-0"
           >
             <LogOut className="w-4 h-4" />
           </button>

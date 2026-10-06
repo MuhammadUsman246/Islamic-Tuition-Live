@@ -186,7 +186,7 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             id="header_toggle_sidebar_button"
             onClick={onToggleSidebar}
-            className={`min-h-[38px] min-w-[38px] p-2 sm:px-2.5 sm:py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center justify-center space-x-1.5 text-xs font-semibold shrink-0 shadow-2xs ${
+            className={`min-h-[44px] min-w-[44px] p-2 sm:px-3 sm:py-2 rounded-lg border transition-colors cursor-pointer flex items-center justify-center space-x-1.5 text-xs font-semibold shrink-0 shadow-2xs ${
               isSidebarOpen
                 ? 'border-[#D5D0C6] bg-white hover:bg-[#FAF9F7] text-[#5A6B61]'
                 : 'border-[#2D8B5C] bg-emerald-50 hover:bg-emerald-100 text-[#1E5C3D]'
@@ -319,7 +319,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => setAdminViewingRole(actualRole === 'student' ? 'parent' : null, null)}
-                className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                className={`min-h-[44px] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   activeRole === 'parent'
                     ? 'bg-[#2D8B5C] text-white shadow-xs'
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
@@ -331,7 +331,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => setAdminViewingRole(actualRole === 'parent' ? 'student' : null, matchingStudentId)}
-                className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                className={`min-h-[44px] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   activeRole === 'student'
                     ? 'bg-[#2D8B5C] text-white shadow-xs'
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
@@ -349,23 +349,23 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={() => setIsZoomJoinModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 shrink-0"
+            className="min-h-[44px] flex items-center space-x-1.5 px-3 sm:px-3.5 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 shrink-0"
             title={activeRole === 'parent' ? 'Observe Live Class' : 'Join Live Class via Tutor ID & Passcode'}
           >
-            <Video className="w-3.5 h-3.5 text-emerald-200" />
+            <Video className="w-4 h-4 text-emerald-200" />
             <span className="hidden xs:inline">{activeRole === 'parent' ? 'Observe Live Class' : 'Join Class'}</span>
           </button>
         )}
 
-        {/* Quick Tour & Help Guide Button for Students & Parents */}
-        {(activeRole === 'student' || activeRole === 'parent') && (
+        {/* Quick Tour & Help Guide Button (Parent Portal Only) */}
+        {activeRole === 'parent' && (
           <button
             type="button"
             onClick={() => setIsTourModalOpen(true)}
-            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-[#FAF9F7] hover:bg-emerald-50 text-[#2D8B5C] hover:text-[#1E5C3D] border border-[#D5D0C6] hover:border-emerald-300 rounded-xl text-xs font-bold shadow-2xs transition-all cursor-pointer shrink-0"
+            className="min-h-[44px] flex items-center space-x-1.5 px-2.5 sm:px-3 py-2 bg-[#FAF9F7] hover:bg-emerald-50 text-[#2D8B5C] hover:text-[#1E5C3D] border border-[#D5D0C6] hover:border-emerald-300 rounded-xl text-xs font-bold shadow-2xs transition-all cursor-pointer shrink-0"
             title="Open interactive Dashboard Tour & Feature Guide"
           >
-            <HelpCircle className="w-3.5 h-3.5 text-[#2D8B5C]" />
+            <HelpCircle className="w-4 h-4 text-[#2D8B5C]" />
             <span className="hidden sm:inline">Tour & Guide</span>
           </button>
         )}
@@ -380,7 +380,7 @@ export const Header: React.FC<HeaderProps> = ({
                 (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
                 (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
               );
-              if (!stu) return [];
+              if (!stu || stu.showFeeToStudent === false) return [];
               return fees.filter(f =>
                 f.studentId === stu.studentId ||
                 (f.isFamilyInvoice && f.studentIds && f.studentIds.includes(stu.studentId))
@@ -414,7 +414,7 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               id="header_notification_bell_button"
               onClick={() => setIsNotificationCenterOpen(true)}
-              className="relative min-h-[36px] min-w-[36px] p-2 rounded-lg text-[#5A6B61] hover:text-[#161F1A] hover:bg-[#FAF9F7] border border-[#D5D0C6] transition-colors cursor-pointer flex items-center justify-center shadow-2xs"
+              className="relative min-h-[44px] min-w-[44px] p-2 rounded-lg text-[#5A6B61] hover:text-[#161F1A] hover:bg-[#FAF9F7] border border-[#D5D0C6] transition-colors cursor-pointer flex items-center justify-center shadow-2xs"
               title="Open Notification Center & Announcements"
               aria-label="Open Notifications"
             >
@@ -498,7 +498,7 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 onClick={logout}
                 title={activeRole === 'tutor' ? "Sign Out (Admin Password Required)" : "Sign Out of Academy"}
-                className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer flex items-center justify-center"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -520,7 +520,7 @@ export const Header: React.FC<HeaderProps> = ({
               (!adminViewingRole && userProfile?.studentId && s.studentId === userProfile.studentId) ||
               (!adminViewingRole && userProfile?.email && s.email?.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
             );
-            if (!stu) return [];
+            if (!stu || stu.showFeeToStudent === false) return [];
             return fees.filter(f =>
               f.studentId === stu.studentId ||
               (f.isFamilyInvoice && f.studentIds && f.studentIds.includes(stu.studentId))

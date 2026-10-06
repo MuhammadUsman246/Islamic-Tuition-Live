@@ -125,7 +125,7 @@ export interface Student {
   trialSessionsCompleted: number;
   trialSessionsTotal: number; // default: 5
   trialStatus: TrialStatus;
-  referralSource?: 'Existing Student' | 'Existing Parent' | 'Social Media' | 'Google / Search' | 'WhatsApp / Word of Mouth' | 'Website' | 'Other' | 'None';
+  referralSource?: 'None' | 'Student / Parent Referral' | 'Facebook Ads' | 'Google Ads' | string;
   referredByName?: string;
   referredByStudentId?: string;
   referralRewardAmount?: number;
@@ -138,6 +138,7 @@ export interface Student {
   leaveReason?: string;    // Vacation, Exams, Illness, Family, etc.
   leaveType?: 'Specific Days' | 'Full Month' | 'Custom Range' | 'Indefinite';
   isNewTutorAssignment?: boolean;
+  showFeeToStudent?: boolean; // Controls whether Fee Receipts & Tuition Payments tab is visible in Student Dashboard (defaults to true)
   createdAt: string;
 }
 
@@ -361,11 +362,14 @@ export interface TutorSalary {
   tutorId: string;
   tutorName: string;
   monthlySalary: number;
+  bonus?: number;
+  deduction?: number;
+  netSalary?: number;
   currency: 'PKR';
   month: string; // e.g. "September 2026"
-  status: 'Paid' | 'Unpaid';
+  status: 'Paid' | 'Unpaid' | 'Pending';
   paymentDate?: string;
-  deduction?: number;
+  paymentMethod?: string;
   notes?: string;
   createdAt: string;
 }
@@ -375,6 +379,7 @@ export type ReferralStatus = 'Pending' | 'Approved' | 'Paid/Applied' | 'Eligible
 export interface Referral {
   id: string;
   referrerName: string;
+  referrerStudentId?: string;
   referredStudentId: string;
   referredStudentName: string;
   date: string;
@@ -382,6 +387,28 @@ export interface Referral {
   currency: 'USD';
   status: ReferralStatus;
   notes?: string;
+  appliedInvoiceNumber?: string;
+  appliedDate?: string;
+}
+
+export type ReferralLeadStatus = 'Pending Contact' | 'Contacted' | 'Trial Scheduled' | 'Converted & Discount Applied' | 'Not Interested';
+
+export interface StudentReferralLead {
+  id: string;
+  referrerStudentId?: string;
+  referrerName: string;
+  referrerEmail?: string;
+  referrerRole?: 'student' | 'parent';
+  referredFriendName: string;
+  referredParentName?: string;
+  whatsappNumber: string;
+  country?: string;
+  courseInterest?: CourseType;
+  dateSubmitted: string;
+  status: ReferralLeadStatus;
+  discountAmount?: number; // default: 30
+  notes?: string;
+  createdAt: string;
 }
 
 export interface Announcement {

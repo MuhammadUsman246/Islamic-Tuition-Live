@@ -49,40 +49,41 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto break-words">
       <div 
         id="official-fee-receipt-modal"
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-[#E3DFD7] overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-[#E3DFD7] overflow-hidden my-auto max-h-[92dvh] flex flex-col animate-in fade-in zoom-in-95 duration-150"
       >
         {/* Top Control Bar */}
-        <div className="px-6 py-3.5 bg-[#F7F5F1] border-b border-[#E3DFD7] flex items-center justify-between print:hidden">
+        <div className="px-4 sm:px-6 py-3.5 bg-[#F7F5F1] border-b border-[#E3DFD7] flex flex-wrap items-center justify-between gap-2 print:hidden shrink-0">
           <div className="flex items-center space-x-2">
-            <ShieldCheck className="w-4 h-4 text-[#2D8B5C]" />
+            <ShieldCheck className="w-4 h-4 text-[#2D8B5C] shrink-0" />
             <span className="text-xs font-bold text-[#161F1A]">Official Academy Fee Receipt</span>
           </div>
-          <div className="flex items-center space-x-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => generateInvoicePDF(fee)}
-              className="px-3 py-1.5 rounded-lg border border-[#D5D0C6] bg-white hover:bg-gray-50 text-xs font-semibold text-[#161F1A] flex items-center space-x-1.5 transition-colors cursor-pointer shadow-2xs"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl border border-[#D5D0C6] bg-white hover:bg-gray-50 text-xs font-semibold text-[#161F1A] flex items-center space-x-1.5 transition-colors cursor-pointer shadow-2xs"
               title="Download official PDF invoice"
             >
-              <Download className="w-3.5 h-3.5 text-[#2D8B5C]" />
+              <Download className="w-4 h-4 text-[#2D8B5C]" />
               <span>Download PDF</span>
             </button>
             <button
               type="button"
               onClick={handlePrint}
-              className="px-3.5 py-1.5 rounded-lg bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
               title="Print official receipt"
             >
-              <Printer className="w-3.5 h-3.5 text-white" />
+              <Printer className="w-4 h-4 text-white" />
               <span>Print</span>
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
+              className="min-h-[44px] min-w-[44px] p-2 rounded-xl hover:bg-gray-200 text-gray-500 hover:text-gray-800 transition-colors cursor-pointer flex items-center justify-center"
+              title="Close Receipt"
             >
               <X className="w-5 h-5" />
             </button>
@@ -90,7 +91,7 @@ export const FeeReceiptModal: React.FC<FeeReceiptModalProps> = ({
         </div>
 
         {/* Printable Receipt Paper Container */}
-        <div className="p-6 sm:p-8 space-y-6 max-h-[80vh] overflow-y-auto print:max-h-none print:overflow-visible">
+        <div className="p-4 sm:p-8 space-y-6 flex-1 overflow-y-auto print:max-h-none print:overflow-visible break-words">
           {/* Header Banner */}
           <div className="flex flex-col sm:flex-row sm:items-start justify-between border-b border-[#E3DFD7] pb-5 gap-4">
             <div>

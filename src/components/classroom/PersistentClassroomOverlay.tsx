@@ -132,17 +132,17 @@ export const PersistentClassroomOverlay: React.FC = () => {
         </div>
       )}
 
-      <div className="flex items-center space-x-2">
+      <div className="flex flex-wrap items-center justify-center gap-2">
         {/* Green Mute / Unmute */}
         <button
           type="button"
           onClick={handleToggleAudio}
-          className={`px-3.5 py-1.5 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-md ${
+          className={`min-h-[44px] px-3.5 py-2 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-md ${
             isAudioMuted ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-[#00B074] hover:bg-[#009A65] text-white'
           }`}
           title={isAudioMuted ? 'Unmute Microphone' : 'Mute Microphone'}
         >
-          {isAudioMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+          {isAudioMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           <span>{isAudioMuted ? 'Unmute' : 'Mute'}</span>
         </button>
 
@@ -151,11 +151,11 @@ export const PersistentClassroomOverlay: React.FC = () => {
           <button
             type="button"
             onClick={handleToggleScreenShare}
-            className={`px-3.5 py-1.5 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-md ${
+            className={`min-h-[44px] px-3.5 py-2 rounded-xl flex items-center space-x-1.5 text-xs font-bold transition-all cursor-pointer shadow-md ${
               isScreenSharing ? 'bg-[#1B6EF3] hover:bg-[#155ECB] text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
             }`}
           >
-            <Monitor className="w-3.5 h-3.5" />
+            <Monitor className="w-4 h-4" />
             <span>{isScreenSharing ? 'Stop Share' : 'Share Screen'}</span>
           </button>
         )}
@@ -164,11 +164,11 @@ export const PersistentClassroomOverlay: React.FC = () => {
         <button
           type="button"
           onClick={handleToggleChatInSidebar}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-md transition-all ${
+          className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-md transition-all ${
             isChatOpen ? 'bg-emerald-600 text-white' : 'bg-[#15241B] hover:bg-[#1E3327] text-white border border-[#2B4B39]'
           }`}
         >
-          <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+          <MessageSquare className="w-4 h-4 text-emerald-400" />
           <span>Chat</span>
           {!isChatOpen && unreadChatCount > 0 && (
             <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold animate-bounce">
@@ -181,10 +181,10 @@ export const PersistentClassroomOverlay: React.FC = () => {
         <button
           type="button"
           onClick={() => setShowLeaveConfirmModal(true)}
-          className="px-3.5 py-1.5 rounded-xl bg-[#FF2D55] hover:bg-[#E02447] text-white text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-md"
+          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-[#FF2D55] hover:bg-[#E02447] text-white text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-md"
           title="End / Leave Class"
         >
-          <PhoneOff className="w-3.5 h-3.5" />
+          <PhoneOff className="w-4 h-4" />
           <span>{isTutor ? 'End' : 'Leave'}</span>
         </button>
       </div>

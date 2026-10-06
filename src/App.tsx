@@ -74,7 +74,8 @@ import {
   BookOpen,
   DollarSign,
   ShieldCheck,
-  CheckSquare
+  CheckSquare,
+  User
 } from 'lucide-react';
 
 const MainPortal: React.FC = () => {
@@ -224,6 +225,29 @@ const MainPortal: React.FC = () => {
     setCurrentTab(getDefaultTab(role));
   }, [role]);
 
+  // Central Database State - Preloaded from memory/local cache/seed for 0ms instantaneous display
+  const [students, setStudents] = useState<Student[]>(() => {
+    return loadCachedCollection<Student[]>('students') || ALL_INITIAL_STUDENTS;
+  });
+
+  const activeStudentForMobileNav = React.useMemo(() => {
+    if (role !== 'student') return null;
+    return students.find(s =>
+      (adminViewingTargetId && (s.studentId === adminViewingTargetId || s.id === adminViewingTargetId)) ||
+      (userProfile?.studentId && s.studentId === userProfile.studentId) ||
+      (userProfile?.email && s.email && s.email.toLowerCase().trim() === userProfile.email.toLowerCase().trim())
+    ) || null;
+  }, [role, students, adminViewingTargetId, userProfile?.studentId, userProfile?.email]);
+
+  const showFeeToStudentInNav = activeStudentForMobileNav ? activeStudentForMobileNav.showFeeToStudent !== false : true;
+
+  // Redirect student away from student_fees if admin disabled fee visibility for this student
+  useEffect(() => {
+    if (role === 'student' && !showFeeToStudentInNav && currentTab === 'student_fees') {
+      setCurrentTab('student_schedule');
+    }
+  }, [role, showFeeToStudentInNav, currentTab]);
+
   // Mobile Bottom Navigation Shortcuts
   const getBottomNavItems = () => {
     switch (role) {
@@ -239,8 +263,6 @@ const MainPortal: React.FC = () => {
         return [
           { id: 'tutor_timetable', label: 'Timetable', icon: Calendar },
           { id: 'tutor_students', label: 'Students', icon: Users },
-          { id: 'tutor_lessons', label: 'Lessons', icon: BookOpen },
-          { id: 'tutor_attendance', label: 'Attendance', icon: CheckSquare },
           { id: 'messages', label: 'Chat', icon: MessageSquare },
         ];
       case 'supervisor':
@@ -256,7 +278,9 @@ const MainPortal: React.FC = () => {
           { id: 'student_schedule', label: 'Schedule', icon: Calendar },
           { id: 'student_lessons', label: 'Lessons', icon: BookOpen },
           { id: 'student_attendance', label: 'Attendance', icon: CheckSquare },
-          { id: 'student_fees', label: 'Fees', icon: DollarSign },
+          showFeeToStudentInNav
+            ? { id: 'student_fees', label: 'Fees', icon: DollarSign }
+            : { id: 'student_profile', label: 'Profile', icon: User },
           { id: 'messages', label: 'Chat', icon: MessageSquare },
         ];
       case 'parent':
@@ -273,11 +297,6 @@ const MainPortal: React.FC = () => {
   };
 
   const bottomNavItems = getBottomNavItems();
-
-  // Central Database State - Preloaded from memory/local cache/seed for 0ms instantaneous display
-  const [students, setStudents] = useState<Student[]>(() => {
-    return loadCachedCollection<Student[]>('students') || ALL_INITIAL_STUDENTS;
-  });
   const [tutors, setTutors] = useState<Tutor[]>(() => {
     const cached = loadCachedCollection<Tutor[]>('tutors');
     return deduplicateTutors(cached && cached.length >= 20 ? cached : INITIAL_TUTOR_ENTITIES);
@@ -713,11 +732,13 @@ const MainPortal: React.FC = () => {
           <div className="max-w-[1360px] mx-auto space-y-5">
             {/* Internal Messages View */}
             {currentTab === 'messages' ? (
-              <ChatView
-                initialThreadId={activeChatThreadId}
-                students={students}
-                tutors={tutors}
-              />
+              <div className={role === 'student' ? 'student-portal-root' : ''}>
+                <ChatView
+                  initialThreadId={activeChatThreadId}
+                  students={students}
+                  tutors={tutors}
+                />
+              </div>
             ) : role === 'admin' ? (
               <AdminDashboard
                 currentTab={currentTab}
@@ -797,13 +818,13 @@ const MainPortal: React.FC = () => {
           </div>
         </main>
 
-        {/* Mobile Sticky Bottom Navigation Bar (iOS / Android PWA Safe) */}
+        {/* Mobile Sticky Bottom Navigation Bar (iOS / Android PWA Safe, 44x44px Touch Target Compliant) */}
         <nav
           id="mobile_bottom_nav_bar"
           aria-label="Mobile Navigation"
           className="fixed bottom-0 inset-x-0 bg-[#12241A]/95 backdrop-blur-md border-t border-[#263e32] text-white z-30 lg:hidden shadow-2xl pb-[env(safe-area-inset-bottom,0px)]"
         >
-          <div className="flex items-center justify-around h-15 px-1 max-w-md mx-auto">
+          <div className="flex items-center justify-around h-16 px-1 max-w-md mx-auto">
             {bottomNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentTab === item.id;
@@ -813,7 +834,7 @@ const MainPortal: React.FC = () => {
                   key={item.id}
                   id={`bottom_nav_${item.id}`}
                   onClick={() => setCurrentTab(item.id)}
-                  className={`relative flex flex-col items-center justify-center flex-1 h-full text-center transition-all cursor-pointer py-1 select-none active:scale-95 ${
+                  className={`relative flex flex-col items-center justify-center flex-1 min-h-[48px] min-w-[44px] h-full text-center transition-all cursor-pointer py-1.5 select-none active:scale-95 ${
                     isActive ? 'text-[#58D68D]' : 'text-[#8ba295] hover:text-white'
                   }`}
                 >
@@ -825,7 +846,7 @@ const MainPortal: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <span className={`text-[10px] truncate max-w-[58px] mt-0.5 tracking-tight ${isActive ? 'font-bold text-white' : 'font-medium'}`}>
+                  <span className={`text-[10px] truncate max-w-[60px] mt-0.5 tracking-tight ${isActive ? 'font-bold text-white' : 'font-medium'}`}>
                     {item.label}
                   </span>
                   {isActive && <span className="w-1.5 h-1 bg-[#58D68D] rounded-full mt-0.5 shadow-xs"></span>}
@@ -837,12 +858,12 @@ const MainPortal: React.FC = () => {
               type="button"
               id="bottom_nav_more_menu"
               onClick={() => setIsSidebarOpen(true)}
-              className="flex flex-col items-center justify-center flex-1 h-full text-center text-[#8ba295] hover:text-white transition-all cursor-pointer py-1 select-none active:scale-95"
+              className="flex flex-col items-center justify-center flex-1 min-h-[48px] min-w-[44px] h-full text-center text-[#8ba295] hover:text-white transition-all cursor-pointer py-1.5 select-none active:scale-95"
             >
               <div className="p-1">
                 <Menu className="w-4 h-4 text-[#E8A93E]" />
               </div>
-              <span className="text-[10px] font-medium truncate max-w-[58px] mt-0.5">Menu</span>
+              <span className="text-[10px] font-medium truncate max-w-[60px] mt-0.5">Menu</span>
             </button>
           </div>
         </nav>

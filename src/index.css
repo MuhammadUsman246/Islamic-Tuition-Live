@@ -94,6 +94,53 @@
   transform: translateY(-1px);
 }
 
+/* Student Dashboard Universal Mobile & Accessibility Standards */
+.student-portal-root {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.student-portal-root p,
+.student-portal-root h1,
+.student-portal-root h2,
+.student-portal-root h3,
+.student-portal-root h4,
+.student-portal-root h5,
+.student-portal-root h6,
+.student-portal-root span,
+.student-portal-root td,
+.student-portal-root th,
+.student-portal-root li,
+.student-portal-root blockquote,
+.student-portal-root div,
+.student-text-wrap {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.student-touch-target,
+.student-portal-root button,
+.student-portal-root a[role="button"],
+.student-portal-root input[type="date"],
+.student-portal-root input[type="text"],
+.student-portal-root input[type="email"],
+.student-portal-root select {
+  min-height: 44px;
+}
+
+.student-touch-target {
+  min-width: 44px;
+}
+
+/* Hide scrollbars on horizontal filter/tab strips while preserving touch scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 @media print {
   body * {
     visibility: hidden;

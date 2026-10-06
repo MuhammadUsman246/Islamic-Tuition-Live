@@ -2450,7 +2450,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     <button
                       type="button"
                       onClick={handleStart5SecMicTest}
-                      className="py-2 px-3 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl font-bold text-xs cursor-pointer transition-colors flex items-center justify-center space-x-1.5 shadow-xs"
+                      className="min-h-[44px] py-2 px-3 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl font-bold text-xs cursor-pointer transition-colors flex items-center justify-center space-x-1.5 shadow-xs"
                     >
                       <Mic className="w-3.5 h-3.5 shrink-0" />
                       <span>Test Microphone (5s)</span>
@@ -2458,7 +2458,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   )}
 
                   {micTestState === 'recording' && (
-                    <div className="py-1.5 px-3 bg-rose-500/15 border border-rose-500/30 rounded-xl flex flex-col justify-center">
+                    <div className="min-h-[44px] py-1.5 px-3 bg-rose-500/15 border border-rose-500/30 rounded-xl flex flex-col justify-center">
                       <div className="flex items-center justify-center space-x-1.5 text-rose-400 text-[11px] font-bold">
                         <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                         <span>Speak now ({testCountdown}s)...</span>
@@ -2478,7 +2478,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         type="button"
                         onClick={handlePlayBackTestVoice}
                         disabled={micTestState === 'playing'}
-                        className="flex-1 py-2 px-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1 cursor-pointer transition-colors"
+                        className="min-h-[44px] flex-1 py-2 px-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1 cursor-pointer transition-colors"
                       >
                         <Play className="w-3.5 h-3.5 shrink-0" />
                         <span>{micTestState === 'playing' ? 'Playing...' : 'Hear My Voice'}</span>
@@ -2486,10 +2486,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                       <button
                         type="button"
                         onClick={handleResetMicTest}
-                        className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+                        className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white cursor-pointer flex items-center justify-center"
                         title="Test microphone again"
                       >
-                        <RotateCcw className="w-3.5 h-3.5" />
+                        <RotateCcw className="w-4 h-4" />
                       </button>
                     </div>
                   )}
@@ -2512,7 +2512,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 }
                 onLeave();
               }}
-              className="px-5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-bold cursor-pointer transition-colors"
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-bold cursor-pointer transition-colors inline-flex items-center justify-center"
             >
               Leave Waiting Lounge
             </button>
@@ -2525,7 +2525,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   return (
     <div
       ref={stageContainerRef}
-      className={`relative flex flex-col h-full min-h-[480px] sm:min-h-[600px] rounded-2xl overflow-hidden border shadow-[0_25px_70px_rgba(0,0,0,0.85)] transition-colors duration-200 ${
+      className={`relative flex flex-col h-full min-h-[480px] sm:min-h-[600px] rounded-2xl overflow-hidden border shadow-[0_25px_70px_rgba(0,0,0,0.85)] transition-colors duration-200 break-words ${
         isLight
           ? 'bg-[#F6F4EE] text-[#14231B] border-[#D5CFC2]'
           : 'bg-[#050806] text-[#F8FAFC] border-[#1F3A2C]'
@@ -2555,9 +2555,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* Browser Autoplay Audio Unlocker Banner if needed */}
       {audioPlaybackBlocked && (
-        <div className="bg-amber-500 text-slate-950 px-4 py-1.5 text-xs font-bold flex items-center justify-between z-30 shrink-0">
+        <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-bold flex flex-wrap items-center justify-between gap-2 z-30 shrink-0">
           <span className="flex items-center space-x-1.5">
-            <Volume2 className="w-4 h-4" />
+            <Volume2 className="w-4 h-4 shrink-0" />
             <span>Your browser paused classroom speaker audio. Click to enable live voice playback:</span>
           </span>
           <button
@@ -2565,7 +2565,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             onClick={() => {
               roomRef.current?.startAudio().then(() => setAudioPlaybackBlocked(false)).catch(() => setAudioPlaybackBlocked(false));
             }}
-            className="px-3 py-1 bg-slate-950 text-white rounded-lg text-xs font-bold cursor-pointer"
+            className="min-h-[44px] px-4 py-2 bg-slate-950 text-white rounded-xl text-xs font-bold cursor-pointer inline-flex items-center justify-center"
           >
             Enable Classroom Audio
           </button>
@@ -2574,7 +2574,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* ZOOM-STYLE FLOATING JOIN / LEAVE TOAST BANNER (Shows for 6 seconds when Student or Tutor joins/leaves) */}
       {presenceToast && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 max-w-md w-[92%] sm:w-auto pointer-events-auto animate-in fade-in slide-in-from-top-2 duration-200">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 max-w-md w-[92%] sm:w-auto pointer-events-auto animate-in fade-in slide-in-from-top-2 duration-200">
           <div
             className={`px-4 py-2 rounded-xl border shadow-2xl flex items-center justify-between gap-3 text-xs font-bold backdrop-blur-md ${
               presenceToast.type === 'join'
@@ -2588,7 +2588,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   presenceToast.type === 'join' ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
                 }`}
               />
-              <span className="truncate">
+              <span className="break-words">
                 {presenceToast.type === 'join'
                   ? `🟢 ${presenceToast.name} (${presenceToast.role}) joined the classroom`
                   : `🟠 ${presenceToast.name} (${presenceToast.role}) left the classroom`}
@@ -2597,10 +2597,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             <button
               type="button"
               onClick={() => setPresenceToast(null)}
-              className="text-white/70 hover:text-white cursor-pointer shrink-0"
+              className="min-h-[36px] min-w-[36px] flex items-center justify-center text-white/70 hover:text-white cursor-pointer shrink-0"
               title="Dismiss notice"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -2608,7 +2608,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* ULTRA-SLIM TOP HEADER BAR (Maximizes vertical space for Quran Screen Share) */}
       <header
-        className={`px-3 py-2 border-b flex items-center justify-between gap-2 z-20 shrink-0 ${
+        className={`px-3 py-2 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 ${
           isLight
             ? 'bg-white border-[#DFDBD0] text-[#14231B]'
             : 'bg-[#0B130E] border-[#223D2E] text-white'
@@ -2617,7 +2617,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         {/* Left: Simple & Clean Islamic Tuition Classroom Brand + Live Participant Pill */}
         <div className="flex items-center space-x-2.5 min-w-0">
           <div
-            className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
               isLight
                 ? 'bg-[#E8F5EE] border-[#B8DFC8] text-[#1E5C3D]'
                 : 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300 shadow-xs'
@@ -2626,8 +2626,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             <BookOpen className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center space-x-2">
-              <h2 className="text-xs sm:text-sm font-extrabold tracking-tight truncate">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <h2 className="text-xs sm:text-sm font-extrabold tracking-tight break-words">
                 Islamic Tuition Classroom
               </h2>
               {/* Zoom-Style Live Connected Participants Pill in Header (Clickable to open In Class panel) */}
@@ -2643,7 +2643,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     setIsSidebarOpen(prev => !prev);
                   }
                 }}
-                className={`inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold truncate max-w-[200px] sm:max-w-[340px] cursor-pointer transition-all ${
+                className={`min-h-[36px] inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] sm:text-[11px] font-bold truncate max-w-[190px] sm:max-w-[340px] cursor-pointer transition-all ${
                   isBothTutorAndStudentPresent
                     ? isLight
                       ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs'
@@ -2676,7 +2676,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 </span>
               </button>
             </div>
-            <p className={`text-[10px] font-mono truncate ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
+            <p className={`text-[10px] font-mono break-words ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
               Room: {roomName} · {userRole.toUpperCase()}
             </p>
           </div>
@@ -2686,7 +2686,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
           {/* Recording Indicator */}
           {isEgressRecordingActive && settings?.recordingEnabled && (
-            <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[11px] font-bold animate-pulse">
+            <div className="min-h-[44px] flex items-center space-x-1.5 px-2.5 py-1 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[11px] font-bold animate-pulse">
               <span className="w-2 h-2 rounded-full bg-rose-500" />
               <span>REC</span>
             </div>
@@ -2694,7 +2694,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
           {/* Chronometer */}
           <div
-            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-bold ${
+            className={`min-h-[44px] flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-mono font-bold ${
               isLight
                 ? 'bg-[#FAF9F5] border-[#D5D0C6] text-[#14231B]'
                 : 'bg-[#121F17] border-[#274635] text-white'
@@ -2708,7 +2708,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <button
             type="button"
             onClick={toggleThemeMode}
-            className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center space-x-1 cursor-pointer transition-colors ${
+            className={`min-h-[44px] min-w-[44px] px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center justify-center space-x-1 cursor-pointer transition-colors ${
               isLight
                 ? 'bg-[#FAF9F5] hover:bg-gray-100 border-[#D5D0C6] text-[#14231B]'
                 : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-amber-300'
@@ -2717,12 +2717,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           >
             {isLight ? (
               <>
-                <Moon className="w-3.5 h-3.5 text-slate-700" />
+                <Moon className="w-4 h-4 text-slate-700" />
                 <span className="hidden sm:inline">Dark</span>
               </>
             ) : (
               <>
-                <Sun className="w-3.5 h-3.5 text-amber-400" />
+                <Sun className="w-4 h-4 text-amber-400" />
                 <span className="hidden sm:inline">Light</span>
               </>
             )}
@@ -2732,14 +2732,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <button
             type="button"
             onClick={() => setShowDeviceSettingsModal(true)}
-            className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-colors ${
+            className={`min-h-[44px] min-w-[44px] px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center justify-center space-x-1.5 cursor-pointer transition-colors ${
               isLight
                 ? 'bg-[#FAF9F5] hover:bg-emerald-50 border-[#D5D0C6] text-[#1E5C3D]'
                 : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-emerald-300'
             }`}
             title="Audio, Microphone & Speaker Settings"
           >
-            <Settings className="w-3.5 h-3.5" />
+            <Settings className="w-4 h-4" />
             <span className="hidden sm:inline">Settings</span>
           </button>
 
@@ -2760,7 +2760,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 setIsSidebarOpen(prev => !prev);
               }
             }}
-            className={`p-1.5 rounded-lg border cursor-pointer transition-colors ${
+            className={`min-h-[44px] min-w-[44px] p-2 rounded-xl border flex items-center justify-center cursor-pointer transition-colors ${
               isLight
                 ? 'bg-[#FAF9F5] hover:bg-gray-100 border-[#D5D0C6] text-[#14231B]'
                 : 'bg-[#121F17] hover:bg-[#1A2D22] border-[#274635] text-white'
@@ -3147,7 +3147,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           >
             {/* MOBILE BOTTOM DRAWER HEADER BAR (Only visible on Mobile < 768px: Switch between Participants & Chat or Close Drawer) */}
             <div
-              className={`flex md:hidden items-center justify-between px-3 py-1.5 border-b shrink-0 ${
+              className={`flex md:hidden items-center justify-between px-3 py-2 border-b shrink-0 ${
                 isLight ? 'bg-[#F3EFE6] border-[#DFDBD0]' : 'bg-[#111E16] border-[#223D2E]'
               }`}
             >
@@ -3158,7 +3158,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     setMobileDrawerTab('participants');
                     setIsChatOpen(false);
                   }}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer transition-colors ${
+                  className={`min-h-[40px] px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center space-x-1.5 cursor-pointer transition-colors ${
                     mobileDrawerTab === 'participants'
                       ? 'bg-emerald-600 text-white'
                       : isLight
@@ -3166,7 +3166,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         : 'text-[#B2C9BC] hover:bg-white/5'
                   }`}
                 >
-                  <Users className="w-3 h-3" />
+                  <Users className="w-3.5 h-3.5" />
                   <span>In Class ({activeVisibleParticipantsCount})</span>
                 </button>
 
@@ -3177,7 +3177,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     setIsChatOpen(true);
                     setUnreadChatCount(0);
                   }}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer transition-colors relative ${
+                  className={`min-h-[40px] px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center space-x-1.5 cursor-pointer transition-colors relative ${
                     mobileDrawerTab === 'chat'
                       ? 'bg-emerald-600 text-white'
                       : isLight
@@ -3185,7 +3185,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         : 'text-[#B2C9BC] hover:bg-white/5'
                   }`}
                 >
-                  <MessageSquare className="w-3 h-3" />
+                  <MessageSquare className="w-3.5 h-3.5" />
                   <span>Chat</span>
                   {unreadChatCount > 0 && (
                     <span className="ml-1 px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[9px] font-extrabold">
@@ -3201,10 +3201,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   setIsSidebarOpen(false);
                   setIsChatOpen(false);
                 }}
-                className="px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[10px] font-bold flex items-center space-x-1 cursor-pointer"
+                className="min-h-[40px] px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[10px] font-bold flex items-center space-x-1 cursor-pointer"
                 title="Close Bottom Panel & Maximize Quran Screen"
               >
-                <ChevronDown className="w-3 h-3" />
+                <ChevronDown className="w-3.5 h-3.5" />
                 <span>Hide</span>
               </button>
             </div>
@@ -3242,7 +3242,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     }`}
                   >
                     <div className="min-w-0 pr-2">
-                      <div className="font-bold truncate text-[11px] leading-tight">{p.name}</div>
+                      <div className="font-bold break-words text-[11px] leading-tight">{p.name}</div>
                       <div className={`text-[9px] uppercase font-bold tracking-wider ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}>
                         {p.role} {p.isScreenSharing ? '· Sharing' : ''}
                       </div>
@@ -3277,7 +3277,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <div className="flex items-center justify-between text-[10px] font-bold mb-1">
                   <span className="flex items-center space-x-1 text-emerald-400">
                     <Camera className="w-3 h-3" />
-                    <span className="truncate">
+                    <span className="break-words">
                       {isCameraActive ? 'Your Camera' : `${activeCameraParticipant} Camera`}
                     </span>
                   </span>
@@ -3323,7 +3323,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   <button
                     type="button"
                     onClick={() => setIsChatOpen(false)}
-                    className={`p-0.5 rounded hover:bg-white/10 cursor-pointer shrink-0 ml-1 ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}
+                    className={`min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-white/10 cursor-pointer shrink-0 ml-1 ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}
                     title="Close Chat"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -3346,7 +3346,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         }`}
                       >
                         <div className="flex items-center justify-between text-[10px] mb-0.5">
-                          <span className="font-bold text-emerald-400">{msg.sender}</span>
+                          <span className="font-bold text-emerald-400 break-words">{msg.sender}</span>
                           <span className={isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}>{msg.timestamp}</span>
                         </div>
                         <p className="leading-snug break-words text-[11px]">{msg.text}</p>
@@ -3362,7 +3362,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                     <div className="flex-1 leading-tight space-y-0.5">
                       <p className="font-bold text-rose-300">Privacy Notice</p>
-                      <p className="text-[10px] text-rose-200">{chatWarningMessage}</p>
+                      <p className="text-[10px] text-rose-200 break-words">{chatWarningMessage}</p>
                     </div>
                     <button
                       type="button"
@@ -3382,7 +3382,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     onChange={e => setChatInputText(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
                     placeholder="Write message..."
-                    className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs border focus:outline-none focus:border-emerald-500 ${
+                    className={`min-h-[44px] flex-1 rounded-xl px-3 py-2 text-xs border focus:outline-none focus:border-emerald-500 ${
                       isLight
                         ? 'bg-white border-[#D5D0C6] text-[#14231B] placeholder-[#7A8A80]'
                         : 'bg-[#070C09] border-[#284736] text-white placeholder-[#8AA393]'
@@ -3392,10 +3392,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     type="button"
                     disabled={isSendingChat}
                     onClick={handleSendChatMessage}
-                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0 disabled:opacity-50"
+                    className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors shrink-0 disabled:opacity-50 flex items-center justify-center"
                     title="Send Chat Message"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    <Send className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -3406,7 +3406,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
       {/* ULTRA-SLIM BOTTOM CONTROLS BAR (Stays visible in Classroom & Fullscreen: Mute/Unmute, Share/Stop Screen, Participants/Chat Toggle, Leave) */}
       <footer
-        className={`px-2 py-1.5 sm:px-4 sm:py-2 border-t flex flex-wrap items-center justify-center gap-1.5 sm:gap-3 z-20 shrink-0 ${
+        className={`px-2 py-2 sm:px-4 sm:py-2.5 border-t flex flex-wrap items-center justify-center gap-2 sm:gap-3 z-20 shrink-0 ${
           isLight
             ? 'bg-white border-[#DFDBD0]'
             : 'bg-[#0B130E] border-[#223D2E]'
@@ -3416,13 +3416,13 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         <button
           type="button"
           onClick={handleToggleAudio}
-          className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs ${
+          className={`min-h-[44px] px-3.5 py-2 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs ${
             isAudioMuted
               ? 'bg-rose-600 hover:bg-rose-500 text-white'
               : 'bg-emerald-600 hover:bg-emerald-500 text-white'
           }`}
         >
-          {isAudioMuted ? <MicOff className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
+          {isAudioMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           <span>{isAudioMuted ? 'Unmute' : 'Mute'}</span>
         </button>
 
@@ -3431,7 +3431,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <button
             type="button"
             onClick={handleToggleScreenShare}
-            className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs border ${
+            className={`min-h-[44px] px-3.5 py-2 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs border ${
               isScreenSharing
                 ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400'
                 : isLight
@@ -3440,7 +3440,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             }`}
             title="Share Quran Mushaf or Lesson Screen"
           >
-            <Monitor className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isScreenSharing ? 'text-white' : 'text-blue-400'}`} />
+            <Monitor className={`w-4 h-4 ${isScreenSharing ? 'text-white' : 'text-blue-400'}`} />
             <span>{isScreenSharing ? 'Stop Share' : 'Share Screen'}</span>
           </button>
         )}
@@ -3450,7 +3450,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           <button
             type="button"
             onClick={handleToggleCamera}
-            className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs border ${
+            className={`min-h-[44px] px-3.5 py-2 sm:px-4 sm:py-2 rounded-xl flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold transition-all cursor-pointer shadow-xs border ${
               isCameraActive
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
                 : isLight
@@ -3459,9 +3459,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             }`}
             title="Turn on or off your student camera"
           >
-            {isCameraActive ? <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" /> : <CameraOff className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />}
-            <span className="hidden xs:inline sm:inline">{isCameraActive ? 'Video Off' : 'Camera'}</span>
-            <span className="inline xs:hidden sm:hidden">{isCameraActive ? 'Off' : 'Cam'}</span>
+            {isCameraActive ? <Camera className="w-4 h-4 text-white" /> : <CameraOff className="w-4 h-4 text-emerald-400" />}
+            <span>{isCameraActive ? 'Video Off' : 'Camera'}</span>
           </button>
         )}
 
@@ -3469,7 +3468,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         <button
           type="button"
           onClick={handleToggleParticipantsDrawer}
-          className={`md:hidden px-3 py-1.5 rounded-xl text-[11px] font-bold border flex items-center space-x-1 cursor-pointer transition-all shadow-xs ${
+          className={`md:hidden min-h-[44px] px-3.5 py-2 rounded-xl text-[11px] font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs ${
             isSidebarOpen && mobileDrawerTab === 'participants'
               ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
               : isLight
@@ -3478,7 +3477,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }`}
           title="Show or Hide Participants Below Screen"
         >
-          <Users className={`w-3.5 h-3.5 ${isSidebarOpen && mobileDrawerTab === 'participants' ? 'text-white' : 'text-emerald-400'}`} />
+          <Users className={`w-4 h-4 ${isSidebarOpen && mobileDrawerTab === 'participants' ? 'text-white' : 'text-emerald-400'}`} />
           <span>{`In Class (${activeVisibleParticipantsCount})`}</span>
         </button>
 
@@ -3486,7 +3485,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         <button
           type="button"
           onClick={handleToggleChatInSidebar}
-          className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs relative ${
+          className={`min-h-[44px] px-3.5 py-2 sm:px-4 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold border flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs relative ${
             (isChatOpen && isSidebarOpen)
               ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400'
               : isLight
@@ -3495,7 +3494,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }`}
           title={isChatOpen ? 'Click to Close Classroom Chat' : 'Click to Open Classroom Chat'}
         >
-          <MessageSquare className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${(isChatOpen && isSidebarOpen) ? 'text-white' : 'text-emerald-400'}`} />
+          <MessageSquare className={`w-4 h-4 ${(isChatOpen && isSidebarOpen) ? 'text-white' : 'text-emerald-400'}`} />
           <span>{(isChatOpen && isSidebarOpen) ? 'Close Chat' : 'Chat'}</span>
           {!(isChatOpen && isSidebarOpen) && unreadChatCount > 0 && (
             <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold animate-bounce">
@@ -3508,10 +3507,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         <button
           type="button"
           onClick={() => setShowLeaveConfirmModal(true)}
-          className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] sm:text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs active:scale-95"
+          className="min-h-[44px] px-3.5 py-2 sm:px-4 sm:py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] sm:text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-all shadow-xs active:scale-95"
           title="Leave or End Class"
         >
-          <PhoneOff className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <PhoneOff className="w-4 h-4" />
           <span>{isTutor ? 'End / Leave' : 'Leave'}</span>
         </button>
       </footer>

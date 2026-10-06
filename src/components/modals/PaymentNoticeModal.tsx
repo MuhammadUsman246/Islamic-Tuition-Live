@@ -177,45 +177,46 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 overflow-y-auto break-words"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-[#D5D0C6] flex flex-col my-6 animate-in zoom-in-95 duration-150"
+        className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-[#D5D0C6] flex flex-col my-auto max-h-[92dvh] animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="bg-[#1E5C3D] text-white px-5 py-4 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-lg bg-white/10 text-emerald-200">
+        <div className="bg-[#1E5C3D] text-white px-4 sm:px-5 py-4 flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="p-2 rounded-lg bg-white/10 text-emerald-200 shrink-0">
               <CreditCard className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="text-base font-bold tracking-tight">Submit Tuition Payment Notice</h3>
-              <p className="text-xs text-emerald-100/90">
-                Notify Academy Administration • Zelle, Cash Pick-up, Bank & Receipt
+            <div className="min-w-0">
+              <h3 className="text-base font-bold tracking-tight break-words">Submit Tuition Payment Notice</h3>
+              <p className="text-xs text-emerald-100/90 break-words">
+                Notify Academy Administration • Zelle, Cash Pick-up, Bank &amp; Receipt
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            className="min-h-[44px] min-w-[44px] p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center shrink-0 ml-2"
+            title="Close"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Invoice Summary Box */}
-        <div className="bg-[#FAF9F7] px-5 py-3.5 border-b border-[#E8E4DC] flex items-center justify-between">
+        <div className="bg-[#FAF9F7] px-4 sm:px-5 py-3.5 border-b border-[#E8E4DC] flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div>
             <span className="text-[11px] font-bold text-[#8C5D08] uppercase tracking-wider block">
               {fee.isFamilyInvoice ? 'Family Consolidated Tuition' : 'Student Tuition Invoice'}
             </span>
-            <h4 className="text-sm font-bold text-[#161F1A]">
+            <h4 className="text-sm font-bold text-[#161F1A] break-words">
               {fee.studentName}
             </h4>
-            <span className="text-xs text-[#5A6B61] font-mono">
+            <span className="text-xs text-[#5A6B61] font-mono break-words">
               Inv #{fee.invoiceNumber} • Period: {fee.billingPeriod}
             </span>
           </div>
@@ -229,9 +230,9 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto">
           {errorMsg && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2 break-words">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
               <span>{errorMsg}</span>
             </div>
@@ -239,7 +240,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
 
           <div className="bg-[#EBF7F0] border border-[#2D8B5C]/20 rounded-xl p-3 text-xs text-[#1E5C3D] flex items-start space-x-2.5">
             <CheckCircle2 className="w-4 h-4 text-[#2D8B5C] shrink-0 mt-0.5" />
-            <p className="leading-relaxed">
+            <p className="leading-relaxed break-words">
               Upon submitting, your invoice status updates to <strong>Payment Submitted</strong>. The academy administration will verify the deposit/remittance in their records and officially confirm it as <strong>Paid</strong>.
             </p>
           </div>
@@ -255,7 +256,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                 required
                 value={paymentDate}
                 onChange={(e) => setPaymentDate(e.target.value)}
-                className="w-full text-xs px-3 py-2 border border-[#D5D0C6] rounded-lg bg-white text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C]"
+                className="min-h-[44px] w-full text-xs px-3 py-2.5 border border-[#D5D0C6] rounded-xl bg-white text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C]"
               />
             </div>
 
@@ -266,7 +267,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
               <select
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value)}
-                className="w-full text-xs px-3 py-2 border border-[#D5D0C6] rounded-lg bg-white text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C] font-medium"
+                className="min-h-[44px] w-full text-xs px-3 py-2.5 border border-[#D5D0C6] rounded-xl bg-white text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C] font-medium"
               >
                 <optgroup label="🇺🇸 US & Digital Wallets">
                   <option value="Zelle">Zelle (US Bank Instant Transfer)</option>
@@ -514,20 +515,20 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
           </div>
 
           {/* Submit / Cancel Buttons */}
-          <div className="pt-2 flex items-center justify-end space-x-2 border-t border-[#E8E4DC]">
+          <div className="pt-2 flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2.5 border-t border-[#E8E4DC]">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer"
+              className="min-h-[44px] w-full sm:w-auto px-4 py-2.5 text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting || isCompressing}
-              className="px-4 py-2 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors flex items-center space-x-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
+              className="min-h-[44px] w-full sm:w-auto px-4 py-2.5 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-xl transition-colors flex items-center justify-center space-x-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4 shrink-0" />
               <span>{isSubmitting ? 'Sending Notice...' : 'Submit Payment Notice'}</span>
             </button>
           </div>

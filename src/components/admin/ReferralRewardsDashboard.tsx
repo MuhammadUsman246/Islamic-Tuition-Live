@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Share2,
   Plus,
@@ -14,9 +14,13 @@ import {
   Download,
   Trash2,
   Edit2,
-  Sparkles
+  Sparkles,
+  Phone,
+  MessageSquare,
+  ExternalLink
 } from 'lucide-react';
-import { Referral, Student, StudentFee } from '../../types';
+import { Referral, Student, StudentFee, StudentReferralLead } from '../../types';
+import { getStudentReferralLeads, updateStudentReferralLead } from '../../services/dataService';
 
 interface ReferralRewardsDashboardProps {
   referrals: Referral[];
@@ -39,9 +43,32 @@ export const ReferralRewardsDashboard: React.FC<ReferralRewardsDashboardProps> =
   onApplyDiscount,
   onMarkPaid
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'rewards' | 'leads'>('rewards');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Pending' | 'Applied' | 'Paid'>('all');
   const [isProcessingId, setIsProcessingId] = useState<string | null>(null);
+
+  // Referral Leads state
+  const [leads, setLeads] = useState<StudentReferralLead[]>([]);
+  const [leadsSearch, setLeadsSearch] = useState('');
+
+  const loadLeads = async () => {
+    try {
+      const data = await getStudentReferralLeads();
+      setLeads(data);
+    } catch (e) {
+      console.warn("Could not fetch referral leads:", e);
+    }
+  };
+
+  useEffect(() => {
+    loadLeads();
+  }, []);
+
+  const handleUpdateLeadStatus = async (leadId: string, newStatus: any) => {
+    await updateStudentReferralLead(leadId, { status: newStatus });
+    await loadLeads();
+  };
 
   // Filtered referrals
   const filteredReferrals = referrals.filter(ref => {
@@ -247,8 +274,154 @@ export const ReferralRewardsDashboard: React.FC<ReferralRewardsDashboardProps> =
         </div>
       )}
 
-      {/* Referrals Detailed Table */}
-      <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
+      {/* Navigation Sub-Tabs */}
+      <div className="flex items-center space-x-2 border-b border-[#E3DFD7] pb-1">
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('rewards')}
+          className={`px-4 py-2 font-bold text-xs rounded-xl transition-all cursor-pointer ${
+            activeSubTab === 'rewards'
+              ? 'bg-[#2D8B5C] text-white shadow-xs'
+              : 'bg-[#FAF9F7] text-[#5A6B61] hover:text-[#161F1A] border border-[#E3DFD7]'
+          }`}
+        >
+          🎁 Official Referral Rewards & Deductions ({referrals.length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('leads')}
+          className={`px-4 py-2 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center space-x-1.5 ${
+            activeSubTab === 'leads'
+              ? 'bg-[#2D8B5C] text-white shadow-xs'
+              : 'bg-[#FAF9F7] text-[#5A6B61] hover:text-[#161F1A] border border-[#E3DFD7]'
+          }`}
+        >
+          <Phone className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Student & Parent Referral Leads ({leads.length})</span>
+          {leads.filter(l => l.status === 'Pending Contact').length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+              {leads.filter(l => l.status === 'Pending Contact').length} New
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeSubTab === 'leads' ? (
+        /* Referral Leads Contact List Table */
+        <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden space-y-3 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#EAE6DE] pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-[#161F1A]">Student & Parent Referral Leads (Contact List)</h3>
+              <p className="text-xs text-[#5A6B61]">
+                Recommendations submitted by students and parents via the Islamic Values Referral Portal. Contact families via WhatsApp to offer trial sessions.
+              </p>
+            </div>
+
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={leadsSearch}
+                onChange={e => setLeadsSearch(e.target.value)}
+                placeholder="Search lead, referrer, phone..."
+                className="pl-8 pr-3 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] rounded-lg text-xs text-[#161F1A] focus:ring-1 focus:ring-[#2D8B5C] w-56"
+              />
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="py-3 px-4">Date</th>
+                  <th className="py-3 px-4">Referring Family / Student</th>
+                  <th className="py-3 px-4">Referred New Student</th>
+                  <th className="py-3 px-4">WhatsApp Contact</th>
+                  <th className="py-3 px-4">Course Interest</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#EAE6DE]">
+                {leads.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-xs text-[#5A6B61] italic">
+                      No referral leads submitted yet. Students and parents can submit recommendations directly from their dashboards.
+                    </td>
+                  </tr>
+                ) : (
+                  leads
+                    .filter(l => {
+                      if (!leadsSearch.trim()) return true;
+                      const q = leadsSearch.toLowerCase().trim();
+                      return (
+                        l.referredFriendName.toLowerCase().includes(q) ||
+                        l.referrerName.toLowerCase().includes(q) ||
+                        l.whatsappNumber.includes(q) ||
+                        (l.courseInterest && l.courseInterest.toLowerCase().includes(q))
+                      );
+                    })
+                    .map(lead => {
+                      const cleanPhone = lead.whatsappNumber.replace(/[^0-9]/g, '');
+                      const waLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(`Assalamu Alaikum ${lead.referredParentName || lead.referredFriendName}, we received your referral from ${lead.referrerName} for IslamicTuition Academy! We would love to offer you a free 5-session trial for ${lead.courseInterest || 'Quran lessons'}.`)}`;
+
+                      return (
+                        <tr key={lead.id} className="hover:bg-[#FAF9F7]/60">
+                          <td className="py-3 px-4 font-mono font-semibold text-[#161F1A]">{lead.dateSubmitted}</td>
+                          <td className="py-3 px-4">
+                            <strong className="text-[#161F1A] block">{lead.referrerName}</strong>
+                            <span className="text-[10px] text-[#5A6B61] font-mono">{lead.referrerStudentId || lead.referrerRole}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <strong className="text-[#161F1A] block">{lead.referredFriendName}</strong>
+                            {lead.referredParentName && (
+                              <span className="text-[10px] text-[#5A6B61]">Parent: {lead.referredParentName}</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-[#161F1A]">
+                            {lead.whatsappNumber}
+                          </td>
+                          <td className="py-3 px-4 font-semibold text-[#2D8B5C]">
+                            {lead.courseInterest || 'Quran'}
+                          </td>
+                          <td className="py-3 px-4">
+                            <select
+                              value={lead.status}
+                              onChange={e => handleUpdateLeadStatus(lead.id, e.target.value as any)}
+                              className="text-xs font-bold border border-[#D5D0C6] rounded-lg px-2 py-1 bg-white focus:outline-none"
+                            >
+                              <option value="Pending Contact">⏳ Pending Contact</option>
+                              <option value="Contacted">📞 Contacted</option>
+                              <option value="Trial Scheduled">📅 Trial Scheduled</option>
+                              <option value="Converted & Discount Applied">✨ Converted & Discount Applied</option>
+                              <option value="Not Interested">❌ Not Interested</option>
+                            </select>
+                          </td>
+                          <td className="py-3 px-4 text-right space-x-1.5">
+                            <a
+                              href={waLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 bg-[#25D366] hover:bg-[#1DA851] text-white font-bold rounded-lg text-xs inline-flex items-center space-x-1 shadow-xs transition-colors cursor-pointer"
+                              title="Contact via WhatsApp"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                              <span>WhatsApp</span>
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Referrals Detailed Table */}
+          <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
         {/* Table Filters Header */}
         <div className="p-4 sm:p-5 border-b border-[#EDEAE3] bg-[#FAF9F7] flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center space-x-2">
@@ -408,6 +581,8 @@ export const ReferralRewardsDashboard: React.FC<ReferralRewardsDashboardProps> =
           </table>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };

@@ -814,7 +814,6 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                           )}
                         </div>
                         <h4 className="text-sm font-bold text-[#161F1A] pt-1">{t.realName || t.displayName || t.tutorId}</h4>
-                        <p className="text-xs text-[#5A6B61]">{t.email || 'Email registered in portal'}</p>
                       </div>
 
                       <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
@@ -958,33 +957,6 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                         )}
                       </div>
                     )}
-
-                    {/* Classroom Link Card */}
-                    <div className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 space-y-1.5 text-xs">
-                      <div className="flex items-center justify-between text-[11px] font-bold text-[#5A6B61]">
-                        <span className="flex items-center space-x-1 text-[#2D8B5C]">
-                          <Radio className="w-3 h-3 text-[#E8A93E]" />
-                          <span>Classroom Link</span>
-                        </span>
-                        <span className="font-mono text-[10px] bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200 font-bold">
-                          Passcode: 12345
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2 bg-white p-1.5 rounded-lg border border-[#D5D0C6]">
-                        <span className="text-xs font-mono font-bold text-[#2D8B5C] truncate">{classUrl}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(fullUrl);
-                            setCopiedLinkTutorId(t.tutorId);
-                            setTimeout(() => setCopiedLinkTutorId(null), 2000);
-                          }}
-                          className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-[#161F1A] text-[10px] font-bold rounded transition-colors cursor-pointer shrink-0"
-                        >
-                          {copiedLinkTutorId === t.tutorId ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
 
                     {/* Stats Metrics */}
                     <div className="grid grid-cols-2 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">

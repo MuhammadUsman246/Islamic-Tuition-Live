@@ -110,6 +110,7 @@ interface ServerWaitingGuest {
   joined_at: string;
   status: 'WAITING' | 'ADMITTED' | 'REJECTED';
   reason?: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
+  admitted_at?: number;
 }
 
 const CLASSROOM_CONFIG_FILE = path.resolve(process.cwd(), '.classroom-rooms-config.json');
@@ -340,6 +341,32 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
     p => p.role === 'student' || p.role === 'guest' || p.role === 'parent'
   );
 
+  // Include any student promoted to ADMITTED within the last 25 seconds who is currently transitioning into the room
+  // so a 2nd student cannot slip in during the WebRTC connection window!
+  SERVER_WAITING_ROOM.forEach(w => {
+    const wSlug = w.room_slug.toLowerCase();
+    if (
+      (wSlug === normRoom || wSlug === canonicalSlug) &&
+      w.status === 'ADMITTED' &&
+      w.admitted_at &&
+      nowMs - w.admitted_at < 25000
+    ) {
+      const wId = w.identity || w.id;
+      const alreadyInActive = activeStudents.some(
+        s => s.identity.toLowerCase() === wId.toLowerCase()
+      );
+      if (!alreadyInActive) {
+        activeStudents.push({
+          identity: wId,
+          name: w.guest_name,
+          role: 'student',
+          joinedAt: w.admitted_at,
+          lastSeen: w.admitted_at
+        });
+      }
+    }
+  });
+
   // 2. Compute current lesson estimated end time (zero extra database reads)
   let currentLessonEndTimeMs: number | undefined;
   if (activeStudents.length > 0) {
@@ -410,6 +437,7 @@ function autoPromoteNextWaitingStudentIfRoomFree(roomNameOrSlug: string) {
     });
     if (nextWaiting && (nextWaiting.reason === 'NEXT_STUDENT_QUEUE' || Boolean(activeTutor))) {
       nextWaiting.status = 'ADMITTED';
+      nextWaiting.admitted_at = Date.now();
     }
   }
 }
@@ -492,12 +520,12 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
           w =>
             w.room_slug.toLowerCase() === canonicalSlug &&
             w.status === 'ADMITTED' &&
-            (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+            (w.identity === cleanIdentity || (cleanName !== 'Classroom Member' && cleanName !== 'Guest Student' && cleanName !== 'Student' && w.guest_name.toLowerCase() === cleanName.toLowerCase()))
         )
       );
 
       const otherActiveStudents = activeStudents.filter(
-        s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase() && s.name.toLowerCase() !== cleanName.toLowerCase()
+        s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase()
       );
 
       if (!isAlreadyAdmitted && otherActiveStudents.length > 0) {
@@ -693,6 +721,9 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     // Step 4: Check dynamic room override for today
     const { targetRoomId, isOverrideActive } = getTargetRoomIdentifier(permRoom.room_slug);
 
+    // Call syncLiveKitCloudRooms to ensure we have the absolute latest state of active rooms before checks
+    await syncLiveKitCloudRooms();
+
     // Step 5: Smart 1-on-1 Room Lock & Waiting Room Isolation Intercept check
     const {
       normRoom,
@@ -708,7 +739,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       Boolean(activeTutor) ||
       webhookParticipants.some(id => id.toLowerCase().includes('tutor') || id === permRoom.tutor_id);
 
-    const identity = sessionUserId || `guest_${Date.now()}`;
+    const identity = sessionUserId || `guest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const cleanIdentity = identity.toString().replace(/[^a-zA-Z0-9_\-]/g, '_');
     const cleanName = guestName || sessionUserId || (isAdminOrSupervisor ? 'Admin Observer' : 'Classroom Member');
 
@@ -719,13 +750,13 @@ const handleSlugAccess = async (req: Request, res: Response) => {
         w =>
           w.room_slug.toLowerCase() === canonicalSlug &&
           w.status === 'ADMITTED' &&
-          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+          (w.identity === cleanIdentity || (cleanName !== 'Classroom Member' && cleanName !== 'Guest Student' && cleanName !== 'Student' && w.guest_name.toLowerCase() === cleanName.toLowerCase()))
       )
     );
 
     const isStudentOrGuestRole = !isAdminOrSupervisor && userRole !== 'tutor';
     const otherActiveStudents = activeStudents.filter(
-      s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase() && s.name.toLowerCase() !== cleanName.toLowerCase()
+      s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase()
     );
 
     // 5A. Smart 1-on-1 Room Lock: If another student is ALREADY inside this room, hold incoming student in Next Student Lounge!
@@ -734,7 +765,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
         w =>
           w.room_slug.toLowerCase() === canonicalSlug &&
           w.status === 'WAITING' &&
-          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === cleanName.toLowerCase())
+          (w.identity === cleanIdentity || (cleanName !== 'Classroom Member' && cleanName !== 'Guest Student' && cleanName !== 'Student' && w.guest_name.toLowerCase() === cleanName.toLowerCase()))
       );
 
       if (!waitingParticipant) {
@@ -775,7 +806,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
         w =>
           w.room_slug.toLowerCase() === canonicalSlug &&
           w.status === 'WAITING' &&
-          (w.identity === cleanIdentity || w.guest_name.toLowerCase() === displayName.toLowerCase())
+          (w.identity === cleanIdentity || (displayName !== 'Classroom Member' && displayName !== 'Guest Student' && displayName !== 'Student' && w.guest_name.toLowerCase() === displayName.toLowerCase()))
       );
       if (!waitingParticipant) {
         waitingParticipant = {

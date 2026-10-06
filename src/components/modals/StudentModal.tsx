@@ -42,11 +42,12 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [trialStatus, setTrialStatus] = useState<TrialStatus>('In Progress');
   const [notes, setNotes] = useState<string>('');
   const [privateAdminNotes, setPrivateAdminNotes] = useState<string>('');
-  const [referralSource, setReferralSource] = useState<'None' | 'Existing Student' | 'Existing Parent' | 'Social Media' | 'Google / Search' | 'WhatsApp / Word of Mouth' | 'Website' | 'Other'>('None');
+  const [referralSource, setReferralSource] = useState<'None' | 'Student / Parent Referral' | 'Facebook Ads' | 'Google Ads' | string>('None');
   const [referredByName, setReferredByName] = useState<string>('');
   const [referredByStudentId, setReferredByStudentId] = useState<string>('');
   const [referralRewardAmount, setReferralRewardAmount] = useState<number>(30);
   const [referralStatus, setReferralStatus] = useState<'Pending' | 'Approved' | 'Paid/Applied' | 'Eligible'>('Pending');
+  const [showFeeToStudent, setShowFeeToStudent] = useState<boolean>(true);
   const [createStudentUser, setCreateStudentUser] = useState<boolean>(true);
   const [studentPassword, setStudentPassword] = useState<string>('quran123');
   const [createParentUser, setCreateParentUser] = useState<boolean>(true);
@@ -80,6 +81,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setReferredByStudentId(initialStudent.referredByStudentId || '');
       setReferralRewardAmount(initialStudent.referralRewardAmount ?? 30);
       setReferralStatus((initialStudent.referralStatus as any) || 'Pending');
+      setShowFeeToStudent(initialStudent.showFeeToStudent !== false);
     } else {
       setStudentId(getNextSequentialStudentId(students));
       setName('');
@@ -106,6 +108,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setReferredByStudentId('');
       setReferralRewardAmount(30);
       setReferralStatus('Pending');
+      setShowFeeToStudent(true);
     }
   }, [isOpen, initialStudent, tutors, students]);
 
@@ -145,6 +148,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           referredByStudentId: referredByStudentId.trim() || undefined,
           referralRewardAmount: referralSource !== 'None' ? Number(referralRewardAmount) || 30 : undefined,
           referralStatus: referralSource !== 'None' ? referralStatus : undefined,
+          showFeeToStudent,
           notes,
           privateAdminNotes,
           createdAt: initialStudent?.createdAt || new Date().toISOString()
@@ -468,6 +472,25 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                 </select>
               </div>
             </div>
+
+            {/* Student Portal Fee Visibility Toggle */}
+            <div className="p-3 bg-emerald-50/60 border border-emerald-200/80 rounded-xl flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <label className="text-xs font-bold text-[#161F1A] block cursor-pointer" htmlFor="showFeeToStudentCheckbox">
+                  Show Fee Receipts & Invoices in Student Portal
+                </label>
+                <p className="text-[11px] text-[#5A6B61]">
+                  Checked by default. Uncheck if parents prefer to hide tuition fees from the student dashboard.
+                </p>
+              </div>
+              <input
+                id="showFeeToStudentCheckbox"
+                type="checkbox"
+                checked={showFeeToStudent}
+                onChange={(e) => setShowFeeToStudent(e.target.checked)}
+                className="w-4 h-4 text-[#2D8B5C] rounded border-gray-300 focus:ring-[#2D8B5C] cursor-pointer shrink-0"
+              />
+            </div>
           </div>
 
           {/* Trial Sessions Counter (if Trial) */}
@@ -507,12 +530,16 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
               <div>
                 <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">
-                  How did this student join? (Referral Source)
+                  How did this student join? (Referral Channel)
                 </label>
                 <select
-                  value={referralSource}
+                  value={
+                    referralSource === 'Existing Student' || referralSource === 'Existing Parent'
+                      ? 'Student / Parent Referral'
+                      : referralSource
+                  }
                   onChange={(e) => {
-                    const src = e.target.value as any;
+                    const src = e.target.value;
                     setReferralSource(src);
                     if (src === 'None') {
                       setReferredByName('');
@@ -522,21 +549,17 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                   className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C]"
                 >
                   <option value="None">None / Direct Enrollment</option>
-                  <option value="Existing Student">Existing Student (Family / Sibling)</option>
-                  <option value="Existing Parent">Existing Parent / Community Member</option>
-                  <option value="WhatsApp / Word of Mouth">WhatsApp / Word of Mouth Recommendation</option>
-                  <option value="Social Media">Social Media (Facebook / Instagram / TikTok)</option>
-                  <option value="Google / Search">Google / Online Search</option>
-                  <option value="Website">Academy Website</option>
-                  <option value="Other">Other Referral Channel</option>
+                  <option value="Student / Parent Referral">Student / Parent Referral</option>
+                  <option value="Facebook Ads">Facebook Ads</option>
+                  <option value="Google Ads">Google Ads</option>
                 </select>
               </div>
 
-              {/* Dynamic Referrer selector or text input */}
-              {referralSource === 'Existing Student' ? (
+              {/* Dynamic Referrer selector or custom marketer text input */}
+              {(referralSource === 'Student / Parent Referral' || referralSource === 'Existing Student' || referralSource === 'Existing Parent') ? (
                 <div>
                   <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">
-                    Select Referring Student
+                    Select Referring Student / Parent
                   </label>
                   <select
                     value={referredByStudentId}
@@ -545,12 +568,14 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                       setReferredByStudentId(selectedId);
                       const matchingStudent = students.find(s => s.studentId === selectedId);
                       if (matchingStudent) {
-                        setReferredByName(`${matchingStudent.name} (${matchingStudent.studentId})`);
+                        setReferredByName(`${matchingStudent.name} (${matchingStudent.studentId}) - Parent: ${matchingStudent.parentName || 'N/A'}`);
+                      } else {
+                        setReferredByName('');
                       }
                     }}
                     className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C]"
                   >
-                    <option value="">-- Choose Existing Student --</option>
+                    <option value="">-- Choose Existing Student / Parent --</option>
                     {students
                       .filter(s => s.studentId !== studentId)
                       .map(s => (
@@ -560,16 +585,16 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                       ))}
                   </select>
                 </div>
-              ) : referralSource !== 'None' ? (
+              ) : (referralSource === 'Facebook Ads' || referralSource === 'Google Ads' || (referralSource !== 'None' && referralSource !== '')) ? (
                 <div>
                   <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">
-                    Referrer Name / Reference Note
+                    Marketer / Custom Campaign Name
                   </label>
                   <input
                     type="text"
                     value={referredByName}
                     onChange={(e) => setReferredByName(e.target.value)}
-                    placeholder="e.g. Tariq Khan / Facebook Campaign / Brother Imran"
+                    placeholder="e.g. Marketer John / Facebook Ads"
                     className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white focus:ring-1 focus:ring-[#2D8B5C]"
                   />
                 </div>

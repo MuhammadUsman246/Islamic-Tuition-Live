@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Upload,
@@ -52,7 +52,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
   const [themePreference, setThemePreference] = useState<'emerald' | 'gold' | 'midnight' | 'sage'>(
     userProfile?.themePreference || 'emerald'
   );
-  const [email, setEmail] = useState<string>(userProfile?.email || '');
+  const [email, setEmail] = useState<string>(student?.email || userProfile?.email || '');
 
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [compressionStats, setCompressionStats] = useState<{
@@ -63,6 +63,19 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
   } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setAvatarUrl(userProfile?.avatarUrl || '');
+    setPreferredName(userProfile?.preferredName || '');
+    setBio(userProfile?.bio || '');
+    setFavoriteSurah(userProfile?.favoriteSurah || 'Surah Ar-Rahman (55)');
+    setQuranGoal(userProfile?.quranGoal || 'Memorize Juz Amma with Tajweed rules');
+    setHobbies(userProfile?.hobbies || 'Islamic Calligraphy, Arabic, Reading');
+    setDailyGoalMinutes(userProfile?.dailyGoalMinutes || 20);
+    setThemePreference(userProfile?.themePreference || 'emerald');
+    setEmail(student?.email || userProfile?.email || '');
+  }, [isOpen, userProfile, student]);
 
   if (!isOpen) return null;
 
@@ -162,21 +175,21 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
   return (
     <div
       id="student_profile_modal_overlay"
-      className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto break-words"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-[#D5D0C6] overflow-hidden my-auto max-h-[92vh] flex flex-col">
+      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-[#D5D0C6] overflow-hidden my-auto max-h-[92dvh] flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 bg-[#1E5C3D] text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center border border-white/20">
+        <div className="px-4 sm:px-6 py-4 bg-[#1E5C3D] text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center border border-white/20 shrink-0">
               <Sparkles className="w-4 h-4 text-[#E8A93E]" />
             </div>
-            <div>
-              <h3 className="text-base font-bold leading-tight">My Student Profile & Personalization</h3>
-              <p className="text-[11px] text-[#c7e4d6]">
+            <div className="min-w-0">
+              <h3 className="text-base font-bold leading-tight break-words">My Student Profile &amp; Personalization</h3>
+              <p className="text-[11px] text-[#c7e4d6] break-words">
                 Customize your avatar, Quranic learning goals, and display preferences
               </p>
             </div>
@@ -184,23 +197,24 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+            aria-label="Close Profile Modal"
+            className="min-h-[44px] min-w-[44px] p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer flex items-center justify-center shrink-0 ml-2"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content Body */}
-        <form onSubmit={handleSaveProfile} className="p-5 sm:p-6 overflow-y-auto space-y-5 text-xs flex-1">
+        <form onSubmit={handleSaveProfile} className="p-4 sm:p-6 overflow-y-auto space-y-5 text-xs flex-1">
           {errorMessage && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs flex items-center gap-2">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs flex items-center gap-2 break-words">
               <X className="w-4 h-4 text-red-600 shrink-0" />
               <span>{errorMessage}</span>
             </div>
           )}
 
           {saveSuccess && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center gap-2">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center gap-2 break-words">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span className="font-semibold">Your student profile and avatar have been saved successfully!</span>
             </div>
@@ -208,11 +222,11 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
 
           {/* Section 1: Avatar Upload & WebP Auto-Converter */}
           <div className="p-4 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-3.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center space-x-2">
-                <ImageIcon className="w-4 h-4 text-[#2D8B5C]" />
-                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
-                  Profile Picture & Avatar (Auto-Optimized WebP)
+                <ImageIcon className="w-4 h-4 text-[#2D8B5C] shrink-0" />
+                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider break-words">
+                  Profile Picture &amp; Avatar (Auto-Optimized WebP)
                 </h4>
               </div>
               <span className="text-[10px] text-[#5A6B61] bg-white px-2 py-0.5 rounded border border-[#D5D0C6] font-mono">
@@ -245,9 +259,9 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                       setCompressionStats(null);
                     }}
                     title="Remove custom picture"
-                    className="absolute -top-1.5 -right-1.5 p-1 bg-red-600 text-white rounded-full shadow-md hover:bg-red-700 transition-colors"
+                    className="absolute -top-2 -right-2 min-h-[32px] min-w-[32px] p-1.5 bg-red-600 text-white rounded-full shadow-md hover:bg-red-700 transition-colors flex items-center justify-center cursor-pointer"
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -266,9 +280,9 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                     type="button"
                     disabled={isProcessingImage}
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-semibold rounded-lg flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                    className="min-h-[44px] px-4 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-semibold rounded-xl flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                   >
-                    <Upload className="w-3.5 h-3.5" />
+                    <Upload className="w-4 h-4" />
                     <span>{isProcessingImage ? 'Optimizing...' : 'Upload Photo'}</span>
                   </button>
 
@@ -301,13 +315,13 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                     key={avatar.id}
                     type="button"
                     onClick={() => handleSelectPresetAvatar(avatar)}
-                    className="p-1.5 rounded-xl border border-[#D5D0C6] hover:border-[#2D8B5C] bg-white hover:bg-emerald-50/50 flex flex-col items-center gap-1 transition-all group cursor-pointer"
+                    className="min-h-[44px] p-1.5 rounded-xl border border-[#D5D0C6] hover:border-[#2D8B5C] bg-white hover:bg-emerald-50/50 flex flex-col items-center justify-center gap-1 transition-all group cursor-pointer"
                     title={`${avatar.name} (${avatar.category})`}
                   >
                     <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${avatar.bgGradient} flex items-center justify-center text-sm shadow-xs`}>
                       {avatar.iconSvg}
                     </div>
-                    <span className="text-[9px] font-medium text-[#5A6B61] truncate max-w-[54px]">
+                    <span className="text-[9px] font-medium text-[#5A6B61] break-words text-center leading-tight">
                       {avatar.name.split(' ')[0]}
                     </span>
                   </button>
@@ -320,7 +334,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
           <div className="space-y-3.5">
             <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider flex items-center gap-1.5">
               <Target className="w-4 h-4 text-[#2D8B5C]" />
-              <span>Quran Learning Goals & Preferences</span>
+              <span>Quran Learning Goals &amp; Preferences</span>
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -334,7 +348,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                   onChange={(e) => setPreferredName(e.target.value)}
                   placeholder="e.g. Abu Hamza / Little Maryam"
                   maxLength={50}
-                  className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
+                  className="min-h-[44px] w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
                 />
                 <span className="text-[10px] text-[#5A6B61]">Displayed on your student greetings and certificates</span>
               </div>
@@ -346,7 +360,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                 <select
                   value={favoriteSurah}
                   onChange={(e) => setFavoriteSurah(e.target.value)}
-                  className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
+                  className="min-h-[44px] w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
                 >
                   {POPULAR_SURAHS.map((surah) => (
                     <option key={surah} value={surah}>
@@ -368,7 +382,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                 onChange={(e) => setQuranGoal(e.target.value)}
                 placeholder="e.g. Complete Juz Amma with Tajweed by next Eid"
                 maxLength={120}
-                className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
+                className="min-h-[44px] w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
               />
             </div>
 
@@ -386,7 +400,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                     step="5"
                     value={dailyGoalMinutes}
                     onChange={(e) => setDailyGoalMinutes(Number(e.target.value) || 20)}
-                    className="w-24 border border-[#D5D0C6] rounded-lg p-2 bg-white text-center font-bold text-[#161F1A]"
+                    className="min-h-[44px] w-24 border border-[#D5D0C6] rounded-xl p-2 bg-white text-center font-bold text-[#161F1A]"
                   />
                   <span className="text-xs text-[#5A6B61]">minutes per day</span>
                 </div>
@@ -394,7 +408,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
 
               <div>
                 <label className="block font-semibold text-[#161F1A] mb-1">
-                  Hobbies & Interests
+                  Hobbies &amp; Interests
                 </label>
                 <input
                   type="text"
@@ -402,7 +416,7 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                   onChange={(e) => setHobbies(e.target.value)}
                   placeholder="e.g. Calligraphy, Arabic, Football"
                   maxLength={100}
-                  className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
+                  className="min-h-[44px] w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
                 />
               </div>
             </div>
@@ -417,8 +431,38 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                 onChange={(e) => setBio(e.target.value)}
                 placeholder="Share a short note about your Quran journey, aspirations, or learning style..."
                 maxLength={240}
-                className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none resize-none"
+                className="w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none resize-none"
               />
+            </div>
+
+            {/* Banner Theme Accent Selector */}
+            <div>
+              <label className="block font-semibold text-[#161F1A] mb-1.5 flex items-center gap-1.5">
+                <Palette className="w-4 h-4 text-[#2D8B5C]" />
+                <span>Portal Welcome Banner Theme</span>
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {([
+                  { id: 'emerald', label: 'Academy Emerald', preview: 'bg-[#1E5C3D]' },
+                  { id: 'gold', label: 'Royal Amber', preview: 'bg-[#5C4314]' },
+                  { id: 'midnight', label: 'Midnight Slate', preview: 'bg-[#17253B]' },
+                  { id: 'sage', label: 'Deep Sage', preview: 'bg-[#254438]' },
+                ] as const).map((themeOpt) => (
+                  <button
+                    key={themeOpt.id}
+                    type="button"
+                    onClick={() => setThemePreference(themeOpt.id)}
+                    className={`min-h-[44px] px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      themePreference === themeOpt.id
+                        ? 'border-[#2D8B5C] bg-emerald-50 text-[#1E5C3D] ring-1 ring-[#2D8B5C]'
+                        : 'border-[#D5D0C6] bg-white text-[#5A6B61] hover:border-gray-400'
+                    }`}
+                  >
+                    <span className={`w-4 h-4 rounded-full shrink-0 border border-black/15 ${themeOpt.preview}`} />
+                    <span className="break-words text-left">{themeOpt.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -426,9 +470,9 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
           <div className="p-4 bg-emerald-50/20 rounded-xl border border-emerald-100 space-y-3">
             <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider flex items-center gap-1.5">
               <User className="w-4 h-4 text-[#2D8B5C]" />
-              <span>Contact & Login Email Information</span>
+              <span>Contact &amp; Login Email Information</span>
             </h4>
-            <p className="text-[11px] text-[#5A6B61] leading-relaxed">
+            <p className="text-[11px] text-[#5A6B61] leading-relaxed break-words">
               Updating your email will automatically update both your profile records and login credentials. Keep this updated to ensure uninterrupted access.
             </p>
             <div>
@@ -441,56 +485,56 @@ export const StudentProfileCustomizerModal: React.FC<StudentProfileCustomizerMod
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="e.g. parent.name@example.com"
-                className="w-full border border-[#D5D0C6] rounded-lg p-2.5 bg-white text-xs text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
+                className="min-h-[44px] w-full border border-[#D5D0C6] rounded-xl p-2.5 bg-white text-xs text-[#161F1A] focus:ring-2 focus:ring-[#2D8B5C] outline-none"
               />
             </div>
           </div>
 
           {/* Section 3: Protected Academic & Identity Shield */}
-          <div className="p-3.5 bg-[#F4F2EC] rounded-xl border border-[#D5D0C6] space-y-2">
+          <div className="p-3.5 bg-[#F4F2EC] rounded-xl border border-[#D5D0C6] space-y-2 break-words">
             <div className="flex items-center space-x-2">
-              <ShieldCheck className="w-4 h-4 text-[#1E5C3D]" />
-              <span className="text-xs font-bold text-[#161F1A]">
+              <ShieldCheck className="w-4 h-4 text-[#1E5C3D] shrink-0" />
+              <span className="text-xs font-bold text-[#161F1A] break-words">
                 Protected Academic Record (Managed by Academy Admin)
               </span>
             </div>
-            <p className="text-[11px] text-[#5A6B61]">
+            <p className="text-[11px] text-[#5A6B61] break-words">
               The following fields are strictly locked so they remain synchronized with tutor logs and billing ledgers:
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
               <div className="p-2 bg-white rounded-lg border border-[#E3DFD7]">
                 <span className="text-[#5A6B61] block text-[10px]">Official Name</span>
-                <strong className="text-[#161F1A] truncate block">{student?.name || userProfile?.displayName}</strong>
+                <strong className="text-[#161F1A] break-words block">{student?.name || userProfile?.displayName}</strong>
               </div>
               <div className="p-2 bg-white rounded-lg border border-[#E3DFD7]">
                 <span className="text-[#5A6B61] block text-[10px]">Student ID</span>
-                <strong className="text-[#2D8B5C] font-mono block">{student?.studentId || userProfile?.studentId || 'N/A'}</strong>
+                <strong className="text-[#2D8B5C] font-mono break-words block">{student?.studentId || userProfile?.studentId || 'N/A'}</strong>
               </div>
               <div className="p-2 bg-white rounded-lg border border-[#E3DFD7]">
                 <span className="text-[#5A6B61] block text-[10px]">Enrolled Course</span>
-                <strong className="text-[#161F1A] truncate block">{student?.courseType || 'Quranic Studies'}</strong>
+                <strong className="text-[#161F1A] break-words block">{student?.courseType || 'Quranic Studies'}</strong>
               </div>
               <div className="p-2 bg-white rounded-lg border border-[#E3DFD7]">
                 <span className="text-[#5A6B61] block text-[10px]">Assigned Tutor</span>
-                <strong className="text-[#161F1A] truncate block">{getTutorDisplayId(assignedTutor || student?.assignedTutorId) || 'Assigned Tutor'}</strong>
+                <strong className="text-[#161F1A] break-words block">{getTutorDisplayId(assignedTutor || student?.assignedTutorId) || 'Assigned Tutor'}</strong>
               </div>
             </div>
           </div>
 
           {/* Form Actions Footer */}
-          <div className="pt-2 flex items-center justify-end space-x-3 shrink-0 border-t border-[#E3DFD7]">
+          <div className="pt-2 flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2.5 shrink-0 border-t border-[#E3DFD7]">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 border border-[#D5D0C6] rounded-xl text-xs font-semibold text-[#5A6B61] hover:bg-gray-100 transition-colors cursor-pointer"
+              className="min-h-[44px] w-full sm:w-auto px-4 py-2.5 border border-[#D5D0C6] rounded-xl text-xs font-semibold text-[#5A6B61] hover:bg-gray-100 transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center space-x-1.5"
+              className="min-h-[44px] w-full sm:w-auto px-5 py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center justify-center space-x-1.5"
             >
-              <CheckCircle2 className="w-4 h-4" />
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>Save Profile Updates</span>
             </button>
           </div>

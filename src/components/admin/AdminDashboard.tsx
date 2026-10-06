@@ -153,7 +153,8 @@ import {
   deleteClassesBatch,
   subscribeToSummaryMetrics,
   updateFamilyGroupBatch,
-  loadOlderLessonsArchive
+  loadOlderLessonsArchive,
+  checkAndApplyReferralDiscountOnFirstPayment
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -5397,6 +5398,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       adminConfirmedAt: new Date().toISOString(),
                                       adminConfirmedBy: userProfile?.displayName || 'Admin'
                                     });
+                                    await checkAndApplyReferralDiscountOnFirstPayment(f.studentId, f.invoiceNumber);
                                     if (onRefreshData) {
                                       await onRefreshData();
                                     }
@@ -5460,6 +5462,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       adminConfirmedAt: new Date().toISOString(),
                                       adminConfirmedBy: userProfile?.displayName || 'Admin'
                                     });
+                                    await checkAndApplyReferralDiscountOnFirstPayment(f.studentId, f.invoiceNumber);
                                     if (onRefreshData) {
                                       await onRefreshData();
                                     }
@@ -5507,89 +5510,167 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       })()}
 
       {/* 8. TUTOR SALARIES (ADMIN ONLY) */}
-      {currentTab === 'salaries' && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-[#161F1A]">Tutor Monthly Salaries (PKR)</h3>
-              <p className="text-xs text-[#5A6B61]">
-                Operational staff compensation recorded strictly in Pakistani Rupees (PKR).
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setSelectedSalary(null);
-                setIsSalaryModalOpen(true);
-              }}
-              className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Record Salary Disbursement</span>
-            </button>
-          </div>
+      {currentTab === 'salaries' && (() => {
+        const currentMonthName = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        const totalBudgetPKR = tutors.reduce((sum, t) => sum + (t.monthlySalaryPKR || 0), 0);
+        const totalPaidPKR = salaries.filter(s => s.status === 'Paid').reduce((sum, s) => sum + (s.monthlySalary || 0), 0);
+        const totalPendingPKR = salaries.filter(s => s.status !== 'Paid').reduce((sum, s) => sum + (s.monthlySalary || 0), 0);
 
-          <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                <tr>
-                  <th className="py-3 px-4">Tutor</th>
-                  <th className="py-3 px-4">Real Name</th>
-                  <th className="py-3 px-4">Month</th>
-                  <th className="py-3 px-4">Salary (PKR)</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Disbursed Date</th>
-                  <th className="py-3 px-4">Notes</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EAE6DE]">
-                {salaries.map(sal => (
-                  <tr key={sal.id} className="hover:bg-[#FAF9F7]/60 transition-colors">
-                    <td className="py-3 px-4 font-bold text-[#2D8B5C]">{sal.tutorId}</td>
-                    <td className="py-3 px-4 font-semibold text-[#161F1A]">{sal.tutorName}</td>
-                    <td className="py-3 px-4">{sal.month}</td>
-                    <td className="py-3 px-4 font-bold text-[#161F1A]">PKR {sal.monthlySalary?.toLocaleString()}</td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        sal.status === 'Paid' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {sal.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-[#5A6B61]">{sal.paymentDate || 'Pending'}</td>
-                    <td className="py-3 px-4 text-[#5A6B61]">{sal.notes}</td>
-                    <td className="py-3 px-4 text-right space-x-2">
-                      {sal.status !== 'Paid' && (
-                        <button
-                          onClick={async () => {
-                            await updateSalary(sal.id, {
-                              status: 'Paid',
-                              paymentDate: new Date().toISOString().slice(0, 10)
-                            });
-                            await onRefreshData();
-                          }}
-                          className="px-2 py-1 text-xs text-emerald-700 font-semibold hover:bg-emerald-50 rounded"
-                        >
-                          Mark Paid
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          setSelectedSalary(sal);
-                          setIsSalaryModalOpen(true);
-                        }}
-                        className="px-2 py-1 text-xs text-gray-700 font-semibold hover:bg-gray-100 rounded"
-                      >
-                        Edit
-                      </button>
-                    </td>
+        const handleAutoGenerateMonthlyPayroll = async () => {
+          let createdCount = 0;
+          for (const t of tutors) {
+            const hasMonthRecord = salaries.some(s => s.tutorId === t.tutorId && s.month === currentMonthName);
+            if (!hasMonthRecord) {
+              await addSalary({
+                tutorId: t.tutorId,
+                tutorName: t.realName || t.displayName || t.tutorId,
+                monthlySalary: t.monthlySalaryPKR || 35000,
+                currency: 'PKR',
+                month: currentMonthName,
+                status: 'Unpaid',
+                notes: `Auto-generated monthly fixed salary for ${currentMonthName} based on tutor profile record.`,
+                createdAt: new Date().toISOString()
+              });
+              createdCount++;
+            }
+          }
+          await onRefreshData();
+          if (createdCount > 0) {
+            alert(`Generated ${createdCount} payroll records for ${currentMonthName}!`);
+          } else {
+            alert(`Payroll records for ${currentMonthName} are already up to date.`);
+          }
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-[#161F1A]">Tutor Monthly Fixed Salaries (PKR)</h3>
+                <p className="text-xs text-[#5A6B61]">
+                  Fixed monthly faculty compensation accurately fetched from Tutor profiles and recorded in PKR.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleAutoGenerateMonthlyPayroll}
+                  className="px-3.5 py-1.5 bg-[#1B365D] hover:bg-[#12243E] text-white text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                  title="Auto-generate monthly salary records for all faculty tutors based on configured monthly rates"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Auto-Generate {currentMonthName} Payroll</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedSalary(null);
+                    setIsSalaryModalOpen(true);
+                  }}
+                  className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Custom Salary Record</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Payroll Summary Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] block">Faculty Total Fixed Budget</span>
+                <p className="text-lg font-bold text-[#161F1A] font-mono mt-0.5">PKR {totalBudgetPKR.toLocaleString()}</p>
+                <span className="text-[10px] text-[#5A6B61]">{tutors.length} faculty tutors on fixed monthly pay</span>
+              </div>
+
+              <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">Disbursed Paid Salaries</span>
+                <p className="text-lg font-bold text-emerald-900 font-mono mt-0.5">PKR {totalPaidPKR.toLocaleString()}</p>
+                <span className="text-[10px] text-emerald-700">{salaries.filter(s => s.status === 'Paid').length} paid disbursements</span>
+              </div>
+
+              <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">Unpaid / Pending Salaries</span>
+                <p className="text-lg font-bold text-amber-900 font-mono mt-0.5">PKR {totalPendingPKR.toLocaleString()}</p>
+                <span className="text-[10px] text-amber-700">{salaries.filter(s => s.status !== 'Paid').length} pending disbursements</span>
+              </div>
+            </div>
+
+            <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">Tutor ID</th>
+                    <th className="py-3 px-4">Faculty Name</th>
+                    <th className="py-3 px-4">Month</th>
+                    <th className="py-3 px-4">Monthly Salary (PKR)</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Disbursed Date</th>
+                    <th className="py-3 px-4">Notes</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[#EAE6DE]">
+                  {salaries.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-xs text-[#5A6B61] italic">
+                        No salary records found. Click "Auto-Generate Payroll" above to populate fixed salaries for all tutors.
+                      </td>
+                    </tr>
+                  ) : (
+                    salaries.map(sal => (
+                      <tr key={sal.id} className="hover:bg-[#FAF9F7]/60 transition-colors">
+                        <td className="py-3 px-4 font-bold text-[#2D8B5C]">{sal.tutorId}</td>
+                        <td className="py-3 px-4 font-semibold text-[#161F1A]">{sal.tutorName}</td>
+                        <td className="py-3 px-4 font-medium">{sal.month}</td>
+                        <td className="py-3 px-4 font-bold text-[#161F1A]">PKR {sal.monthlySalary?.toLocaleString()}</td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            sal.status === 'Paid' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}>
+                            {sal.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-[#5A6B61] font-mono">{sal.paymentDate || 'Pending'}</td>
+                        <td className="py-3 px-4 text-[#5A6B61] max-w-xs truncate">{sal.notes || '—'}</td>
+                        <td className="py-3 px-4 text-right space-x-1.5">
+                          {sal.status !== 'Paid' && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await updateSalary(sal.id, {
+                                  status: 'Paid',
+                                  paymentDate: new Date().toISOString().slice(0, 10)
+                                });
+                                await onRefreshData();
+                              }}
+                              className="px-2.5 py-1 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold rounded-md transition-colors cursor-pointer"
+                            >
+                              Mark Paid
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSalary(sal);
+                              setIsSalaryModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 text-xs text-gray-700 font-semibold bg-gray-100 hover:bg-gray-200 rounded-md transition-colors cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 9. REFERRALS REWARDS DASHBOARD */}
       {currentTab === 'referrals' && (
