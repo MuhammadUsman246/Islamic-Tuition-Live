@@ -1751,12 +1751,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               true,
               displayConstraints,
               {
-                simulcast: true,
+                simulcast: false,
                 degradationPreference: 'maintain-resolution',
                 screenShareEncoding: {
-                  maxBitrate: 850_000,
-                  maxFramerate: 10,
-                  priority: 'medium',
+                  maxBitrate: 2_500_000,
+                  maxFramerate: 15,
+                  priority: 'high',
                 },
               }
             );
@@ -1764,7 +1764,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           } catch (err: any) {
             // Fallback if browser rejected monitorTypeSurfaces
             delete displayConstraints.monitorTypeSurfaces;
-            await roomRef.current.localParticipant.setScreenShareEnabled(true, displayConstraints as any);
+            await roomRef.current.localParticipant.setScreenShareEnabled(
+              true,
+              displayConstraints as any,
+              {
+                simulcast: false,
+                degradationPreference: 'maintain-resolution',
+                screenShareEncoding: {
+                  maxBitrate: 2_500_000,
+                  maxFramerate: 15,
+                  priority: 'high',
+                },
+              }
+            );
             setIsScreenSharing(true);
           }
         } else if (navigator.mediaDevices?.getDisplayMedia) {
@@ -2697,7 +2709,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     setIsSidebarOpen(prev => !prev);
                   }
                 }}
-                className={`min-h-[36px] inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] sm:text-[11px] font-bold truncate max-w-[190px] sm:max-w-[340px] cursor-pointer transition-all ${
+                className={`min-h-[36px] inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] sm:text-[11px] font-bold truncate max-w-[280px] sm:max-w-[420px] cursor-pointer transition-all ${
                   isBothTutorAndStudentPresent
                     ? isLight
                       ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs'
@@ -2719,6 +2731,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     isBothTutorAndStudentPresent ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-pulse'
                   }`}
                 />
+                {isTutor && activeStudentParticipants.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/25 text-emerald-300 text-[9px] font-black shrink-0 border border-emerald-400/30 uppercase tracking-tight">
+                    {activeStudentParticipants.length} In Class
+                  </span>
+                )}
                 <span className="truncate">
                   {isBothTutorAndStudentPresent
                     ? `${tutorDisplayName} + ${connectedStudentsNames}`
@@ -3319,7 +3336,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     <div className="min-w-0 pr-2">
                       <div className="font-bold break-words text-[11px] leading-tight">{p.name}</div>
                       <div className={`text-[9px] uppercase font-bold tracking-wider ${isLight ? 'text-[#5A6B61]' : 'text-[#A8C2B3]'}`}>
-                        {p.role} {p.isScreenSharing ? '· Sharing' : ''}
+                        {p.role === 'Tutor' ? 'Tutor (Host)' : p.role} {p.isScreenSharing ? '· Sharing' : ''}
                       </div>
                     </div>
 

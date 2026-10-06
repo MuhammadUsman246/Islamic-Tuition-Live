@@ -469,10 +469,10 @@ export const PermanentSlugRoute: React.FC = () => {
           </div>
 
           <div className="space-y-1">
-            <label className="block text-xs font-bold text-[#8AA393]">5-Digit Room Passcode</label>
+            <label className="block text-xs font-bold text-[#8AA393]">Room Passcode</label>
             <input
               type="password"
-              maxLength={5}
+              maxLength={12}
               value={passcode}
               onChange={(e) => setPasscode(e.target.value)}
               placeholder="e.g. 12345"
@@ -488,10 +488,6 @@ export const PermanentSlugRoute: React.FC = () => {
             {isLoading ? 'Verifying Code...' : 'Connect to Live Classroom'}
           </button>
         </form>
-
-        <div className="text-[11px] text-[#8AA393] text-center font-mono pt-2">
-          EdTech LiveKit Audio Classroom Pipeline
-        </div>
       </div>
     </div>
   );

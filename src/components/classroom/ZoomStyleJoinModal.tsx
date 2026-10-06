@@ -415,15 +415,15 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
               />
             </div>
 
-            {/* Field 2: 5-Digit Passcode */}
+            {/* Field 2: Passcode */}
             <div className="space-y-1">
-              <label className="block text-xs font-bold text-[#8AA393]">5-Digit Numeric Passcode</label>
+              <label className="block text-xs font-bold text-[#8AA393]">Room Passcode</label>
               <input
                 type="text"
-                maxLength={5}
+                maxLength={12}
                 value={passcode}
                 onChange={e => setPasscode(e.target.value)}
-                placeholder="Enter 5-digit passcode (e.g. 12345)"
+                placeholder="Enter passcode (e.g. 12345)"
                 className="w-full bg-black/50 border border-white/15 rounded-xl p-3 text-center text-lg font-mono tracking-widest text-white focus:outline-none focus:border-emerald-500"
               />
             </div>

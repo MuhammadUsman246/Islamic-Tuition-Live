@@ -335,10 +335,13 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
 
   const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
   const activeTutor = participantsList.find(
-    p => p.role === 'tutor' || p.identity.toLowerCase().includes('tutor')
+    p => (p.role || '').toLowerCase() === 'tutor' || p.identity.toLowerCase().includes('tutor')
   );
   const activeStudents = participantsList.filter(
-    p => p.role === 'student' || p.role === 'guest' || p.role === 'parent'
+    p => {
+      const r = (p.role || '').toLowerCase();
+      return r === 'student' || r === 'guest' || r === 'parent';
+    }
   );
 
   // Include any student promoted to ADMITTED within the last 25 seconds who is currently transitioning into the room

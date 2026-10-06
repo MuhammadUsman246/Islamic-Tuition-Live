@@ -396,7 +396,7 @@ export async function joinClassroomBySlugOrPasscode(params: {
   const submittedPasscode = (params.passcode || '').trim();
 
   if (!isPrivilegedRole && !hasLoggedSession && submittedPasscode !== expectedPasscode) {
-    throw new Error('Invalid 5-Digit Classroom Passcode. Default passcode is 12345.');
+    throw new Error('Invalid 5-Digit Classroom Passcode.');
   }
   if (!isPrivilegedRole && submittedPasscode && submittedPasscode !== expectedPasscode) {
     throw new Error('Invalid 5-Digit Classroom Passcode.');
