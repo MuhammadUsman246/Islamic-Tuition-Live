@@ -17,15 +17,27 @@ import {
 const app = express();
 const PORT = 3000;
 const server = http.createServer(app);
+const SERVER_BOOT_TIMESTAMP = Date.now();
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Fast 0-Firestore-Read Deployment & Version Check Endpoint
+app.get('/api/version', (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    version: process.env.APP_VERSION || '1.0.5',
+    bootTime: SERVER_BOOT_TIMESTAMP,
+    timestamp: Date.now(),
+  });
+});
 
 // Health Check
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    bootTime: SERVER_BOOT_TIMESTAMP,
     timestamp: new Date().toISOString(),
   });
 });

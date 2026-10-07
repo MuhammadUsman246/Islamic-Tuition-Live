@@ -893,6 +893,7 @@ import { PermanentSlugRoute } from './components/classroom/PermanentSlugRoute';
 import { GuestLinkRoute } from './components/classroom/GuestLinkRoute';
 import { ClassroomProvider } from './context/ClassroomContext';
 import { PersistentClassroomOverlay } from './components/classroom/PersistentClassroomOverlay';
+import { AppUpdateBanner } from './components/common/AppUpdateBanner';
 
 export default function App() {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
@@ -901,6 +902,7 @@ export default function App() {
     return (
       <AuthProvider>
         <ClassroomProvider>
+          <AppUpdateBanner />
           <PermanentSlugRoute />
           <PersistentClassroomOverlay />
         </ClassroomProvider>
@@ -912,6 +914,7 @@ export default function App() {
     return (
       <AuthProvider>
         <ClassroomProvider>
+          <AppUpdateBanner />
           <GuestLinkRoute />
           <PersistentClassroomOverlay />
         </ClassroomProvider>
@@ -922,6 +925,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ClassroomProvider>
+        <AppUpdateBanner />
         <MainPortal />
         <PersistentClassroomOverlay />
       </ClassroomProvider>
