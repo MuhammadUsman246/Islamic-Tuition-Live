@@ -1486,9 +1486,10 @@ async function syncLiveKitCloudRooms(): Promise<void> {
         const activeSet = seenCloudIdentitiesByRoom[rKey];
         Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
           const user = LIVE_ROOM_PARTICIPANTS[rKey][pid];
-          // Do NOT remove participants whose join or heartbeat was within the last 30 seconds
-          // so WebRTC handshake / transient cloud poll delays don't falsely wipe them!
-          if (nowMs - user.lastSeen > 30000 && (!activeSet || !activeSet.has(pid))) {
+          const hasLeftCloud = user.fromCloud && (!activeSet || !activeSet.has(pid));
+          const hasTimedOut = nowMs - user.lastSeen > 20000;
+          
+          if (hasLeftCloud || hasTimedOut) {
             delete LIVE_ROOM_PARTICIPANTS[rKey][pid];
             autoPromoteNextWaitingStudentIfRoomFree(rKey);
           }

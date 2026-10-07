@@ -386,8 +386,7 @@ export async function joinClassroomBySlugOrPasscode(params: {
       }
     }
   } catch (err: any) {
-    // Re-throw explicit passcode errors from backend
-    if (err?.message && err.message.toLowerCase().includes('passcode')) {
+    if (err?.message) {
       throw err;
     }
   }
