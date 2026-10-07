@@ -424,9 +424,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [showDeviceSettingsModal, setShowDeviceSettingsModal] = useState<boolean>(false);
   const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState<boolean>(false);
 
-  // Tutor Waiting Room Queue (Non-Intrusive Top Badge + Sibling Allow 2nd Student In Now)
+  // Tutor Waiting Room Queue (Live Badge, Since Time, Admit & Keep in Waiting actions)
   const [waitingQueue, setWaitingQueue] = useState<WaitingRoomParticipant[]>([]);
   const waitingQueueRef = useRef<WaitingRoomParticipant[]>([]);
+  const [acknowledgedWaitingIds, setAcknowledgedWaitingIds] = useState<Set<string>>(new Set());
+  const [waitingTicker, setWaitingTicker] = useState<number>(0);
   const [showWaitingRoomModal, setShowWaitingRoomModal] = useState<boolean>(false);
   const notifiedWaitingIdsRef = useRef<Set<string>>(new Set());
   const isIdleStandbyRef = useRef<boolean>(false);
@@ -465,14 +467,39 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   });
   const [loungeRejectedMessage, setLoungeRejectedMessage] = useState<string | null>(null);
 
-  const formatWaitingDuration = (w: WaitingRoomParticipant): string => {
-    const secs =
-      typeof w.waiting_seconds === 'number'
-        ? w.waiting_seconds
-        : Math.max(0, Math.floor((Date.now() - new Date(w.joined_at).getTime()) / 1000));
-    if (secs < 60) return `Waiting ${Math.max(1, secs)}s`;
-    return `Waiting ${Math.floor(secs / 60)}m`;
-  };
+  // Live 1-second ticker for Tutor Waiting Room: guarantees live duration updates every second
+  useEffect(() => {
+    if (!isTutor || waitingQueue.length === 0) return;
+    const ticker = setInterval(() => {
+      setWaitingTicker(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [isTutor, waitingQueue.length]);
+
+  // Computes precise dynamic waiting duration in real time
+  const formatWaitingDuration = useCallback((w: WaitingRoomParticipant): string => {
+    const joinedMs = new Date(w.joined_at).getTime();
+    const secs = !isNaN(joinedMs)
+      ? Math.max(0, Math.floor((Date.now() - joinedMs) / 1000))
+      : (typeof w.waiting_seconds === 'number' ? w.waiting_seconds : 0);
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    if (mins === 0) return `${Math.max(1, secs)}s`;
+    if (mins === 1 && remSecs === 0) return '1 minute';
+    if (remSecs === 0) return `${mins} minutes`;
+    return `${mins}m ${remSecs}s`;
+  }, [waitingTicker]);
+
+  // Formats the exact time since the student entered waiting room
+  const formatJoinedSinceTime = useCallback((joinedAtStr: string): string => {
+    try {
+      const d = new Date(joinedAtStr);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  }, []);
 
   // Sync incoming waitingList for Tutor without any blocking popup modal (plays gentle chime once per new waiting student)
   const updateTutorWaitingQueue = useCallback((list: WaitingRoomParticipant[]) => {
@@ -953,9 +980,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, [studioNoiseFilter, enableAutoGain, syncParticipantsState]);
 
-  // Poll Tutor Waiting Room Queue ONLY before LiveKit connection completes (Once connected, heartbeat returns waitingList to save server requests)
+  // Continuous Realtime Tutor Waiting Room Queue Sync:
+  // Polls /api/livekit/waiting-room every 3s so the tutor immediately sees waiting students and since-times
   useEffect(() => {
-    if (!isTutor || connectionStatus === ConnectionState.Connected) return;
+    if (!isTutor) return;
+    let isCancelled = false;
 
     const pollWaitingRoom = async () => {
       try {
@@ -963,19 +992,22 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
-          if (data.waitingList) {
+          if (!isCancelled && data.waitingList) {
             updateTutorWaitingQueue(data.waitingList);
           }
         }
       } catch (e) {
-        console.warn('Waiting room poll error:', e);
+        // Non-fatal
       }
     };
 
     pollWaitingRoom();
-    const interval = setInterval(pollWaitingRoom, 8000);
-    return () => clearInterval(interval);
-  }, [isTutor, roomName, connectionStatus, updateTutorWaitingQueue]);
+    const interval = setInterval(pollWaitingRoom, 3000);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [isTutor, roomName, updateTutorWaitingQueue]);
 
   // Connect to LiveKit Room (Stable lifecycle - never disconnects on mute/unmute or device switch)
   // Holds off connecting if Student is waiting in the Next Student Lounge!
@@ -2203,15 +2235,30 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     setIsSidebarOpen(prev => !prev);
   };
 
-  // Tutor Admit / Reject Intercept Actions
-  const handleWaitingRoomAction = async (waitingId: string, action: 'ADMIT' | 'REJECT') => {
+  // Tutor Admit / Keep in Waiting / Reject Actions
+  const handleWaitingRoomAction = async (waitingId: string, action: 'ADMIT' | 'REJECT' | 'KEEP_WAITING') => {
     try {
+      if (action === 'KEEP_WAITING') {
+        setAcknowledgedWaitingIds(prev => new Set([...prev, waitingId]));
+        await fetch('/api/livekit/waiting-room/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ waitingId, action: 'KEEP_WAITING' })
+        }).catch(() => {});
+        return;
+      }
+
       await fetch('/api/livekit/waiting-room/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ waitingId, action })
       });
       setWaitingQueue(prev => prev.filter(w => w.id !== waitingId));
+      setAcknowledgedWaitingIds(prev => {
+        const next = new Set(prev);
+        next.delete(waitingId);
+        return next;
+      });
       if (waitingQueue.length <= 1) {
         setShowWaitingRoomModal(false);
       }
@@ -2829,6 +2876,25 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         : `${participantName} · Waiting for Tutor...`}
                 </span>
               </button>
+
+              {/* Tutor Waiting Room Header Pill Badge */}
+              {isTutor && waitingQueue.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSidebarOpen(true);
+                    setMobileDrawerTab('participants');
+                  }}
+                  className="min-h-[36px] inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] sm:text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/50 shadow-[0_0_10px_rgba(245,158,11,0.25)] animate-pulse cursor-pointer transition-all"
+                  title="Students in Waiting Room! Click to view and admit"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                  <span className="truncate max-w-[200px] sm:max-w-[280px]">
+                    ⏳ {waitingQueue[0].guest_name} waiting ({formatWaitingDuration(waitingQueue[0])})
+                    {waitingQueue.length > 1 ? ` +${waitingQueue.length - 1}` : ''}
+                  </span>
+                </button>
+              )}
             </div>
             <p className={`text-[10px] font-mono break-words ${isLight ? 'text-[#4A5B51]' : 'text-[#B2C9BC]'}`}>
               Room: {roomName} · {userRole.toUpperCase()}
@@ -2947,48 +3013,87 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       )}
 
-      {/* NON-INTRUSIVE TUTOR TOP BADGE FOR WAITING STUDENT IN LOUNGE (Zero Blocking Popup + Sibling [Allow 2nd Student In Now] Button) */}
-      {isTutor && waitingQueue.length > 0 && (
-        <div
-          className={`px-3 py-1.5 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 animate-in fade-in duration-200 ${
-            isLight
-              ? 'bg-amber-50 border-amber-300 text-amber-950'
-              : 'bg-amber-950/80 border-amber-500/40 text-amber-100'
-          }`}
-        >
-          <div className="flex items-center space-x-2 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
-            <span className="text-xs font-extrabold truncate">
-              ⏳ Next Student Ready: <span className="underline decoration-amber-400/60">{waitingQueue[0].guest_name}</span> ({formatWaitingDuration(waitingQueue[0])})
-              {waitingQueue.length > 1 ? ` +${waitingQueue.length - 1} more in line` : ''}
-            </span>
-            <span className={`hidden lg:inline text-[11px] font-medium ${isLight ? 'text-amber-800' : 'text-amber-200/80'}`}>
-              — Auto-starts when current lesson finishes
-            </span>
-          </div>
+      {/* TUTOR TOP WAITING ROOM BADGE (Student Name, Waiting Duration, Since Time, Admit Now & Keep in Waiting) */}
+      {isTutor && waitingQueue.length > 0 && (() => {
+        const firstWaiter = waitingQueue[0];
+        const isAcknowledged = acknowledgedWaitingIds.has(firstWaiter.id);
+        const waiterDurationStr = formatWaitingDuration(firstWaiter);
+        const waiterSinceStr = formatJoinedSinceTime(firstWaiter.joined_at);
 
-          <div className="flex items-center space-x-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => handleWaitingRoomAction(waitingQueue[0].id, 'ADMIT')}
-              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-xs transition-colors"
-              title="Sharing class with a brother/sister? Click to bring this student into the room now alongside your current student."
-            >
-              <UserCheck className="w-3.5 h-3.5" />
-              <span>{activeStudentParticipants.length > 0 ? 'Allow 2nd Student In Now' : 'Admit Student Now'}</span>
-            </button>
+        return (
+          <div
+            className={`px-3 py-1.5 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 transition-all duration-200 ${
+              isLight
+                ? isAcknowledged
+                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                  : 'bg-amber-100 border-amber-300 text-amber-950 shadow-2xs'
+                : isAcknowledged
+                  ? 'bg-amber-950/70 border-amber-600/35 text-amber-200'
+                  : 'bg-amber-950/95 border-amber-500/60 text-amber-100 shadow-[0_2px_12px_rgba(245,158,11,0.2)]'
+            }`}
+          >
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isAcknowledged ? 'bg-amber-400' : 'bg-amber-400 animate-ping'}`} />
+              <span className="text-xs font-bold truncate">
+                ⏳ Student <span className="font-extrabold underline decoration-amber-400/80">{firstWaiter.guest_name}</span> is waiting {waiterDurationStr}
+                {waiterSinceStr && (
+                  <span className={`text-[11px] font-normal ml-1 ${isLight ? 'text-amber-800' : 'text-amber-300/80'}`}>
+                    (since {waiterSinceStr})
+                  </span>
+                )}
+                {waitingQueue.length > 1 && (
+                  <span className="ml-1.5 px-1.5 py-0.2 rounded-full bg-amber-400/25 text-[10px] font-mono font-bold border border-amber-400/40">
+                    +{waitingQueue.length - 1} more
+                  </span>
+                )}
+              </span>
+              <span className={`hidden md:inline text-[11px] font-medium ${isLight ? 'text-amber-800' : 'text-amber-300/80'}`}>
+                {isAcknowledged ? '— Kept in waiting room' : '— Ready in waiting lounge'}
+              </span>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => handleWaitingRoomAction(waitingQueue[0].id, 'REJECT')}
-              className="p-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 text-[10px] font-bold cursor-pointer transition-colors"
-              title="Remove from waiting queue"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center space-x-1.5 shrink-0">
+              {/* Button 1: Admit Now */}
+              <button
+                type="button"
+                onClick={() => handleWaitingRoomAction(firstWaiter.id, 'ADMIT')}
+                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-xs transition-colors"
+                title="Admit student into the classroom now"
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>{activeStudentParticipants.length > 0 ? 'Allow 2nd Student In Now' : 'Admit Student Now'}</span>
+              </button>
+
+              {/* Button 2: Keep in Waiting */}
+              {!isAcknowledged ? (
+                <button
+                  type="button"
+                  onClick={() => handleWaitingRoomAction(firstWaiter.id, 'KEEP_WAITING')}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 text-amber-900 dark:text-amber-200 border border-amber-500/40 text-[11px] font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                  title="Keep student safely in waiting room until you finish the current session"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Keep in Waiting</span>
+                </button>
+              ) : (
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                  Kept in Waiting
+                </span>
+              )}
+
+              {/* Button 3: Reject / Dismiss */}
+              <button
+                type="button"
+                onClick={() => handleWaitingRoomAction(firstWaiter.id, 'REJECT')}
+                className="p-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 text-[10px] font-bold cursor-pointer transition-colors"
+                title="Remove from waiting queue"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* MAIN WORKSPACE:
           - Mobile (< 768px): Vertical Stack (flex-col) -> 100% Full-Width Quran Mushaf Stage on Top + Collapsible Bottom Drawer Below!
@@ -3454,6 +3559,85 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   </div>
                 ))}
               </div>
+
+              {/* WAITING ROOM QUEUE SECTION IN PARTICIPANTS SIDEBAR */}
+              {isTutor && waitingQueue.length > 0 && (
+                <div className={`mt-3 pt-2.5 border-t ${isLight ? 'border-[#E8E4DA]' : 'border-[#223D2E]'}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider flex items-center space-x-1 text-amber-500">
+                      <Clock className="w-3 h-3 text-amber-400" />
+                      <span>Waiting Room ({waitingQueue.length})</span>
+                    </span>
+                    <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold">
+                      In Queue
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                    {waitingQueue.map((w, wIdx) => {
+                      const isAck = acknowledgedWaitingIds.has(w.id);
+                      const wSince = formatJoinedSinceTime(w.joined_at);
+                      return (
+                        <div
+                          key={w.id || wIdx}
+                          className={`p-2 rounded-lg border text-xs flex flex-col gap-1.5 ${
+                            isLight
+                              ? 'bg-amber-50/90 border-amber-300'
+                              : 'bg-amber-950/40 border-amber-500/35'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div className="min-w-0">
+                              <div className="font-extrabold text-[11px] truncate flex items-center space-x-1">
+                                <span className="text-amber-500 font-mono text-[10px]">#{w.queue_position || wIdx + 1}</span>
+                                <span>Student {w.guest_name}</span>
+                              </div>
+                              <div className={`text-[10px] ${isLight ? 'text-amber-900' : 'text-amber-200/80'}`}>
+                                Waiting {formatWaitingDuration(w)} {wSince ? `• Since ${wSince}` : ''}
+                              </div>
+                            </div>
+                            {isAck && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30 shrink-0">
+                                Kept Waiting
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center space-x-1.5 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => handleWaitingRoomAction(w.id, 'ADMIT')}
+                              className="flex-1 py-1 px-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center space-x-1 cursor-pointer transition-colors shadow-2xs"
+                              title="Admit student into classroom now"
+                            >
+                              <UserCheck className="w-3 h-3" />
+                              <span>Admit Now</span>
+                            </button>
+                            {!isAck && (
+                              <button
+                                type="button"
+                                onClick={() => handleWaitingRoomAction(w.id, 'KEEP_WAITING')}
+                                className="py-1 px-2 rounded-md bg-amber-500/20 hover:bg-amber-500/35 text-amber-900 dark:text-amber-200 border border-amber-500/40 text-[10px] font-bold cursor-pointer transition-colors"
+                                title="Keep student in waiting room until ready"
+                              >
+                                <span>Keep Waiting</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleWaitingRoomAction(w.id, 'REJECT')}
+                              className="p-1 rounded-md bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[10px] cursor-pointer"
+                              title="Remove from waiting queue"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 2. COMPACT STUDENT CAMERA BOX INSIDE SIDEBAR (Only shown when Student turns on camera) */}
@@ -3663,6 +3847,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         >
           <Users className={`w-4 h-4 ${isSidebarOpen && (mobileDrawerTab === 'participants' || (typeof window !== 'undefined' && window.innerWidth >= 768)) ? 'text-white' : 'text-emerald-400'}`} />
           <span>{`In Class (${activeVisibleParticipantsCount})`}</span>
+          {isTutor && waitingQueue.length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold animate-pulse">
+              +{waitingQueue.length} Waiting
+            </span>
+          )}
         </button>
 
         {/* Button 4: Chat Button (Opens Below Screen on Mobile, Right Sidebar on Desktop) */}

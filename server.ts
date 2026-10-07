@@ -405,13 +405,32 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
   }
 
   const waitingList = SERVER_WAITING_ROOM.filter(w => {
-    const wSlug = w.room_slug.toLowerCase();
-    return (wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING';
-  }).map((w, idx) => ({
-    ...w,
-    waiting_seconds: Math.max(0, Math.floor((nowMs - new Date(w.joined_at).getTime()) / 1000)),
-    queue_position: idx + 1
-  }));
+    if (w.status !== 'WAITING') return false;
+    const wSlug = (w.room_slug || '').toLowerCase().trim();
+    const wAlpha = wSlug.replace(/[^a-z0-9]/g, '');
+    const wNum = wSlug.match(/\d+/)?.[0];
+    const tutorNumStr = tutorNum ? String(tutorNum) : null;
+
+    const matchesDirect = wSlug === normRoom || wSlug === canonicalSlug;
+    const matchesAlpha = wAlpha === normRoom.replace(/[^a-z0-9]/g, '') || wAlpha === canonicalSlug.replace(/[^a-z0-9]/g, '');
+    const matchesNum = Boolean(tutorNumStr && wNum && wNum === tutorNumStr);
+    const matchesPermSlug = Boolean(
+      permRoom && (
+        wSlug === permRoom.room_slug.toLowerCase() ||
+        wSlug === permRoom.livekit_room_id.toLowerCase() ||
+        wSlug === permRoom.tutor_id.toLowerCase()
+      )
+    );
+
+    return Boolean(matchesDirect || matchesAlpha || matchesNum || matchesPermSlug);
+  }).map((w, idx) => {
+    const joinedMs = new Date(w.joined_at).getTime();
+    return {
+      ...w,
+      waiting_seconds: Math.max(0, Math.floor((nowMs - joinedMs) / 1000)),
+      queue_position: idx + 1
+    };
+  });
 
   const resolvedTutorName = tutorNum ? `Tutor ${tutorNum}` : 'Tutor';
 
@@ -1086,7 +1105,7 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
 });
 
 app.post('/api/livekit/waiting-room/action', (req: Request, res: Response) => {
-  const { waitingId, action } = req.body; // action: 'ADMIT' | 'REJECT' | 'CANCEL'
+  const { waitingId, action } = req.body; // action: 'ADMIT' | 'REJECT' | 'CANCEL' | 'KEEP_WAITING'
 
   const participantIdx = SERVER_WAITING_ROOM.findIndex(w => w.id === waitingId);
   if (participantIdx === -1) {
@@ -1101,7 +1120,17 @@ app.post('/api/livekit/waiting-room/action', (req: Request, res: Response) => {
     return;
   }
 
+  if (action === 'KEEP_WAITING') {
+    (participant as any).tutorAcknowledged = true;
+    (participant as any).acknowledged_at = Date.now();
+    res.json({ success: true, participant });
+    return;
+  }
+
   participant.status = action === 'ADMIT' ? 'ADMITTED' : 'REJECTED';
+  if (action === 'ADMIT') {
+    participant.admitted_at = Date.now();
+  }
   res.json({ success: true, participant });
 });
 
@@ -1180,12 +1209,12 @@ app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
     bookedEndTimeMs: bookedEndTimeMs || existingUser?.bookedEndTimeMs
   };
 
-  // If this participant was previously in SERVER_WAITING_ROOM as ADMITTED/WAITING, remove their completed queue entry
+  // If this participant was previously admitted/consumed from the waiting room, remove their completed entry
   for (let i = SERVER_WAITING_ROOM.length - 1; i >= 0; i--) {
     const w = SERVER_WAITING_ROOM[i];
     if (
-      (w.identity === identity || w.guest_name.toLowerCase() === (name || '').toLowerCase()) &&
-      (w.status === 'ADMITTED' || w.status === 'WAITING')
+      w.identity === identity &&
+      (w.status === 'ADMITTED' || w.status === 'CONSUMED')
     ) {
       SERVER_WAITING_ROOM.splice(i, 1);
     }
