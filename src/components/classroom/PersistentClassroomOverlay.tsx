@@ -198,17 +198,6 @@ export const PersistentClassroomOverlay: React.FC = () => {
                 <MessageSquare className="w-3.5 h-3.5" />
                 <span>Live Class Chat</span>
               </span>
-
-              {/* Subtle Privacy Badge */}
-              {chatSafetySettings?.showPrivacyBadge && (
-                <span
-                  className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-medium bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 select-none cursor-help"
-                  title={chatSafetySettings.badgeTooltip || 'Classroom chat includes automatic privacy and safety protection to help keep communication secure.'}
-                >
-                  <Lock className="w-2 h-2 text-emerald-400 shrink-0" />
-                  <span>{chatSafetySettings.badgeText || '🔒 Privacy Protected'}</span>
-                </span>
-              )}
             </div>
 
             <button
@@ -222,7 +211,13 @@ export const PersistentClassroomOverlay: React.FC = () => {
 
           <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
             {chatMessages.length === 0 ? (
-              <div className="text-center py-4 text-[11px] text-[#9BB5A6]">No messages yet.</div>
+              <div className="flex flex-col items-center justify-center text-center py-4 px-2 space-y-1 select-none">
+                <div className="w-6 h-6 rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+                  <Lock className="w-3 h-3" />
+                </div>
+                <p className="text-[10px] font-bold text-emerald-300">Privacy-Protected Chat</p>
+                <p className="text-[9px] text-[#8AA393] leading-tight">This chat is private, secure, and managed by the IslamicTuition team to ensure a safe learning space.</p>
+              </div>
             ) : (
               chatMessages.map(msg => (
                 <div key={msg.id} className="rounded-lg p-2 text-xs bg-[#121F17] border border-[#264232] text-white">

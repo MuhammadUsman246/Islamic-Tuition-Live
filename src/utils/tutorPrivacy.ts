@@ -65,6 +65,18 @@ export function getTutorDisplayId(tutorInput: any, tutors?: Tutor[]): string {
   return 'Tutor 1';
 }
 
+export function isRemoteCustomShiftTutor(tutorId?: string | null): boolean {
+  if (!tutorId) return false;
+  const clean = String(tutorId).trim();
+  const match = clean.match(/^tutor[\s_-]*(\d+)$/i) || clean.match(/^(\d+)$/);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    return num === 1 || num === 11 || num === 12;
+  }
+  const lower = clean.toLowerCase();
+  return lower === 'tutor 1' || lower === 'tutor 11' || lower === 'tutor 12' || lower === 'tutor_1' || lower === 'tutor_11' || lower === 'tutor_12';
+}
+
 /**
  * Role-aware tutor name formatter:
  * - For in-house academy roles ('admin', 'supervisor', 'tutor'): shows Assigned ID + Real Name (e.g., "Tutor 2 (Rahib)")

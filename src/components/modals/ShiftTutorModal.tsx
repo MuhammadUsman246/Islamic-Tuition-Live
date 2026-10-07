@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { X, ArrowRight, Video, Calendar, BookOpen, AlertCircle, CheckCircle, Loader2, Users } from 'lucide-react';
 import { Student, Tutor, TimetableClass } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface ShiftTutorModalProps {
   isOpen: boolean;
@@ -69,6 +70,7 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
   onShiftTutor
 }) => {
   const [selectedNewTutorId, setSelectedNewTutorId] = useState<string>('');
+  const [shiftFilter, setShiftFilter] = useState<'in_office' | 'remote' | 'all'>('in_office');
   const [transferNotes, setTransferNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,12 +84,22 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
   // Scheduled classes for this student
   const studentClasses = safeClasses.filter(c => c.studentId === student.studentId);
 
+  const inOfficeTutors = useMemo(() => safeTutors.filter(t => !isRemoteCustomShiftTutor(t.tutorId)), [safeTutors]);
+  const remoteTutors = useMemo(() => safeTutors.filter(t => isRemoteCustomShiftTutor(t.tutorId)), [safeTutors]);
+
   useEffect(() => {
     if (isOpen && student) {
-      // Pick first tutor that is not the current tutor
-      const otherTutors = safeTutors.filter(t => t.tutorId !== student.assignedTutorId);
+      // Determine appropriate initial shift based on student's current tutor
+      const isCurRemote = isRemoteCustomShiftTutor(student.assignedTutorId);
+      const initialShift = isCurRemote ? 'remote' : 'in_office';
+      setShiftFilter(initialShift);
+
+      const pool = initialShift === 'remote' ? remoteTutors : inOfficeTutors;
+      const otherTutors = pool.filter(t => t.tutorId !== student.assignedTutorId);
       if (otherTutors.length > 0) {
         setSelectedNewTutorId(otherTutors[0].tutorId);
+      } else if (pool.length > 0) {
+        setSelectedNewTutorId(pool[0].tutorId);
       } else if (safeTutors.length > 0) {
         setSelectedNewTutorId(safeTutors[0].tutorId);
       }
@@ -95,20 +107,33 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
       setError(null);
       setIsSubmitting(false);
     }
-  }, [isOpen, student, safeTutors]);
+  }, [isOpen, student, safeTutors, inOfficeTutors, remoteTutors]);
+
+  const displayedTutors = useMemo(() => {
+    if (shiftFilter === 'in_office') return inOfficeTutors;
+    if (shiftFilter === 'remote') return remoteTutors;
+    return safeTutors;
+  }, [shiftFilter, inOfficeTutors, remoteTutors, safeTutors]);
 
   const tutorOptions = useMemo(() => {
-    return [...safeTutors]
+    return [...displayedTutors]
       .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
-      .map(t => ({
-        value: t.tutorId,
-        label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
-        subLabel: t.tutorId === currentTutorId ? 'Currently Assigned' : (t.email || undefined),
-        disabled: t.tutorId === currentTutorId,
-        badge: t.tutorId === currentTutorId ? 'Current' : undefined,
-        badgeColor: 'bg-amber-100 text-amber-800',
-      }));
-  }, [safeTutors, currentTutorId]);
+      .map(t => {
+        const isRemote = isRemoteCustomShiftTutor(t.tutorId);
+        return {
+          value: t.tutorId,
+          label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
+          subLabel: t.tutorId === currentTutorId 
+            ? 'Currently Assigned' 
+            : `${isRemote ? '🌐 Remote Shift' : '🏢 In-Office (1am-7am)'}${t.email ? ` • ${t.email}` : ''}`,
+          disabled: t.tutorId === currentTutorId,
+          badge: t.tutorId === currentTutorId ? 'Current' : (isRemote ? 'Remote' : 'In-Office'),
+          badgeColor: t.tutorId === currentTutorId 
+            ? 'bg-amber-100 text-amber-800' 
+            : (isRemote ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'),
+        };
+      });
+  }, [displayedTutors, currentTutorId]);
 
   const targetTutor = safeTutors.find(t => t.tutorId === selectedNewTutorId);
 
@@ -221,22 +246,72 @@ const ShiftTutorModalContent: React.FC<ShiftTutorModalContentProps> = ({
             </div>
           </div>
 
-          {/* Destination Tutor Selector with Searchable Dropdown */}
-          <div>
+          {/* Destination Tutor Selector with Shift Filter & Searchable Dropdown */}
+          <div className="space-y-2">
             <div className="flex items-center justify-between mb-1">
               <label className="block text-xs font-semibold text-[#161F1A]">
                 Select Destination Tutor <span className="text-red-500">*</span>
               </label>
               <span className="text-[10px] text-gray-500 font-medium">
-                {tutorOptions.length} tutors
+                {tutorOptions.length} tutors available
               </span>
             </div>
+
+            {/* Shift Filter Pills */}
+            <div className="flex items-center gap-1.5 p-1 bg-[#FAF9F7] rounded-lg border border-[#E3DFD7]">
+              <button
+                type="button"
+                onClick={() => {
+                  setShiftFilter('in_office');
+                  const other = inOfficeTutors.filter(t => t.tutorId !== currentTutorId);
+                  if (other.length > 0 && isRemoteCustomShiftTutor(selectedNewTutorId)) {
+                    setSelectedNewTutorId(other[0].tutorId);
+                  }
+                }}
+                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                  shiftFilter === 'in_office'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                }`}
+              >
+                🏢 In-Office ({inOfficeTutors.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShiftFilter('remote');
+                  const other = remoteTutors.filter(t => t.tutorId !== currentTutorId);
+                  if (other.length > 0 && !isRemoteCustomShiftTutor(selectedNewTutorId)) {
+                    setSelectedNewTutorId(other[0].tutorId);
+                  }
+                }}
+                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                  shiftFilter === 'remote'
+                    ? 'bg-purple-700 text-white shadow-2xs'
+                    : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
+                }`}
+              >
+                🌐 Remote Shift ({remoteTutors.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setShiftFilter('all')}
+                className={`py-1 px-2.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                  shiftFilter === 'all'
+                    ? 'bg-[#161F1A] text-white shadow-2xs'
+                    : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                }`}
+              >
+                All
+              </button>
+            </div>
+
             <SearchableSelect
               value={selectedNewTutorId}
               onChange={setSelectedNewTutorId}
               options={tutorOptions}
               placeholder="Select destination tutor..."
-              searchPlaceholder="Search tutor (e.g. Tutor 1, Usman)..."
+              searchPlaceholder="Search tutor (e.g. Tutor 2, Usman)..."
             />
           </div>
 

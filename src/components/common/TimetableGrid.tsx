@@ -451,10 +451,20 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
     return matchTutor && matchSearch;
   });
 
-  // Unique tutors list for filter dropdown and faculty colors bar (natural numeric sequence: Tutor 1, Tutor 2, ..., Tutor 10)
-  const uniqueTutors: string[] = Array.from(new Set<string>(classes.map(c => c.tutorId).filter(Boolean) as string[])).sort(
-    (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-  );
+  // Unique tutors list for filter dropdown and faculty colors bar:
+  // Derived directly from the scoped tutors prop if passed (respects in-house vs remote filter),
+  // otherwise fallback to classes.
+  const uniqueTutors: string[] = useMemo(() => {
+    if (tutors && tutors.length > 0) {
+      return [...tutors]
+        .map(t => t.tutorId)
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    }
+    return Array.from(new Set<string>(classes.map(c => c.tutorId).filter(Boolean) as string[])).sort(
+      (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }, [tutors, classes]);
 
   // Horizontal scroll & mouse wheel / drag navigation for Faculty Colors bar
   const facultyBarScrollRef = useRef<HTMLDivElement | null>(null);

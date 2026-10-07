@@ -62,6 +62,7 @@ import { LessonModal } from '../modals/LessonModal';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, admitFromWaitingRoom, LiveRoomStatusItem } from '../../services/livekitService';
 import { computeTutorClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface SupervisorDashboardProps {
   currentTab: string;
@@ -88,6 +89,24 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   announcements,
   onRefreshData
 }) => {
+  // Supervisor strictly oversees in-office faculty on the standard 1:00 AM – 7:00 AM PKT shift.
+  // Remote / custom-shift tutors (Tutor 1, Tutor 11, Tutor 12) teaching outside the office are hidden from Supervisor.
+  const inOfficeTutors = React.useMemo(() => {
+    return tutors.filter(t => !isRemoteCustomShiftTutor(t.tutorId));
+  }, [tutors]);
+
+  const inOfficeClasses = React.useMemo(() => {
+    return classes.filter(c => !isRemoteCustomShiftTutor(c.tutorId));
+  }, [classes]);
+
+  const inOfficeTutorAttendance = React.useMemo(() => {
+    return (tutorAttendance || []).filter(a => !isRemoteCustomShiftTutor(a.tutorId));
+  }, [tutorAttendance]);
+
+  const inOfficeLessons = React.useMemo(() => {
+    return lessons.filter(l => !isRemoteCustomShiftTutor(l.tutorId));
+  }, [lessons]);
+
   const [selectedTutorId, setSelectedTutorId] = useState<string>('all');
   const [activePreviewImage, setActivePreviewImage] = useState<string | null>(null);
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState<boolean>(false);
@@ -128,13 +147,13 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   // Dynamic computed real-time status for each tutor (combines LiveKit room presence + today's scheduled timetable slots)
   const supervisorTutorStatusMap = React.useMemo(() => {
     const map: Record<string, ReturnType<typeof computeTutorClassroomStatus>> = {};
-    tutors.forEach(t => {
+    inOfficeTutors.forEach(t => {
       const slug = (t.tutorId || '').toLowerCase().replace(/\s+/g, '-');
       const liveItem = liveRoomsStatusMap[t.tutorId] || liveRoomsStatusMap[t.tutorId.toLowerCase()] || liveRoomsStatusMap[slug] || null;
-      map[t.tutorId] = computeTutorClassroomStatus(t, classes, students, liveItem);
+      map[t.tutorId] = computeTutorClassroomStatus(t, inOfficeClasses, students, liveItem);
     });
     return map;
-  }, [tutors, classes, students, liveRoomsStatusMap, supervisorTimeTick]);
+  }, [inOfficeTutors, inOfficeClasses, students, liveRoomsStatusMap, supervisorTimeTick]);
 
   // Aggregated dynamic status counts for Supervisor
   const supervisorStatusCounts = React.useMemo(() => {
@@ -161,9 +180,9 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       studentWaiting,
       scheduledNow,
       idle,
-      total: tutors.length
+      total: inOfficeTutors.length
     };
-  }, [supervisorTutorStatusMap, tutors.length]);
+  }, [supervisorTutorStatusMap, inOfficeTutors.length]);
 
   const refreshSupervisorLiveStatus = React.useCallback(async () => {
     try {
@@ -214,14 +233,14 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     };
   }, []);
 
-  // Naturally sorted tutors (Tutor 1, Tutor 2, ..., Tutor 25)
+  // Naturally sorted tutors (in-office only)
   const sortedObserveTutors = React.useMemo(() => {
-    return [...tutors].sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }));
-  }, [tutors]);
+    return [...inOfficeTutors].sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }));
+  }, [inOfficeTutors]);
 
   const filteredObserveTutors = React.useMemo(() => {
     return sortedObserveTutors.filter(t => {
-      const computed = supervisorTutorStatusMap[t.tutorId] || computeTutorClassroomStatus(t, classes, students, null);
+      const computed = supervisorTutorStatusMap[t.tutorId] || computeTutorClassroomStatus(t, inOfficeClasses, students, null);
       const q = tutorObserveSearch.toLowerCase().trim();
       const matchSearch = !q ||
         (t.tutorId || '').toLowerCase().includes(q) ||
@@ -239,7 +258,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       }
       return computed.status === tutorObserveStatusFilter;
     });
-  }, [sortedObserveTutors, tutorObserveSearch, tutorObserveStatusFilter, supervisorTutorStatusMap, classes, students]);
+  }, [sortedObserveTutors, tutorObserveSearch, tutorObserveStatusFilter, supervisorTutorStatusMap, inOfficeClasses, students]);
 
   const handleEnterAndObserveClass = async (tutorObj: Tutor) => {
     try {
@@ -351,8 +370,8 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   const sanitizedStudents = students.map(sanitizeStudentForSupervisor);
 
   const filteredClasses = selectedTutorId === 'all'
-    ? classes
-    : classes.filter(c => c.tutorId === selectedTutorId);
+    ? inOfficeClasses
+    : inOfficeClasses.filter(c => c.tutorId === selectedTutorId);
 
   const [supervisorLessonsViewMode, setSupervisorLessonsViewMode] = useState<'cards' | 'spreadsheet'>('spreadsheet');
   const [supervisorTimetableMode, setSupervisorTimetableMode] = useState<'grid' | 'availability'>('grid');
@@ -532,13 +551,13 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
     if (onRefreshData) await onRefreshData();
   };
 
-  // Monthly summary per tutor for Item 13
+  // Monthly summary per tutor for Item 13 (in-office only)
   const tutorSummaryMap = React.useMemo(() => {
     const map: Record<string, { total: number; present: number; absent: number; late: number; excused: number }> = {};
-    tutors.forEach(t => {
+    inOfficeTutors.forEach(t => {
       map[t.tutorId] = { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
     });
-    tutorAttendance.forEach(a => {
+    inOfficeTutorAttendance.forEach(a => {
       if (!map[a.tutorId]) {
         map[a.tutorId] = { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
       }
@@ -549,7 +568,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       else if (a.status === 'Excused' || a.status === 'Leave') map[a.tutorId].excused += 1;
     });
     return map;
-  }, [tutors, tutorAttendance]);
+  }, [inOfficeTutors, inOfficeTutorAttendance]);
 
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
@@ -701,8 +720,8 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                     : 'border-white/10 hover:border-white/30'
                 }`}
               >
-                <span className="text-[10px] text-[#8AA393] uppercase font-bold block">Total Faculty</span>
-                <strong className="text-base text-white font-mono">{tutors.length} Tutors</strong>
+                <span className="text-[10px] text-[#8AA393] uppercase font-bold block">Total Faculty (In-Office)</span>
+                <strong className="text-base text-white font-mono">{inOfficeTutors.length} Tutors</strong>
               </button>
             </div>
           </div>
@@ -1038,32 +1057,32 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs">
               <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider">Monitored Classes</span>
-              <p className="text-2xl font-bold text-[#161F1A] mt-1">{classes.length}</p>
-              <p className="text-[11px] text-[#5A6B61] mt-1">Calibrated in Asia/Karachi (PKT)</p>
+              <p className="text-2xl font-bold text-[#161F1A] mt-1">{inOfficeClasses.length}</p>
+              <p className="text-[11px] text-[#5A6B61] mt-1">In-Office Shift (1:00 AM – 7:00 AM PKT)</p>
             </div>
 
             <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs">
-              <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider">Active Faculty Tutors</span>
-              <p className="text-2xl font-bold text-[#161F1A] mt-1">{tutors.length}</p>
-              <p className="text-[11px] text-[#5A6B61] mt-1">Dedicated permanent Zoom classrooms</p>
+              <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider">Active In-Office Faculty</span>
+              <p className="text-2xl font-bold text-[#161F1A] mt-1">{inOfficeTutors.length}</p>
+              <p className="text-[11px] text-[#5A6B61] mt-1">Supervised 1am–7am faculty</p>
             </div>
 
             <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs">
               <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider">Lesson Reports Filed</span>
-              <p className="text-2xl font-bold text-[#161F1A] mt-1">{lessons.length}</p>
+              <p className="text-2xl font-bold text-[#161F1A] mt-1">{inOfficeLessons.length}</p>
               <p className="text-[11px] text-[#5A6B61] mt-1">With performance grading</p>
             </div>
           </div>
 
           {/* Timetable view */}
           <div className="space-y-3">
-            <h3 className="text-sm font-bold text-[#161F1A]">Master Timetable Inspection</h3>
+            <h3 className="text-sm font-bold text-[#161F1A]">Master Timetable Inspection (In-Office 1am–7am)</h3>
             <TimetableGrid
               classes={filteredClasses}
               role="supervisor"
               currentTutorId={selectedTutorId}
               students={students}
-              tutors={tutors}
+              tutors={inOfficeTutors}
               onCancelClass={async (classId, newStatus) => {
                 await updateClass(classId, { status: newStatus });
                 if (onRefreshData) {
@@ -1082,7 +1101,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
             <div>
               <h3 className="text-base font-bold text-[#161F1A]">Faculty Timetables &amp; Availability</h3>
               <p className="text-xs text-[#5A6B61]">
-                Live master schedules and 24/7 tutor open slot inspector.
+                Live master schedules and 24/7 tutor open slot inspector for in-office faculty.
               </p>
             </div>
 
@@ -1116,9 +1135,9 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
 
           {supervisorTimetableMode === 'availability' ? (
             <TutorSlotAvailabilityInspector
-              tutors={tutors}
+              tutors={inOfficeTutors}
               students={students}
-              classes={classes}
+              classes={inOfficeClasses}
             />
           ) : (
             <TimetableGrid
@@ -1126,7 +1145,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
               role="supervisor"
               currentTutorId={selectedTutorId}
               students={students}
-              tutors={tutors}
+              tutors={inOfficeTutors}
               onCancelClass={async (classId, newStatus) => {
                 await updateClass(classId, { status: newStatus });
                 if (onRefreshData) {
@@ -1346,7 +1365,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                   Faculty Monthly Attendance Summaries
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  {tutors.map(t => {
+                  {inOfficeTutors.map(t => {
                     const s = tutorSummaryMap[t.tutorId] || { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
                     return (
                       <div key={t.id} className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
@@ -1547,9 +1566,9 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                     onChange={(e) => setSelectedTutorId(e.target.value)}
                     className="text-xs border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C] outline-none"
                   >
-                    <option value="all">All Tutors ({tutors.length})</option>
-                    {tutors.map(t => (
-                      <option key={t.tutorId} value={t.tutorId}>{t.name} ({t.tutorId})</option>
+                    <option value="all">All Tutors ({inOfficeTutors.length})</option>
+                    {inOfficeTutors.map(t => (
+                      <option key={t.tutorId} value={t.tutorId}>{t.name || t.realName || t.tutorId} ({t.tutorId})</option>
                     ))}
                   </select>
                 </div>
@@ -2026,7 +2045,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
         }}
         onSave={handleSaveAttendance}
         initialRecord={selectedAttendanceRecord}
-        tutors={tutors}
+        tutors={inOfficeTutors}
         defaultMarkedBy="Academic Supervisor"
       />
 

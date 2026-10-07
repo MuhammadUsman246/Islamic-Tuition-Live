@@ -753,7 +753,7 @@ const MainPortal: React.FC = () => {
                 announcements={announcements}
                 attendance={attendance}
                 tutorAttendance={tutorAttendance}
-                onRefreshData={() => loadAcademyData(false)}
+                onRefreshData={() => loadAcademyData(true)}
               />
             ) : role === 'tutor' ? (
               <TutorDashboard
@@ -766,7 +766,7 @@ const MainPortal: React.FC = () => {
                 lessons={lessons}
                 attendance={attendance}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(false)}
+                onRefreshData={() => loadAcademyData(true)}
               />
             ) : role === 'supervisor' ? (
               <SupervisorDashboard
@@ -779,7 +779,7 @@ const MainPortal: React.FC = () => {
                 attendance={attendance}
                 tutorAttendance={tutorAttendance}
                 announcements={announcements}
-                onRefreshData={() => loadAcademyData(false)}
+                onRefreshData={() => loadAcademyData(true)}
               />
             ) : role === 'student' ? (
               <StudentDashboard

@@ -871,7 +871,8 @@ export function subscribeToStudents(callback: (students: Student[]) => void, fil
           } else {
             CACHE.students = items;
           }
-          callback(items);
+          saveCachedCollection('students', CACHE.students);
+          callback(CACHE.students);
         } else {
           CACHE.students = items;
           saveCachedCollection('students', items);

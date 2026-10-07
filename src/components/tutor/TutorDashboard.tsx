@@ -127,8 +127,9 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
   // Filter classes for this tutor
   const myClasses = classes.filter(c => isSameTutor(c.tutorId, tutor?.tutorId));
 
-  // STRICT ALLOW-LIST PRIVACY: Filter and sanitize active students currently assigned to or scheduled with this tutor
+  // STRICT ALLOW-LIST PRIVACY: Filter and sanitize active students currently assigned to or scheduled with this tutor on their sheet
   const classStudentIds = new Set(myClasses.map(c => c.studentId));
+
   const myAssignedStudents: TutorStudentView[] = students
     .filter(s => {
       // Exclude inactive / left / discontinued students
@@ -136,19 +137,26 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         return false;
       }
 
-      const isAssignedToMe = isSameTutor(s.assignedTutorId, tutor?.tutorId);
-      const hasClassWithMe = classStudentIds.has(s.studentId);
+      // If student is explicitly marked Unassigned and has no classes with this tutor, exclude
+      if (s.assignedTutorId === 'Unassigned' && !classStudentIds.has(s.studentId)) {
+        return false;
+      }
 
-      // If student has active class(es) on this tutor's schedule, include them
-      if (hasClassWithMe) return true;
+      const isAssignedToMe = isSameTutor(s.assignedTutorId, tutor?.tutorId) && s.assignedTutorId !== 'Unassigned';
+      const isExplicitlyAssignedToOther = !!s.assignedTutorId && s.assignedTutorId !== 'Unassigned' && !isSameTutor(s.assignedTutorId, tutor?.tutorId);
 
-      // If student has classes with ANOTHER tutor, they were transferred/scheduled elsewhere
-      const hasClassesWithOthers = classes.some(c => c.studentId === s.studentId && !isSameTutor(c.tutorId, tutor?.tutorId));
-      if (hasClassesWithOthers) return false;
+      // If student was explicitly shifted or assigned to ANOTHER tutor, do not include them in this tutor's assigned list
+      if (isExplicitlyAssignedToOther) {
+        return false;
+      }
 
-      // If student is assigned to this tutor AND has NO classes anywhere yet, keep them as a new assignment
-      // (Unless assignedTutorId is 'Unassigned' or empty)
-      return isAssignedToMe && !!s.assignedTutorId && s.assignedTutorId !== 'Unassigned';
+      // 1. Direct assignment on this tutor's sheet
+      if (isAssignedToMe) return true;
+
+      // 2. Has active classes scheduled on this tutor's timetable
+      if (classStudentIds.has(s.studentId)) return true;
+
+      return false;
     })
     .map(sanitizeStudentForTutor);
 
@@ -602,7 +610,17 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
         onSave={handleSaveLesson}
         onUpdate={handleUpdateLesson}
         editingLesson={editingLessonForTutor}
-        students={students.filter(s => isSameTutor(s.assignedTutorId, tutor?.tutorId) || classStudentIds.has(s.studentId))}
+        students={students.filter(s => {
+          if (s.status === 'Inactive' || s.status === 'Left' || s.status === 'Discontinued' || s.status === 'Withdrawn') {
+            return false;
+          }
+          if (s.assignedTutorId === 'Unassigned' && !classStudentIds.has(s.studentId)) {
+            return false;
+          }
+          const isExplicitlyAssignedToOther = !!s.assignedTutorId && s.assignedTutorId !== 'Unassigned' && !isSameTutor(s.assignedTutorId, tutor?.tutorId);
+          if (isExplicitlyAssignedToOther) return false;
+          return isSameTutor(s.assignedTutorId, tutor?.tutorId) || classStudentIds.has(s.studentId);
+        })}
         currentTutorId={tutor?.tutorId}
         initialStudentId={selectedStudentForLesson}
       />

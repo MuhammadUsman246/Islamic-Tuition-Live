@@ -4,6 +4,7 @@ import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
 import { registerUserAccount, addReferral, getNextSequentialStudentId } from '../../services/dataService';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface StudentModalProps {
   isOpen: boolean;
@@ -31,7 +32,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [parentName, setParentName] = useState<string>('');
   const [parentEmail, setParentEmail] = useState<string>('');
   const [parentPhone, setParentPhone] = useState<string>('');
-  const [assignedTutorId, setAssignedTutorId] = useState<string>('Tutor 1');
+  const [assignedTutorId, setAssignedTutorId] = useState<string>('Unassigned');
   const [status, setStatus] = useState<StudentStatus>('Trial');
   const [courseType, setCourseType] = useState<CourseType>('Quran Reading / Nazra');
   const [country, setCountry] = useState<string>('United States');
@@ -92,7 +93,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setParentName('');
       setParentEmail('');
       setParentPhone('');
-      if (tutors.length > 0) setAssignedTutorId(tutors[0].tutorId);
+      setAssignedTutorId('Unassigned');
       setStatus('Trial');
       setCourseType('Quran Reading / Nazra');
       setCountry('United States');
@@ -346,13 +347,31 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             <div>
               <label className="block text-xs font-semibold text-[#161F1A] mb-1">Assigned Tutor</label>
               <select
-                value={assignedTutorId}
+                value={assignedTutorId || 'Unassigned'}
                 onChange={(e) => setAssignedTutorId(e.target.value)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
+                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white font-medium"
               >
-                {tutors.map((t, idx) => (
-                  <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>{t.tutorId} ({t.realName})</option>
-                ))}
+                <option value="Unassigned">-- Unassigned (Assign later from Master Sheet) --</option>
+                <optgroup label="🏢 In-Office Shift (1:00 AM – 7:00 AM)">
+                  {tutors
+                    .filter(t => !isRemoteCustomShiftTutor(t.tutorId))
+                    .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+                    .map((t, idx) => (
+                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
+                        {t.tutorId} ({t.realName || t.displayName || t.tutorId})
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="🌐 Remote / Outside Office (Tutor 1, 11, 12)">
+                  {tutors
+                    .filter(t => isRemoteCustomShiftTutor(t.tutorId))
+                    .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+                    .map((t, idx) => (
+                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
+                        {t.tutorId} ({t.realName || t.displayName || t.tutorId})
+                      </option>
+                    ))}
+                </optgroup>
               </select>
             </div>
 

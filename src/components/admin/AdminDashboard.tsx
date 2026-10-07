@@ -100,6 +100,7 @@ import { LessonDictionaryManager } from './LessonDictionaryManager';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { fetchLiveKitToken, getCanonicalRoomName, getLocalClassroomSettings, fetchLiveRoomsStatus, admitFromWaitingRoom, LiveRoomStatusItem } from '../../services/livekitService';
 import { computeTutorClassroomStatus, DynamicClassroomStatus, ClassroomComputedStatus } from '../../utils/classroomStatus';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 import { LiveKitRoomTokenResponse } from '../../types';
 import { INITIAL_TUTOR_USER_PROFILES } from '../../data/tutorsData';
 import { generateInvoicePDF, generateLessonReportPDF } from '../../utils/pdfGenerator';
@@ -399,11 +400,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Filters
   const [tutorFilter, setTutorFilter] = useState<string>('all');
   const [timetableSubView, setTimetableSubView] = useState<'grid' | 'availability'>('grid');
+  const [adminFacultyShiftFilter, setAdminFacultyShiftFilter] = useState<'in_office' | 'remote' | 'all'>('in_office');
 
   // Naturally sorted tutors (Tutor 1, Tutor 2, Tutor 3, ..., Tutor 10)
   const sortedTutors = useMemo(() => {
     return [...tutors].sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }));
   }, [tutors]);
+
+  // Shift-based categorization of faculty:
+  // In-Office Faculty: Standard 1:00 AM – 7:00 AM PKT shift tutors (all tutors except Tutor 1, 11, 12)
+  // Remote / Custom Shift Faculty: Outside office tutors (Tutor 1, Tutor 11, Tutor 12)
+  const inOfficeTutors = useMemo(() => sortedTutors.filter(t => !isRemoteCustomShiftTutor(t.tutorId)), [sortedTutors]);
+  const remoteTutors = useMemo(() => sortedTutors.filter(t => isRemoteCustomShiftTutor(t.tutorId)), [sortedTutors]);
+
+  const displayedTutors = useMemo(() => {
+    if (adminFacultyShiftFilter === 'in_office') return inOfficeTutors;
+    if (adminFacultyShiftFilter === 'remote') return remoteTutors;
+    return sortedTutors;
+  }, [adminFacultyShiftFilter, inOfficeTutors, remoteTutors, sortedTutors]);
   const [studentSearch, setStudentSearch] = useState<string>('');
   const [adminStudentSearchQuery, setAdminStudentSearchQuery] = useState<string>('');
   const [studentStatusFilter, setStudentStatusFilter] = useState<string>('all');
@@ -946,9 +960,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Filtered classes for Timetable
-  const filteredClasses = tutorFilter === 'all'
-    ? classes
-    : classes.filter(c => c.tutorId === tutorFilter);
+  const filteredClasses = useMemo(() => {
+    let list = classes;
+    if (adminFacultyShiftFilter === 'in_office') {
+      list = list.filter(c => !isRemoteCustomShiftTutor(c.tutorId));
+    } else if (adminFacultyShiftFilter === 'remote') {
+      list = list.filter(c => isRemoteCustomShiftTutor(c.tutorId));
+    }
+    if (tutorFilter !== 'all') {
+      list = list.filter(c => c.tutorId === tutorFilter);
+    }
+    return list;
+  }, [classes, adminFacultyShiftFilter, tutorFilter]);
 
   // Current time & day in PKT
   const currentTeachingDay = getCurrentTeachingDay();
@@ -3350,12 +3373,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* Shift Segmented Toggle: All Faculty vs In-Office (1am-7am) vs Remote / Custom Shift (Tutor 1, 11, 12) */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#FAF9F7] p-2.5 rounded-xl border border-[#E3DFD7]">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider pr-1">Shift Category:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminFacultyShiftFilter('all');
+                  setTutorFilter('all');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  adminFacultyShiftFilter === 'all'
+                    ? 'bg-[#161F1A] text-white shadow-xs'
+                    : 'bg-white text-[#5A6B61] border border-[#D5D0C6] hover:text-[#161F1A]'
+                }`}
+              >
+                All Faculty ({sortedTutors.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminFacultyShiftFilter('in_office');
+                  if (isRemoteCustomShiftTutor(tutorFilter)) setTutorFilter('all');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  adminFacultyShiftFilter === 'in_office'
+                    ? 'bg-[#2D8B5C] text-white shadow-xs'
+                    : 'bg-white text-[#5A6B61] border border-[#D5D0C6] hover:text-[#161F1A]'
+                }`}
+              >
+                <span>🏢 In-Office Shift (1:00 AM – 7:00 AM)</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-900 font-bold">{inOfficeTutors.length}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminFacultyShiftFilter('remote');
+                  if (!isRemoteCustomShiftTutor(tutorFilter) && tutorFilter !== 'all') setTutorFilter('all');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  adminFacultyShiftFilter === 'remote'
+                    ? 'bg-purple-700 text-white shadow-xs'
+                    : 'bg-white text-purple-800 border border-purple-200 hover:bg-purple-50'
+                }`}
+              >
+                <span>🌐 Remote / Custom Shift (Tutor 1, 11, 12)</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-200 text-purple-900 font-bold">{remoteTutors.length}</span>
+              </button>
+            </div>
+
+            {adminFacultyShiftFilter === 'remote' && (
+              <span className="text-[11px] text-purple-800 font-medium bg-purple-50 px-2.5 py-1 rounded-md border border-purple-200">
+                Outside Office Faculty • Custom shift hours
+              </span>
+            )}
+          </div>
+
           {/* Availability Inspector Sub-view */}
           {timetableSubView === 'availability' ? (
             <TutorSlotAvailabilityInspector
-              tutors={tutors}
+              tutors={displayedTutors}
               students={students}
-              classes={classes}
+              classes={filteredClasses}
               onAddClass={(tutorId, day, slot) => {
                 setSelectedSlot({ day, time: slot });
                 setSelectedClass(null);
@@ -3405,13 +3485,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               })()}
 
               <TimetableGrid
-                key={tutorFilter}
+                key={`${tutorFilter}_${adminFacultyShiftFilter}`}
                 classes={filteredClasses}
                 role="admin"
                 currentTutorId={tutorFilter === 'all' ? undefined : tutorFilter}
                 onTutorFilterChange={setTutorFilter}
                 students={students}
-                tutors={tutors}
+                tutors={displayedTutors}
                 onAddClass={(slot) => {
                   setSelectedSlot(slot);
                   setSelectedClass(null);
@@ -4034,27 +4114,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 Full CRUD control: onboard tutors, manage status, permanent Zoom links, and salary compensation.
               </p>
             </div>
-            <button
-              onClick={() => {
-                setSelectedTutor(null);
-                setIsTutorModalOpen(true);
-              }}
-              className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add New Tutor</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Shift Filter */}
+              <div className="bg-[#FAF9F7] p-1 border border-[#D5D0C6] rounded-xl flex items-center gap-1 shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setAdminFacultyShiftFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    adminFacultyShiftFilter === 'all'
+                      ? 'bg-[#161F1A] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                  }`}
+                >
+                  All ({sortedTutors.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminFacultyShiftFilter('in_office')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    adminFacultyShiftFilter === 'in_office'
+                      ? 'bg-[#2D8B5C] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-white'
+                  }`}
+                >
+                  🏢 In-Office ({inOfficeTutors.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminFacultyShiftFilter('remote')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    adminFacultyShiftFilter === 'remote'
+                      ? 'bg-purple-700 text-white shadow-xs'
+                      : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
+                  }`}
+                >
+                  🌐 Remote Shift ({remoteTutors.length})
+                </button>
+              </div>
+
+              <button
+                onClick={() => {
+                  setSelectedTutor(null);
+                  setIsTutorModalOpen(true);
+                }}
+                className="px-4 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add New Tutor</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sortedTutors.map((tutor, idx) => {
+            {displayedTutors.map((tutor, idx) => {
               const tutorClasses = classes.filter(c => c.tutorId === tutor.tutorId);
               const tutorStudents = students.filter(s => s.assignedTutorId === tutor.tutorId);
+              const isRemote = isRemoteCustomShiftTutor(tutor.tutorId);
               return (
                 <div key={`${tutor.id || tutor.tutorId}_${idx}`} className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
                   <div className="flex items-start justify-between">
                     <div>
-                      <span className="text-xs font-bold text-[#2D8B5C] tracking-wide uppercase">{tutor.tutorId}</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-[#2D8B5C] tracking-wide uppercase">{tutor.tutorId}</span>
+                        {isRemote && (
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-purple-100 text-purple-800 border border-purple-200">
+                            Remote Shift
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         <h4 className="text-sm font-bold text-[#161F1A]">{tutor.realName || tutor.tutorId}</h4>
                         <button

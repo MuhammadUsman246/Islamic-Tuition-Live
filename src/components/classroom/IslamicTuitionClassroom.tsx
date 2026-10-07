@@ -3409,17 +3409,6 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                       <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Classroom Chat</span>
                     </span>
-
-                    {/* Subtle Privacy Protection Badge (Admin Configurable) */}
-                    {chatSafetySettings.showPrivacyBadge && (
-                      <span
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-950/70 text-emerald-300 border border-emerald-500/30 shadow-2xs select-none cursor-help hover:bg-emerald-900/80 transition-colors truncate"
-                        title={chatSafetySettings.badgeTooltip || 'Classroom chat includes automatic privacy and safety protection to help keep communication secure.'}
-                      >
-                        <Lock className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
-                        <span className="truncate">{chatSafetySettings.badgeText || '🔒 Privacy Protected'}</span>
-                      </span>
-                    )}
                   </div>
 
                   <button
@@ -3434,8 +3423,18 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                 <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
                   {chatMessages.length === 0 ? (
-                    <div className={`text-center py-4 sm:py-8 text-[11px] ${isLight ? 'text-[#7A8A80]' : 'text-[#9BB5A6]'}`}>
-                      Send a message or Surah/Ayah reference here during class.
+                    <div className="flex flex-col items-center justify-center text-center py-6 sm:py-10 px-3 space-y-2 select-none">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-1 max-w-[260px]">
+                        <p className={`text-[11px] font-bold ${isLight ? 'text-[#1E3327]' : 'text-emerald-300'}`}>
+                          Privacy-Protected Chat
+                        </p>
+                        <p className={`text-[10px] leading-relaxed ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
+                          This chat is private, secure, and managed by the IslamicTuition team to ensure a safe learning space.
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     chatMessages.map(msg => (

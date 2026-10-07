@@ -3,6 +3,7 @@ import { X, UserPlus, Shield, CheckCircle, Copy, AlertCircle } from 'lucide-reac
 import { UserRole, Tutor, Student } from '../../types';
 import { registerFirebaseUserWithProfile, getNextSequentialStudentId } from '../../services/dataService';
 import { SUPPORTED_COUNTRIES, COMMON_TIMEZONES, detectUserLocation } from '../../utils/timezone';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface CreateUserModalProps {
   isOpen: boolean;
@@ -30,7 +31,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   const [country, setCountry] = useState(detected.country);
   const [timezone, setTimezone] = useState(detected.timezone);
   const [courseType, setCourseType] = useState('Nazra with Tajweed');
-  const [assignedTutorId, setAssignedTutorId] = useState(availableTutors[0]?.tutorId || 'Tutor 1');
+  const [assignedTutorId, setAssignedTutorId] = useState('Unassigned');
   const [parentName, setParentName] = useState('');
   const [parentEmail, setParentEmail] = useState('');
 
@@ -57,11 +58,8 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setStudentId(getNextSequentialStudentId(students));
-      if (availableTutors.length > 0 && !assignedTutorId) {
-        setAssignedTutorId(availableTutors[0]?.tutorId || 'Tutor 1');
-      }
     }
-  }, [isOpen, students, availableTutors]);
+  }, [isOpen, students]);
 
   if (!isOpen) return null;
 
@@ -361,15 +359,31 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     <div>
                       <label className="block text-[#5A6B61] mb-1">Assigned Tutor</label>
                       <select
-                        value={assignedTutorId}
+                        value={assignedTutorId || 'Unassigned'}
                         onChange={(e) => setAssignedTutorId(e.target.value)}
-                        className="w-full border border-[#D5D0C6] rounded-lg p-1.5 bg-white"
+                        className="w-full border border-[#D5D0C6] rounded-lg p-1.5 bg-white text-xs"
                       >
-                        {availableTutors.map((t, idx) => (
-                          <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
-                            {t.realName} ({t.tutorId})
-                          </option>
-                        ))}
+                        <option value="Unassigned">-- Select Tutor (Optional / Assign Later) --</option>
+                        <optgroup label="🏢 In-Office Shift (1:00 AM – 7:00 AM)">
+                          {availableTutors
+                            .filter(t => !isRemoteCustomShiftTutor(t.tutorId))
+                            .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+                            .map((t, idx) => (
+                              <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
+                                {t.tutorId} ({t.realName || t.displayName || t.tutorId})
+                              </option>
+                            ))}
+                        </optgroup>
+                        <optgroup label="🌐 Remote / Outside Office (Tutor 1, 11, 12)">
+                          {availableTutors
+                            .filter(t => isRemoteCustomShiftTutor(t.tutorId))
+                            .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
+                            .map((t, idx) => (
+                              <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
+                                {t.tutorId} ({t.realName || t.displayName || t.tutorId})
+                              </option>
+                            ))}
+                        </optgroup>
                       </select>
                     </div>
                   </div>

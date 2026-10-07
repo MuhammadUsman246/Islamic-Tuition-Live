@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { X, Calendar, AlertCircle, CheckCircle, Clock, Trash2 } from 'lucide-react';
 import { TimetableClass, Tutor, Student, DayOfWeek, ClassDuration, PKT_TIME_SLOTS } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
+import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface ClassModalProps {
   isOpen: boolean;
@@ -126,11 +127,16 @@ export const ClassModal: React.FC<ClassModalProps> = ({
   const tutorOptions = useMemo(() => {
     return [...tutors]
       .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
-      .map(t => ({
-        value: t.tutorId,
-        label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
-        subLabel: t.email || undefined,
-      }));
+      .map(t => {
+        const isRemote = isRemoteCustomShiftTutor(t.tutorId);
+        return {
+          value: t.tutorId,
+          label: `${t.tutorId} (${t.realName || t.displayName || t.tutorId})`,
+          subLabel: `${isRemote ? '🌐 Remote Shift' : '🏢 In-Office (1am-7am)'}${t.email ? ` • ${t.email}` : ''}`,
+          badge: isRemote ? 'Remote' : 'In-Office',
+          badgeColor: isRemote ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800',
+        };
+      });
   }, [tutors]);
 
   // Student options for SearchableSelect
