@@ -184,14 +184,29 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
           if (data.tutorName) setLoungeTutorName(getTutorDisplayId(data.tutorName));
           if (data.currentLessonEndTimeMs) setLoungeEndTimeMs(data.currentLessonEndTimeMs);
 
-          if (data.participant) {
-            if (data.participant.status === 'ADMITTED') {
-              setInWaitingRoom(false);
+          if (data.participant?.status === 'ADMITTED' || data.token) {
+            setInWaitingRoom(false);
+            if (data.token) {
+              const resTokenData: LiveKitRoomTokenResponse = {
+                token: data.token,
+                serverUrl: data.serverUrl || 'wss://islamictuition-xi2wjy78.livekit.cloud',
+                roomName: data.roomName || meetingIdOrSlug.trim(),
+                participantIdentity: data.participant?.identity || `student_${Date.now()}`,
+                participantName: data.participant?.guest_name || displayName || currentUserName,
+                role: (currentUserRole || 'student') as UserRole,
+                classId: null,
+                isMockSession: false,
+                expiresInSeconds: 43200,
+                isOverrideActive: false
+              };
+              setTokenData(resTokenData);
+              await joinClassroomSession(resTokenData, currentUserRole, displayName || currentUserName);
+            } else {
               submitJoinRequest(waitingId);
-            } else if (data.participant.status === 'REJECTED') {
-              setInWaitingRoom(false);
-              setErrorMessage('The tutor asked to reschedule or closed this classroom session.');
             }
+          } else if (data.participant?.status === 'REJECTED') {
+            setInWaitingRoom(false);
+            setErrorMessage('The tutor asked to reschedule or closed this classroom session.');
           }
         }
       } catch (e) {

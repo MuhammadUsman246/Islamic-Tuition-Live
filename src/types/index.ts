@@ -508,6 +508,8 @@ export interface LiveKitRoomTokenResponse {
   tutorName?: string;
   currentLessonEndTimeMs?: number;
   roomSlug?: string;
+  isOverrideActive?: boolean;
+  isHiddenAdmin?: boolean;
 }
 
 export interface ClassroomLabTestSession {

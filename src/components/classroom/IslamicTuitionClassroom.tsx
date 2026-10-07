@@ -568,7 +568,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             setStudentWaitingReason('NEXT_STUDENT_QUEUE');
           }
 
-          if (data.participant?.status === 'ADMITTED') {
+          if (data.participant?.status === 'ADMITTED' || data.token) {
             handleResetMicTest();
             if (data.token) {
               setActiveTokenData(prev => ({

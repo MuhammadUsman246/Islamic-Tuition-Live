@@ -355,7 +355,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
       const roomName = getCanonicalRoomName(activeTutorId, student?.studentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
-        identity: `student_${student?.studentId || 'stu'}`,
+        identity: `student_${student?.studentId || 'stu'}_${Date.now().toString(36)}`,
         participantName: student?.name || userProfile?.displayName || 'Student',
         role: 'student',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,

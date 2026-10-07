@@ -451,13 +451,11 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
  * (or when 0 students are in the room and the tutor is ready).
  */
 function autoPromoteNextWaitingStudentIfRoomFree(roomNameOrSlug: string) {
-  const { canonicalSlug, normRoom, activeStudents, activeTutor } = getRoomQueueAndLessonTiming(roomNameOrSlug);
-  if (activeStudents.length === 0) {
-    const nextWaiting = SERVER_WAITING_ROOM.find(w => {
-      const wSlug = w.room_slug.toLowerCase();
-      return (wSlug === normRoom || wSlug === canonicalSlug) && w.status === 'WAITING';
-    });
-    if (nextWaiting && (nextWaiting.reason === 'NEXT_STUDENT_QUEUE' || Boolean(activeTutor))) {
+  const { canonicalSlug, normRoom, activeStudents, activeTutor, waitingList } = getRoomQueueAndLessonTiming(roomNameOrSlug);
+  if (activeStudents.length === 0 && waitingList.length > 0) {
+    const nextWaitingSummary = waitingList[0];
+    const nextWaiting = SERVER_WAITING_ROOM.find(w => w.id === nextWaitingSummary.id);
+    if (nextWaiting && nextWaiting.status === 'WAITING' && (nextWaiting.reason === 'NEXT_STUDENT_QUEUE' || Boolean(activeTutor))) {
       nextWaiting.status = 'ADMITTED';
       nextWaiting.admitted_at = Date.now();
     }
@@ -1045,16 +1043,18 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
     let livekitServerUrl: string | null = null;
     let roomNameToJoin = participant.room_slug;
 
-    if (participant.status === 'ADMITTED') {
+    if (participant.status === 'ADMITTED' || participant.status === 'CONSUMED') {
       try {
         const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
         livekitServerUrl = serverUrl;
         const { targetRoomId } = getTargetRoomIdentifier(participant.room_slug);
         roomNameToJoin = targetRoomId;
+        const cleanIdent = participant.identity || `student_${Date.now()}`;
         const at = new AccessToken(apiKey, apiSecret, {
-          identity: participant.identity,
+          identity: cleanIdent,
           name: participant.guest_name,
-          ttl: '12h'
+          ttl: '12h',
+          metadata: JSON.stringify({ role: 'student', hidden: false })
         });
         at.addGrant({
           room: targetRoomId,
@@ -1065,7 +1065,20 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
           canPublishData: true,
         });
         admittedToken = await at.toJwt();
-        participant.status = 'CONSUMED';
+        
+        // Mark admitted and register into LIVE_ROOM_PARTICIPANTS so room is recognized as occupied
+        participant.status = 'ADMITTED';
+        const { normRoom: admNormRoom } = getRoomQueueAndLessonTiming(targetRoomId);
+        if (!LIVE_ROOM_PARTICIPANTS[admNormRoom]) {
+          LIVE_ROOM_PARTICIPANTS[admNormRoom] = {};
+        }
+        LIVE_ROOM_PARTICIPANTS[admNormRoom][cleanIdent] = {
+          identity: cleanIdent,
+          name: participant.guest_name,
+          role: 'student',
+          joinedAt: participant.admitted_at || Date.now(),
+          lastSeen: Date.now()
+        };
       } catch (err) {
         console.error('Error generating token for admitted waiting student:', err);
       }
@@ -1074,6 +1087,7 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
     res.json({
       participant: {
         ...participant,
+        status: participant.status,
         waiting_seconds: waitingSeconds,
         queue_position: qIdx >= 0 ? qIdx + 1 : 1
       },
@@ -1431,10 +1445,14 @@ async function syncLiveKitCloudRooms(): Promise<void> {
       );
 
       // Reconcile any participants who left LiveKit Cloud
+      const nowMs = Date.now();
       Object.keys(LIVE_ROOM_PARTICIPANTS).forEach((rKey) => {
         const activeSet = seenCloudIdentitiesByRoom[rKey];
         Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
-          if (!activeSet || !activeSet.has(pid)) {
+          const user = LIVE_ROOM_PARTICIPANTS[rKey][pid];
+          // Do NOT remove participants whose join or heartbeat was within the last 30 seconds
+          // so WebRTC handshake / transient cloud poll delays don't falsely wipe them!
+          if (nowMs - user.lastSeen > 30000 && (!activeSet || !activeSet.has(pid))) {
             delete LIVE_ROOM_PARTICIPANTS[rKey][pid];
             autoPromoteNextWaitingStudentIfRoomFree(rKey);
           }
