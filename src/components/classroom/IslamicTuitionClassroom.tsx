@@ -213,8 +213,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   onLeave,
   className = '',
 }) => {
-  const isTutor = userRole === 'tutor' || userRole === 'admin' || userRole === 'supervisor';
-  const isStudent = userRole === 'student' || userRole === 'guest' || userRole === 'parent';
+  const isTutor =
+    userRole === 'tutor' ||
+    userRole === 'admin' ||
+    userRole === 'supervisor' ||
+    tokenData?.role === 'tutor' ||
+    tokenData?.role === 'admin' ||
+    tokenData?.role === 'supervisor' ||
+    (tokenData?.participantIdentity || '').toLowerCase().includes('tutor') ||
+    (participantName || '').toLowerCase().startsWith('tutor');
+  const isStudent = !isTutor;
 
   // Theme Mode: Default to 'dark' (Enhanced Premium High-Contrast Black) with 1-click Light/Dark toggle
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
@@ -505,6 +513,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const updateTutorWaitingQueue = useCallback((list: WaitingRoomParticipant[]) => {
     setWaitingQueue(list);
     list.forEach((w) => {
+      if ((w as any).tutorAcknowledged) {
+        setAcknowledgedWaitingIds(prev => {
+          if (prev.has(w.id)) return prev;
+          const next = new Set(prev);
+          next.add(w.id);
+          return next;
+        });
+      }
       if (!notifiedWaitingIdsRef.current.has(w.id)) {
         notifiedWaitingIdsRef.current.add(w.id);
         playStudioConnectionChime('connect');

@@ -13,6 +13,7 @@ import {
   limit,
   onSnapshot,
   writeBatch,
+  getCountFromServer,
   Query,
   DocumentReference
 } from 'firebase/firestore';
@@ -2076,14 +2077,72 @@ export async function deleteTutor(id: string): Promise<string> {
 }
 
 // ==========================================
-// CLASSES / MASTER TIMETABLE API
+// CLASSES / MASTER TIMETABLE API (OPTIMIZATION 1: REVISION-BASED 1-READ CACHE)
 // ==========================================
+const ACADEMY_META_DOC_ID = 'academy_meta';
+const CLASSES_LAST_MODIFIED_KEY = 'classes_last_modified';
+
+export function getLocalClassesLastModified(): number {
+  try {
+    const val = localStorage.getItem(CLASSES_LAST_MODIFIED_KEY);
+    return val ? parseInt(val, 10) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setLocalClassesLastModified(timestamp: number): void {
+  try {
+    localStorage.setItem(CLASSES_LAST_MODIFIED_KEY, String(timestamp));
+  } catch {}
+}
+
+export async function touchClassesRevision(customTimestamp?: number): Promise<void> {
+  const ts = customTimestamp || Date.now();
+  setLocalClassesLastModified(ts);
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const metaRef = doc(db, SETTINGS_COL, ACADEMY_META_DOC_ID);
+      await setDoc(metaRef, { classes_last_modified: ts, lastModified: ts }, { merge: true });
+    } catch (e) {
+      console.warn("touchClassesRevision notice:", e);
+    }
+  }
+}
+
 export async function getClasses(forceRefresh = false): Promise<TimetableClass[]> {
   if (CACHE.classes && !forceRefresh) {
     return CACHE.classes;
   }
   const stored = loadCachedCollection<TimetableClass[]>('classes');
-  if (stored && stored.length > 0 && !forceRefresh) {
+  const localRev = getLocalClassesLastModified();
+
+  // 1-Read Optimization: Check single metadata document settings/academy_meta
+  // If lastModified hasn't changed, serve all 200-400 classes from local storage (1 read instead of 300 reads)
+  if (!isFirestoreQuotaExceeded() && stored && stored.length > 0) {
+    try {
+      const metaSnap = await getDoc(doc(db, SETTINGS_COL, ACADEMY_META_DOC_ID));
+      if (metaSnap.exists()) {
+        const metaData = metaSnap.data();
+        const serverRev = metaData?.classes_last_modified || metaData?.lastModified || 0;
+        if (serverRev && localRev && serverRev <= localRev) {
+          console.log(`[DataService] Served ${stored.length} timetable classes from localStorage via 1-read academy_meta check (revision: ${localRev})`);
+          CACHE.classes = stored;
+          return stored;
+        }
+      } else if (!forceRefresh && localRev > 0) {
+        touchClassesRevision(Date.now()).catch(() => {});
+        CACHE.classes = stored;
+        return stored;
+      }
+    } catch (e) {
+      console.warn("academy_meta check notice:", e);
+      if (!forceRefresh) {
+        CACHE.classes = stored;
+        return stored;
+      }
+    }
+  } else if (stored && stored.length > 0 && !forceRefresh) {
     CACHE.classes = stored;
     return stored;
   }
@@ -2095,6 +2154,9 @@ export async function getClasses(forceRefresh = false): Promise<TimetableClass[]
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TimetableClass));
         CACHE.classes = items;
         saveCachedCollection('classes', items);
+        const newRev = Date.now();
+        setLocalClassesLastModified(newRev);
+        touchClassesRevision(newRev).catch(() => {});
         return items;
       }
     } catch (err) {
@@ -2190,6 +2252,7 @@ export async function addClass(classData: Omit<TimetableClass, 'id'>): Promise<s
   }
 
   saveCachedCollection('classes', CACHE.classes);
+  touchClassesRevision().catch(() => {});
   recalculateAndPersistSummaryMetrics().catch(() => {});
 
   if (!isFirestoreQuotaExceeded()) {
@@ -2226,6 +2289,7 @@ export async function updateClass(id: string, updates: Partial<TimetableClass>):
   if (CACHE.classes) {
     CACHE.classes = CACHE.classes.map(c => (c.id === id || String(c.id) === String(id)) ? { ...c, ...updates } : c);
     saveCachedCollection('classes', CACHE.classes);
+    touchClassesRevision().catch(() => {});
     recalculateAndPersistSummaryMetrics().catch(() => {});
   }
 
@@ -2248,6 +2312,7 @@ export async function deleteClass(id: string): Promise<string> {
     const updatedClasses = existingClasses.filter(c => String(c.id).trim() !== targetIdStr);
     CACHE.classes = updatedClasses;
     saveCachedCollection('classes', updatedClasses);
+    touchClassesRevision().catch(() => {});
     recalculateAndPersistSummaryMetrics().catch(() => {});
 
     const trashId = `trash_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -2477,9 +2542,10 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
-      const cutoffDateStr = getRecentLessonCutoffDate(90);
+      // Optimization 2: Strict 30-Day Window by Default (cuts initial reads by >70%)
+      const cutoffDateStr = getRecentLessonCutoffDate(30);
       const snap = await getDocs(
-        query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(600))
+        query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(150))
       );
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
@@ -4461,6 +4527,57 @@ export async function recalculateAndPersistSummaryMetrics(): Promise<SummaryMetr
   return metrics;
 }
 
+/**
+ * Single-Document KPI Counters & Aggregations (Zero-Read Analytics via getCountFromServer)
+ * Optimization 4: Uses Firestore's built-in count() aggregation queries (getCountFromServer()).
+ * A count() query costs 1 read total for up to 1,000 documents, rather than reading every document individually.
+ */
+export async function fetchLiveKPICounters(): Promise<Partial<SummaryMetrics>> {
+  if (isFirestoreQuotaExceeded()) return {};
+  try {
+    const [
+      activeStuSnap,
+      trialStuSnap,
+      inactiveStuSnap,
+      pendingStuSnap,
+      activeTutorsSnap,
+      scheduledClassesSnap,
+      unpaidFeesSnap
+    ] = await Promise.all([
+      getCountFromServer(query(collection(db, STUDENTS_COL), where('status', 'in', ['Active', 'Confirmed']))),
+      getCountFromServer(query(collection(db, STUDENTS_COL), where('status', '==', 'Trial'))),
+      getCountFromServer(query(collection(db, STUDENTS_COL), where('status', 'in', ['Inactive', 'Not Taking']))),
+      getCountFromServer(query(collection(db, STUDENTS_COL), where('status', '==', 'Pending'))),
+      getCountFromServer(query(collection(db, TUTORS_COL), where('status', '==', 'Active'))),
+      getCountFromServer(query(collection(db, CLASSES_COL), where('status', '==', 'Scheduled'))),
+      getCountFromServer(query(collection(db, FEES_COL), where('status', 'in', ['Pending', 'Overdue', 'Payment Submitted'])))
+    ]);
+
+    const activeStudents = activeStuSnap.data().count;
+    const trialStudents = trialStuSnap.data().count;
+    const inactiveStudents = inactiveStuSnap.data().count;
+    const pendingStudents = pendingStuSnap.data().count;
+    const activeTutors = activeTutorsSnap.data().count;
+    const weeklyScheduledClasses = scheduledClassesSnap.data().count;
+    const unpaidFeesCount = unpaidFeesSnap.data().count;
+
+    const partialMetrics: Partial<SummaryMetrics> = {
+      activeStudents,
+      trialStudents,
+      inactiveStudents,
+      pendingStudents,
+      activeTutors,
+      weeklyScheduledClasses,
+      unpaidFeesCount,
+      lastCalculatedAt: new Date().toISOString()
+    };
+    return partialMetrics;
+  } catch (err) {
+    console.warn("fetchLiveKPICounters notice:", err);
+    return {};
+  }
+}
+
 export async function getSummaryMetrics(forceRefresh = false): Promise<SummaryMetrics> {
   if (CACHE.metrics && !forceRefresh) {
     return CACHE.metrics;
@@ -4485,7 +4602,25 @@ export async function getSummaryMetrics(forceRefresh = false): Promise<SummaryMe
     }
   }
 
-  return recalculateAndPersistSummaryMetrics();
+  // When summary document does not exist or on forced sync:
+  // Query live count aggregations (1 read per 1,000 docs) to compute precise metrics!
+  const liveCounts = await fetchLiveKPICounters().catch(() => ({}));
+  const baseMetrics = calculateSummaryMetricsFromCache();
+  const mergedMetrics: SummaryMetrics = {
+    ...baseMetrics,
+    ...liveCounts,
+    lastCalculatedAt: new Date().toISOString()
+  };
+
+  CACHE.metrics = mergedMetrics;
+  saveCachedCollection('metrics', mergedMetrics);
+
+  if (!isFirestoreQuotaExceeded()) {
+    const summaryRef = doc(db, SUMMARY_COL, SUMMARY_DOC_ID);
+    setDoc(summaryRef, sanitizeFirestoreObject(mergedMetrics), { merge: true }).catch(() => {});
+  }
+
+  return mergedMetrics;
 }
 
 export function subscribeToSummaryMetrics(callback: (metrics: SummaryMetrics) => void): () => void {
@@ -5833,23 +5968,36 @@ export async function getClassesForTutor(tutorId: string, forceRefresh = false):
 
 /**
  * Scoped query for Tutor's assigned students (~10-25 docs instead of 150)
+ * Optimization 3: Uses in-memory filtering when Admin/Supervisor data is loaded,
+ * and strictly fetches only active students ('Active', 'Trial', 'Confirmed'),
+ * automatically ignoring inactive, discontinued, or left records.
  */
 export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = false): Promise<Student[]> {
   if (!tutorId) return [];
   const canonicalTutorId = normalizeTutorId(tutorId);
 
+  // In-memory filter for Active/Trial/Confirmed students (Optimization 3)
+  const isTargetTutorActive = (s: Student) =>
+    isSameTutor(s.assignedTutorId, tutorId) &&
+    (s.status === 'Active' || s.status === 'Trial' || s.status === 'Confirmed');
+
   if (CACHE.students && !forceRefresh) {
-    return CACHE.students.filter(s => isSameTutor(s.assignedTutorId, tutorId));
+    return CACHE.students.filter(isTargetTutorActive);
   }
   const stored = loadCachedCollection<Student[]>('students');
   if (stored && stored.length > 0 && !forceRefresh) {
     CACHE.students = stored;
-    return stored.filter(s => isSameTutor(s.assignedTutorId, tutorId));
+    return stored.filter(isTargetTutorActive);
   }
 
   if (!isFirestoreQuotaExceeded()) {
     try {
-      const q = query(collection(db, STUDENTS_COL), where('assignedTutorId', '==', canonicalTutorId));
+      // Scoped query: Strictly fetch only active, trial, and confirmed students for this tutor
+      const q = query(
+        collection(db, STUDENTS_COL),
+        where('assignedTutorId', '==', canonicalTutorId),
+        where('status', 'in', ['Active', 'Trial', 'Confirmed'])
+      );
       const snap = await getDocs(q);
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
@@ -5860,7 +6008,7 @@ export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = 
     }
   }
 
-  const fallback = isCleanDataMode() ? [] : SEED_STUDENTS.filter(s => isSameTutor(s.assignedTutorId, tutorId));
+  const fallback = isCleanDataMode() ? [] : SEED_STUDENTS.filter(isTargetTutorActive);
   return fallback;
 }
 

@@ -308,6 +308,12 @@ export async function fetchLiveKitToken(params: {
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const data = await response.json();
+      if (response.ok && data?.inWaitingRoom) {
+        return {
+          ...data,
+          roomName: canonicalRoomId,
+        };
+      }
       if (response.ok && data?.token && !data.isMockSession) {
         return {
           ...data,

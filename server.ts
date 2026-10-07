@@ -876,18 +876,19 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
 
     const isHiddenAdmin = isAdminOrSupervisor && Boolean(isObserveMode);
+    const resolvedRole = isTutorSession ? 'tutor' : (isAdminOrSupervisor ? userRole : (isMatchingSession ? userRole : 'guest'));
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: cleanIdentity,
       name: cleanName,
       ttl: '12h', // 12-hour shift validity
       metadata: JSON.stringify({
-        role: isMatchingSession ? userRole : 'guest',
+        role: resolvedRole,
         hidden: isHiddenAdmin
       })
     });
 
-    const isStudent = userRole === 'student' || userRole === 'parent' || (!isMatchingSession || userRole === 'guest');
+    const isStudent = resolvedRole === 'student' || resolvedRole === 'parent' || resolvedRole === 'guest';
     const canPublishSources = isStudent
       ? [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
       : [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
@@ -912,11 +913,11 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       LIVE_ROOM_PARTICIPANTS[normRoom][cleanIdentity] = {
         identity: cleanIdentity,
         name: cleanName,
-        role: isMatchingSession ? userRole : 'guest',
+        role: resolvedRole,
         joinedAt: existing?.joinedAt || Date.now(),
         lastSeen: Date.now()
       };
-      if (userRole === 'tutor') {
+      if (resolvedRole === 'tutor') {
         autoPromoteNextWaitingStudentIfRoomFree(normRoom);
       }
     }
@@ -927,7 +928,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       roomName: targetRoomId,
       participantIdentity: cleanIdentity,
       participantName: cleanName,
-      role: isMatchingSession ? userRole : 'guest',
+      role: resolvedRole,
       expiresInSeconds: 7200,
       isOverrideActive,
       inWaitingRoom: false,
