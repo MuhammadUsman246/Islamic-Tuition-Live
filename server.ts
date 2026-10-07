@@ -314,6 +314,7 @@ interface ActiveRoomUser {
   fromCloud?: boolean;
 }
 const LIVE_ROOM_PARTICIPANTS: Record<string, Record<string, ActiveRoomUser>> = {};
+const EXCLUDED_REMOVED_STUDENTS = new Map<string, number>();
 
 interface RoomControlSignal {
   action: 'FINISH_STUDENT_LESSON' | 'END_CLASS_FOR_ALL';
@@ -336,7 +337,14 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
 
   const nowMs = Date.now();
 
-  // 1. Clean up stale active participants (> 45s without heartbeat to support 20s Zero-Load Idle Standby Mode)
+  // Clean up expired excluded students
+  EXCLUDED_REMOVED_STUDENTS.forEach((expiry, sid) => {
+    if (nowMs >= expiry) {
+      EXCLUDED_REMOVED_STUDENTS.delete(sid);
+    }
+  });
+
+  // 1. Clean up stale active participants (> 45s without heartbeat)
   if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
     Object.keys(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(pid => {
       if (nowMs - LIVE_ROOM_PARTICIPANTS[normRoom][pid].lastSeen > 45000) {
@@ -346,31 +354,42 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
   }
 
   const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
-  const activeTutor = participantsList.find(
-    p => (p.role || '').toLowerCase() === 'tutor' || p.identity.toLowerCase().includes('tutor')
-  );
-  const activeStudents = participantsList.filter(
-    p => {
-      const r = (p.role || '').toLowerCase();
-      return r === 'student' || r === 'guest' || r === 'parent';
-    }
-  );
+  
+  // Authoritative Tutor identification (check role, identity, or permanent room tutor match)
+  const activeTutor = participantsList.find(p => {
+    const r = (p.role || '').toLowerCase();
+    const id = (p.identity || '').toLowerCase();
+    const permTutor = (permRoom?.tutor_id || '').toLowerCase();
+    return r === 'tutor' || id.startsWith('tutor') || (permTutor && id === permTutor);
+  });
 
-  // Include any student promoted to ADMITTED within the last 25 seconds who is currently transitioning into the room
-  // so a 2nd student cannot slip in during the WebRTC connection window!
+  // Active Students: must NOT be tutor or admin/supervisor observer, and NOT in recently removed exclusion list
+  const activeStudents = participantsList.filter(p => {
+    const r = (p.role || '').toLowerCase();
+    const id = (p.identity || '').toLowerCase();
+    const permTutor = (permRoom?.tutor_id || '').toLowerCase();
+    const isTutorUser = r === 'tutor' || id.startsWith('tutor') || (permTutor && id === permTutor);
+    const isObserver = r === 'admin' || r === 'supervisor' || id.includes('admin_obs') || id.includes('supervisor_obs');
+    const isExcluded = EXCLUDED_REMOVED_STUDENTS.has(p.identity) && nowMs < EXCLUDED_REMOVED_STUDENTS.get(p.identity)!;
+    
+    return !isTutorUser && !isObserver && !isExcluded && (r === 'student' || r === 'guest' || r === 'parent' || !r || r === 'participant');
+  });
+
+  // Include any student promoted to ADMITTED within the last 20 seconds who is currently transitioning into the room
   SERVER_WAITING_ROOM.forEach(w => {
-    const wSlug = w.room_slug.toLowerCase();
+    const wSlug = (w.room_slug || '').toLowerCase();
     if (
       (wSlug === normRoom || wSlug === canonicalSlug) &&
       w.status === 'ADMITTED' &&
       w.admitted_at &&
-      nowMs - w.admitted_at < 25000
+      nowMs - w.admitted_at < 20000
     ) {
       const wId = w.identity || w.id;
+      const isExcluded = EXCLUDED_REMOVED_STUDENTS.has(wId) && nowMs < EXCLUDED_REMOVED_STUDENTS.get(wId)!;
       const alreadyInActive = activeStudents.some(
         s => s.identity.toLowerCase() === wId.toLowerCase()
       );
-      if (!alreadyInActive) {
+      if (!alreadyInActive && !isExcluded) {
         activeStudents.push({
           identity: wId,
           name: w.guest_name,
@@ -382,7 +401,7 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
     }
   });
 
-  // 2. Compute current lesson estimated end time (zero extra database reads)
+  // 2. Compute current lesson estimated end time
   let currentLessonEndTimeMs: number | undefined;
   if (activeStudents.length > 0) {
     const primaryStudent = activeStudents[0];
@@ -391,7 +410,6 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
     } else if (activeTutor?.bookedEndTimeMs && activeTutor.bookedEndTimeMs > nowMs) {
       currentLessonEndTimeMs = activeTutor.bookedEndTimeMs;
     } else {
-      // Standard 30-minute academy class slot boundary or 30 mins from student join time
       const halfHourBlockMs = 30 * 60 * 1000;
       const nextHalfHourBoundaryMs = Math.ceil(nowMs / halfHourBlockMs) * halfHourBlockMs;
       const joinedBasedEndMs = (primaryStudent.joinedAt || nowMs) + halfHourBlockMs;
@@ -403,7 +421,7 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
       } else if (minsSinceJoined < 30) {
         currentLessonEndTimeMs = joinedBasedEndMs;
       } else {
-        currentLessonEndTimeMs = nowMs + 3 * 60 * 1000; // Wrapping up final minutes
+        currentLessonEndTimeMs = nowMs + 3 * 60 * 1000;
       }
     }
   }
@@ -444,7 +462,7 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
     };
   });
 
-  const resolvedTutorName = tutorNum ? `Tutor ${tutorNum}` : 'Tutor';
+  const resolvedTutorName = tutorNum ? `Tutor ${tutorNum}` : (permRoom?.tutor_id || 'Tutor');
 
   return {
     normRoom,
@@ -463,11 +481,11 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
  * (or when 0 students are in the room and the tutor is ready).
  */
 function autoPromoteNextWaitingStudentIfRoomFree(roomNameOrSlug: string) {
-  const { canonicalSlug, normRoom, activeStudents, activeTutor, waitingList } = getRoomQueueAndLessonTiming(roomNameOrSlug);
-  if (activeStudents.length === 0 && waitingList.length > 0) {
+  const { normRoom, activeStudents, activeTutor, waitingList } = getRoomQueueAndLessonTiming(roomNameOrSlug);
+  if (activeStudents.length === 0 && waitingList.length > 0 && Boolean(activeTutor)) {
     const nextWaitingSummary = waitingList[0];
     const nextWaiting = SERVER_WAITING_ROOM.find(w => w.id === nextWaitingSummary.id);
-    if (nextWaiting && nextWaiting.status === 'WAITING' && (nextWaiting.reason === 'NEXT_STUDENT_QUEUE' || Boolean(activeTutor))) {
+    if (nextWaiting && nextWaiting.status === 'WAITING') {
       nextWaiting.status = 'ADMITTED';
       nextWaiting.admitted_at = Date.now();
     }
@@ -1281,6 +1299,7 @@ app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
       if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
         currentStudentIds.forEach(sid => {
           delete LIVE_ROOM_PARTICIPANTS[normRoom][sid];
+          EXCLUDED_REMOVED_STUDENTS.set(sid, Date.now() + 15000);
         });
       }
 
@@ -1366,6 +1385,7 @@ app.post('/api/livekit/rooms/leave', (req: Request, res: Response) => {
     if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
       delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
     }
+    EXCLUDED_REMOVED_STUDENTS.set(identity, Date.now() + 15000);
     // Immediately auto-promote #1 waiting student in Next Student Lounge as soon as the current student leaves!
     autoPromoteNextWaitingStudentIfRoomFree(normRoom);
   }
@@ -1430,6 +1450,9 @@ async function syncLiveKitCloudRooms(): Promise<void> {
               nameLower.includes('invisible');
 
             if (isObserver) return;
+            if (EXCLUDED_REMOVED_STUDENTS.has(p.identity) && Date.now() < EXCLUDED_REMOVED_STUDENTS.get(p.identity)!) {
+              return;
+            }
 
             const isTutorPeer =
               metaRole === 'tutor' ||
@@ -1437,7 +1460,8 @@ async function syncLiveKitCloudRooms(): Promise<void> {
               idLower.includes('tutor_') ||
               /^tutor\s*\d+/i.test(p.name || '') ||
               nameLower.includes('ustadh') ||
-              nameLower.includes('qari');
+              nameLower.includes('qari') ||
+              LIVE_ROOM_PARTICIPANTS[normRoom]?.[p.identity]?.role === 'tutor';
 
             const resolvedRole = isTutorPeer ? 'tutor' : (metaRole || 'student');
             seenCloudIdentitiesByRoom[normRoom].add(p.identity);
