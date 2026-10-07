@@ -436,9 +436,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     waitingQueueRef.current = waitingQueue;
   }, [waitingQueue]);
 
+  // Active Token Data state (updates with valid LiveKit JWT upon admission from Waiting Room)
+  const [activeTokenData, setActiveTokenData] = useState<LiveKitRoomTokenResponse>(tokenData);
+
   // Student "Next Student Lounge" & "Waiting for Tutor Lounge" State + Live Remaining Time Countdown
   const [isStudentInWaitingLounge, setIsStudentInWaitingLounge] = useState<boolean>(
-    Boolean(!isTutor && tokenData.inWaitingRoom)
+    Boolean(!isTutor && (tokenData.inWaitingRoom || !tokenData.token))
   );
   const [studentWaitingId, setStudentWaitingId] = useState<string | null>(tokenData.waitingId || null);
   const [studentWaitingReason, setStudentWaitingReason] = useState<'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT'>(
@@ -524,7 +527,44 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
           if (data.participant?.status === 'ADMITTED') {
             handleResetMicTest();
-            setIsStudentInWaitingLounge(false);
+            if (data.token) {
+              setActiveTokenData(prev => ({
+                ...prev,
+                token: data.token,
+                serverUrl: data.serverUrl || prev.serverUrl,
+                roomName: data.roomName || prev.roomName,
+                inWaitingRoom: false
+              }));
+              setIsStudentInWaitingLounge(false);
+            } else {
+              // Fetch newly issued admitted token
+              try {
+                const tokenRes = await fetch('/api/livekit/token', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    roomId: roomName,
+                    identity: activeTokenData.participantIdentity || participantName,
+                    participantName: participantName,
+                    role: userRole,
+                    admittedWaitingId: studentWaitingId
+                  })
+                });
+                const tokenJson = await tokenRes.json();
+                if (tokenJson.token) {
+                  setActiveTokenData(prev => ({
+                    ...prev,
+                    token: tokenJson.token,
+                    serverUrl: tokenJson.serverUrl || prev.serverUrl,
+                    roomName: tokenJson.roomName || prev.roomName,
+                    inWaitingRoom: false
+                  }));
+                  setIsStudentInWaitingLounge(false);
+                }
+              } catch (e) {
+                console.error('[Waiting Lounge] Error retrieving token:', e);
+              }
+            }
           } else if (data.participant?.status === 'REJECTED') {
             setLoungeRejectedMessage('The tutor asked to reschedule or closed this session.');
           }
@@ -994,6 +1034,44 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.Connected, () => {
           if (isCancelled) return;
+
+          // STRICT SINGLETON ENFORCEMENT GUARD:
+          // If this participant is a student or guest, ensure no OTHER student is already present in this 1-on-1 session!
+          if (!isTutor && userRole !== 'admin' && userRole !== 'supervisor') {
+            const existingOtherStudents = Array.from(room.remoteParticipants.values()).filter((p) => {
+              if (isParticipantHiddenAdmin(p)) return false;
+              const pRole = resolveRemoteParticipantRole(p);
+              return pRole === 'Student' || pRole === 'Guest';
+            });
+
+            if (existingOtherStudents.length > 0) {
+              console.warn('[Classroom Singleton Guard] Another student is already active in this room. Redirecting to Waiting Room.');
+              isCancelled = true;
+              try { room.disconnect(); } catch {}
+              setIsStudentInWaitingLounge(true);
+              setStudentWaitingReason('NEXT_STUDENT_QUEUE');
+              // Register into waiting queue on the server to get position & countdown
+              fetch('/api/livekit/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  roomId: roomName,
+                  identity: activeTokenData.participantIdentity || participantName,
+                  participantName: participantName,
+                  role: userRole
+                })
+              })
+                .then(r => r.json())
+                .then(data => {
+                  if (data.waitingId) setStudentWaitingId(data.waitingId);
+                  if (data.queuePosition) setStudentQueuePosition(data.queuePosition);
+                  if (data.currentLessonEndTimeMs) setLoungeEndTimeMs(data.currentLessonEndTimeMs);
+                })
+                .catch(() => {});
+              return;
+            }
+          }
+
           setConnectionStatus(ConnectionState.Connected);
           playStudioConnectionChime('connect');
           room.startAudio().catch(() => {});
@@ -1158,7 +1236,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         });
 
-        await room.connect(tokenData.serverUrl, tokenData.token, {
+        if (!activeTokenData.token) {
+          console.warn('[Classroom] No active token yet. Student remains in Waiting Lounge.');
+          return;
+        }
+
+        await room.connect(activeTokenData.serverUrl, activeTokenData.token, {
           autoSubscribe: true,
         });
 
@@ -1381,7 +1464,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         try { pipWindowRef.current.close(); } catch {}
       }
     };
-  }, [tokenData.token, tokenData.serverUrl, tokenData.isMockSession, roomName, isStudentInWaitingLounge]);
+  }, [activeTokenData.token, activeTokenData.serverUrl, tokenData.isMockSession, roomName, isStudentInWaitingLounge]);
 
   // Open Always-On-Top Floating Mini Control Bar (Works in top-level windows AND inside iframes!)
   const openFloatingControlBar = useCallback(async () => {

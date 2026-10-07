@@ -108,7 +108,7 @@ interface ServerWaitingGuest {
   guest_name: string;
   identity?: string;
   joined_at: string;
-  status: 'WAITING' | 'ADMITTED' | 'REJECTED';
+  status: 'WAITING' | 'ADMITTED' | 'REJECTED' | 'CONSUMED';
   reason?: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT';
   admitted_at?: number;
 }
@@ -506,31 +506,29 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
     let loungeMessage: string | undefined;
 
     if (isStudentOrGuest) {
-      let { canonicalSlug, activeTutor, activeStudents, currentLessonEndTimeMs, resolvedTutorName } = getRoomQueueAndLessonTiming(cleanRoom);
-      if (!activeTutor) {
-        await syncLiveKitCloudRooms();
-        const refreshed = getRoomQueueAndLessonTiming(cleanRoom);
-        canonicalSlug = refreshed.canonicalSlug;
-        activeTutor = refreshed.activeTutor;
-        activeStudents = refreshed.activeStudents;
-        currentLessonEndTimeMs = refreshed.currentLessonEndTimeMs;
-        resolvedTutorName = refreshed.resolvedTutorName;
-      }
+      // Always sync with LiveKit Cloud to ensure 100% accurate live participant presence
+      await syncLiveKitCloudRooms();
+      const { canonicalSlug, activeTutor, activeStudents, currentLessonEndTimeMs, resolvedTutorName } = getRoomQueueAndLessonTiming(cleanRoom);
 
+      // Strict one-time admission check (never permanent by identity)
       const isAlreadyAdmitted = Boolean(
-        (admittedWaitingId && SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')) ||
-        SERVER_WAITING_ROOM.some(
-          w =>
-            w.room_slug.toLowerCase() === canonicalSlug &&
-            w.status === 'ADMITTED' &&
-            w.identity === cleanIdentity
-        )
+        admittedWaitingId &&
+        SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')
       );
+
+      if (isAlreadyAdmitted && admittedWaitingId) {
+        // Mark consumed immediately so it cannot be reused
+        const matched = SERVER_WAITING_ROOM.find(w => w.id === admittedWaitingId);
+        if (matched) {
+          matched.status = 'CONSUMED';
+        }
+      }
 
       const otherActiveStudents = activeStudents.filter(
         s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase()
       );
 
+      // Strict Singleton Rule: If ANY other student is in the room, redirect to Waiting Room!
       if (!isAlreadyAdmitted && otherActiveStudents.length > 0) {
         let existingWaiting = SERVER_WAITING_ROOM.find(
           w =>
@@ -599,14 +597,32 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
         queuePosition = qPos;
         tutorNameForLounge = resolvedTutorName;
         loungeMessage = `Ustadh ${resolvedTutorName} has not opened the classroom yet. You are in the Waiting Lounge — your class will start automatically as soon as your tutor joins!`;
-      } else if (isAlreadyAdmitted && bookedEndTimeMs) {
-        // Clean up consumed ADMITTED entry once used
-        SERVER_WAITING_ROOM.forEach(w => {
-          if (w.id === admittedWaitingId || (w.room_slug.toLowerCase() === canonicalSlug && w.identity === cleanIdentity)) {
-            w.status = 'ADMITTED';
-          }
-        });
       }
+    }
+
+    // STRICT SINGLETON ENFORCEMENT: Never return a LiveKit token to a student in the waiting room!
+    if (inWaitingRoom) {
+      res.json({
+        token: null,
+        serverUrl,
+        roomName: cleanRoom,
+        participantIdentity: cleanIdentity,
+        participantName: cleanName,
+        role: userRole,
+        classId: classId || null,
+        isMockSession: false,
+        expiresInSeconds: 0,
+        isOverrideActive,
+        isHiddenAdmin: Boolean(isAdminObserver),
+        inWaitingRoom: true,
+        waitingId,
+        waitingReason,
+        queuePosition,
+        tutorName: tutorNameForLounge,
+        currentLessonEndTimeMs: lessonEndTimeForLounge,
+        message: loungeMessage
+      });
+      return;
     }
 
     const canPublish = true;
@@ -748,14 +764,15 @@ const handleSlugAccess = async (req: Request, res: Response) => {
 
     // Check if this student/guest was already admitted (automatically when previous student left OR via Tutor's [Allow 2nd Student In Now] button)
     const isAlreadyAdmitted = Boolean(
-      (admittedWaitingId && SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')) ||
-      SERVER_WAITING_ROOM.some(
-        w =>
-          w.room_slug.toLowerCase() === canonicalSlug &&
-          w.status === 'ADMITTED' &&
-          w.identity === cleanIdentity
-      )
+      admittedWaitingId && SERVER_WAITING_ROOM.some(w => w.id === admittedWaitingId && w.status === 'ADMITTED')
     );
+
+    if (isAlreadyAdmitted && admittedWaitingId) {
+      const matched = SERVER_WAITING_ROOM.find(w => w.id === admittedWaitingId);
+      if (matched) {
+        matched.status = 'CONSUMED';
+      }
+    }
 
     const isStudentOrGuestRole = !isAdminOrSupervisor && userRole !== 'tutor';
     const otherActiveStudents = activeStudents.filter(
@@ -1004,6 +1021,36 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
     const qIdx = waitingList.findIndex(w => w.id === participant.id);
     const waitingSeconds = Math.max(0, Math.floor((Date.now() - new Date(participant.joined_at).getTime()) / 1000));
 
+    let admittedToken: string | null = null;
+    let livekitServerUrl: string | null = null;
+    let roomNameToJoin = participant.room_slug;
+
+    if (participant.status === 'ADMITTED') {
+      try {
+        const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+        livekitServerUrl = serverUrl;
+        const { targetRoomId } = getTargetRoomIdentifier(participant.room_slug);
+        roomNameToJoin = targetRoomId;
+        const at = new AccessToken(apiKey, apiSecret, {
+          identity: participant.identity,
+          name: participant.guest_name,
+          ttl: '12h'
+        });
+        at.addGrant({
+          room: targetRoomId,
+          roomJoin: true,
+          canPublish: true,
+          canPublishSources: [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] as any,
+          canSubscribe: true,
+          canPublishData: true,
+        });
+        admittedToken = await at.toJwt();
+        participant.status = 'CONSUMED';
+      } catch (err) {
+        console.error('Error generating token for admitted waiting student:', err);
+      }
+    }
+
     res.json({
       participant: {
         ...participant,
@@ -1014,7 +1061,10 @@ app.get('/api/livekit/waiting-room', async (req: Request, res: Response) => {
       currentLessonEndTimeMs,
       tutorName: resolvedTutorName,
       tutorPresent: Boolean(activeTutor),
-      activeStudentCount: activeStudents.length
+      activeStudentCount: activeStudents.length,
+      token: admittedToken,
+      serverUrl: livekitServerUrl,
+      roomName: roomNameToJoin
     });
     return;
   }
@@ -1350,12 +1400,11 @@ async function syncLiveKitCloudRooms(): Promise<void> {
         })
       );
 
-      // Reconcile any cloud-tracked participants who left LiveKit Cloud
+      // Reconcile any participants who left LiveKit Cloud
       Object.keys(LIVE_ROOM_PARTICIPANTS).forEach((rKey) => {
         const activeSet = seenCloudIdentitiesByRoom[rKey];
         Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
-          const u = LIVE_ROOM_PARTICIPANTS[rKey][pid];
-          if (u.fromCloud && (!activeSet || !activeSet.has(pid))) {
+          if (!activeSet || !activeSet.has(pid)) {
             delete LIVE_ROOM_PARTICIPANTS[rKey][pid];
             autoPromoteNextWaitingStudentIfRoomFree(rKey);
           }
