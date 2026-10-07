@@ -1836,6 +1836,25 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           }
         }}
       />
+
+      {/* LiveKit Classroom Modal for Student */}
+      {isLiveKitModalOpen && liveKitTokenData && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
+          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
+            <IslamicTuitionClassroom
+              roomName={liveKitTokenData.roomName}
+              tokenData={liveKitTokenData}
+              userRole="student"
+              participantName={student?.name || userProfile?.displayName || 'Student'}
+              settings={classroomSettings}
+              onLeave={() => {
+                setIsLiveKitModalOpen(false);
+                setLiveKitTokenData(null);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

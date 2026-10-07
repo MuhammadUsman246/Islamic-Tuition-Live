@@ -147,7 +147,10 @@ export const PermanentSlugRoute: React.FC = () => {
     if (typeof window !== 'undefined') {
       const pathSegments = window.location.pathname.split('/').filter(Boolean);
       if (pathSegments.length >= 2 && (pathSegments[0] === 'c' || pathSegments[0] === 'class')) {
-        setSlug(pathSegments[1]);
+        const raw = pathSegments[1].toLowerCase();
+        const numMatch = raw.match(/\d+/);
+        const resolvedSlug = numMatch ? `tutor-${parseInt(numMatch[0], 10)}` : (raw === 'tutor' ? 'tutor-1' : pathSegments[1]);
+        setSlug(resolvedSlug);
       } else {
         setSlug('tutor-1');
       }

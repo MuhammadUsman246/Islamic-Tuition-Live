@@ -265,8 +265,8 @@ function getTargetRoomIdentifier(baseRoomIdOrSlug: string, tutorId?: string, stu
 
   if (!permRoom) {
     const match = (baseRoomIdOrSlug || tutorId || '').match(/\d+/);
-    if (match) {
-      const num = parseInt(match[0], 10);
+    const num = match ? parseInt(match[0], 10) : (normalizedAlphaNum === 'tutor' ? 1 : null);
+    if (num) {
       permRoom = SERVER_PERMANENT_ROOMS.find(r => r.room_slug === `tutor-${num}`);
       if (!permRoom) {
         const slug = `tutor-${num}`;
@@ -759,7 +759,7 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     }
 
     const cleanSlugInput = roomSlug.toString().replace(/[\s\-_]/g, '').toLowerCase();
-    const permRoom = SERVER_PERMANENT_ROOMS.find(r =>
+    let permRoom = SERVER_PERMANENT_ROOMS.find(r =>
       r.room_slug.toLowerCase() === roomSlug.toLowerCase() ||
       r.room_slug.replace(/[\s\-_]/g, '').toLowerCase() === cleanSlugInput ||
       r.livekit_room_id.replace(/[\s\-_]/g, '').toLowerCase() === cleanSlugInput ||
@@ -767,6 +767,28 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       r.tutor_id.replace(/[\s\-_]/g, '').toLowerCase() === cleanSlugInput ||
       String(r.meeting_id) === cleanSlugInput
     );
+    if (!permRoom) {
+      const match = roomSlug.toString().match(/\d+/);
+      const num = match ? parseInt(match[0], 10) : (cleanSlugInput === 'tutor' ? 1 : null);
+      if (num) {
+        permRoom = SERVER_PERMANENT_ROOMS.find(r => r.room_slug === `tutor-${num}`);
+        if (!permRoom) {
+          permRoom = {
+            id: `perm_room_${num}`,
+            room_slug: `tutor-${num}`,
+            livekit_room_id: `room_tutor_${num}`,
+            tutor_id: `Tutor ${num}`,
+            student_id: `STU-${num.toString().padStart(3, '0')}`,
+            meeting_id: 10000100 + num,
+            passcode: '12345',
+            base_scheduled_time: '15:00:00',
+            timezone: 'Asia/Karachi',
+            createdAt: new Date().toISOString()
+          };
+          SERVER_PERMANENT_ROOMS.push(permRoom);
+        }
+      }
+    }
     if (!permRoom) {
       res.status(404).json({ error: `Classroom Link / Tutor ID "${roomSlug}" not found. Please check your link format (e.g. app.islamictuition.us/class/tutor-1).` });
       return;
