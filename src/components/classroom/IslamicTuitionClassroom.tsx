@@ -1370,13 +1370,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         };
 
-        // Send initial presence heartbeat
+    // Send initial presence heartbeat
+        const currentIdentity = tokenData.participantIdentity || participantName;
         fetch('/api/livekit/rooms/heartbeat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             roomName,
-            identity: tokenData.participantIdentity || participantName,
+            identity: currentIdentity,
             name: participantName,
             role: userRole
           })
@@ -1388,6 +1389,30 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           .then(handleHeartbeatResponse)
           .catch(() => {});
 
+        // Browser Tab Close / Page Navigation Beacon Handler
+        const sendLeaveBeacon = () => {
+          try {
+            const payload = JSON.stringify({
+              roomName,
+              identity: currentIdentity
+            });
+            if (navigator.sendBeacon) {
+              const blob = new Blob([payload], { type: 'application/json' });
+              navigator.sendBeacon('/api/livekit/rooms/leave', blob);
+            } else {
+              fetch('/api/livekit/rooms/leave', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload,
+                keepalive: true
+              }).catch(() => {});
+            }
+          } catch {}
+        };
+
+        window.addEventListener('beforeunload', sendLeaveBeacon);
+        window.addEventListener('pagehide', sendLeaveBeacon);
+
       } catch (err: any) {
         if (!isCancelled) {
           console.warn('[LiveKit Connect Notice]:', err);
@@ -1398,15 +1423,13 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
     initClassroom();
 
-    // Adaptive Presence Heartbeat:
-    // - Active Class (or student waiting in queue): every 10s
-    // - Zero-Load Idle Standby Mode (Tutor alone with 0 students): relaxed to every 20s to minimize server load
+    // Continuous Realtime Heartbeat: every 4s during active classes
     lastHeartbeatSentAtRef.current = Date.now();
     const heartbeatInterval = setInterval(() => {
       const now = Date.now();
       const targetIntervalMs =
-        isIdleStandbyRef.current && waitingQueueRef.current.length === 0 ? 20000 : 10000;
-      if (now - lastHeartbeatSentAtRef.current < targetIntervalMs - 500) {
+        isIdleStandbyRef.current && waitingQueueRef.current.length === 0 ? 12000 : 4000;
+      if (now - lastHeartbeatSentAtRef.current < targetIntervalMs - 300) {
         return;
       }
       lastHeartbeatSentAtRef.current = now;
@@ -1481,7 +1504,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         })
         .catch(() => {});
-    }, 5000);
+    }, 3500);
 
     return () => {
       isCancelled = true;
@@ -1495,15 +1518,24 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         rawMicStreamRef.current = null;
       }
 
-      // Send leave notification
-      fetch('/api/livekit/rooms/leave', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // Send immediate leave beacon on unmount
+      try {
+        const payload = JSON.stringify({
           roomName,
           identity: tokenData.participantIdentity || participantName
-        })
-      }).catch(() => {});
+        });
+        if (navigator.sendBeacon) {
+          const blob = new Blob([payload], { type: 'application/json' });
+          navigator.sendBeacon('/api/livekit/rooms/leave', blob);
+        } else {
+          fetch('/api/livekit/rooms/leave', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch {}
 
       if (roomRef.current) {
         try { roomRef.current.disconnect(); } catch {}

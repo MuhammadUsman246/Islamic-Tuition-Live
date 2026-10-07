@@ -355,20 +355,22 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
 
   const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
   
-  // Authoritative Tutor identification (check role, identity, or permanent room tutor match)
+  // Authoritative Tutor identification (check role, identity, display name, or permanent room tutor match)
   const activeTutor = participantsList.find(p => {
     const r = (p.role || '').toLowerCase();
     const id = (p.identity || '').toLowerCase();
+    const n = (p.name || '').toLowerCase();
     const permTutor = (permRoom?.tutor_id || '').toLowerCase();
-    return r === 'tutor' || id.startsWith('tutor') || (permTutor && id === permTutor);
+    return r === 'tutor' || id.startsWith('tutor') || id.includes('tutor_') || n.startsWith('tutor') || n.includes('ustadh') || (permTutor && (id === permTutor || id.includes(permTutor.replace(/\s+/g, ''))));
   });
 
   // Active Students: must NOT be tutor or admin/supervisor observer, and NOT in recently removed exclusion list
   const activeStudents = participantsList.filter(p => {
     const r = (p.role || '').toLowerCase();
     const id = (p.identity || '').toLowerCase();
+    const n = (p.name || '').toLowerCase();
     const permTutor = (permRoom?.tutor_id || '').toLowerCase();
-    const isTutorUser = r === 'tutor' || id.startsWith('tutor') || (permTutor && id === permTutor);
+    const isTutorUser = r === 'tutor' || id.startsWith('tutor') || id.includes('tutor_') || n.startsWith('tutor') || n.includes('ustadh') || (permTutor && (id === permTutor || id.includes(permTutor.replace(/\s+/g, ''))));
     const isObserver = r === 'admin' || r === 'supervisor' || id.includes('admin_obs') || id.includes('supervisor_obs');
     const isExcluded = EXCLUDED_REMOVED_STUDENTS.has(p.identity) && nowMs < EXCLUDED_REMOVED_STUDENTS.get(p.identity)!;
     
@@ -1484,16 +1486,20 @@ async function syncLiveKitCloudRooms(): Promise<void> {
       const nowMs = Date.now();
       Object.keys(LIVE_ROOM_PARTICIPANTS).forEach((rKey) => {
         const activeSet = seenCloudIdentitiesByRoom[rKey];
+        let didRemoveAny = false;
         Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
           const user = LIVE_ROOM_PARTICIPANTS[rKey][pid];
-          const hasLeftCloud = user.fromCloud && (!activeSet || !activeSet.has(pid));
-          const hasTimedOut = nowMs - user.lastSeen > 20000;
+          const hasLeftCloud = user.fromCloud && (!activeSet || !activeSet.has(pid)) && nowMs - user.lastSeen > 25000;
+          const hasTimedOut = nowMs - user.lastSeen > 45000;
           
           if (hasLeftCloud || hasTimedOut) {
             delete LIVE_ROOM_PARTICIPANTS[rKey][pid];
-            autoPromoteNextWaitingStudentIfRoomFree(rKey);
+            didRemoveAny = true;
           }
         });
+        if (didRemoveAny) {
+          autoPromoteNextWaitingStudentIfRoomFree(rKey);
+        }
       });
 
       lastLiveKitCloudSyncMs = Date.now();
