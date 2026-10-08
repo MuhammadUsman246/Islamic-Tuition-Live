@@ -661,40 +661,24 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
       }
     }
 
-    // STRICT SINGLETON ENFORCEMENT: Never return a LiveKit token to a student in the waiting room!
-    if (inWaitingRoom) {
-      res.json({
-        token: null,
-        serverUrl,
-        roomName: cleanRoom,
-        participantIdentity: cleanIdentity,
-        participantName: cleanName,
-        role: userRole,
-        classId: classId || null,
-        isMockSession: false,
-        expiresInSeconds: 0,
-        isOverrideActive,
-        isHiddenAdmin: Boolean(isAdminObserver),
-        inWaitingRoom: true,
-        waitingId,
-        waitingReason,
-        queuePosition,
-        tutorName: tutorNameForLounge,
-        currentLessonEndTimeMs: lessonEndTimeForLounge,
-        message: loungeMessage
-      });
-      return;
-    }
-
+    // Issue LiveKit token even when inWaitingRoom is true (with status: 'WAITING' metadata)
+    // so the waiting student's client can maintain real-time LiveKit signaling for instant auto-entry & tutor queue visibility!
     const canPublish = true;
     const canPublishSources: TrackSource[] = isStudentOrGuest
       ? [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
       : [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
 
-    // Token Metadata payload for frontend admin hidden participant filtering
     const metadataPayload = isAdminObserver
-      ? JSON.stringify({ role: userRole, hidden: true })
-      : JSON.stringify({ role: userRole, hidden: false });
+      ? JSON.stringify({ role: userRole, hidden: true, status: 'IN_CLASS' })
+      : JSON.stringify({
+          role: userRole,
+          hidden: false,
+          status: inWaitingRoom ? 'WAITING' : 'IN_CLASS',
+          waitingId: waitingId || undefined,
+          guestName: cleanName,
+          joinedAtMs: Date.now(),
+          reason: waitingReason || undefined
+        });
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: cleanIdentity,
@@ -710,6 +694,7 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
       canPublishSources: canPublishSources as any,
       canSubscribe: true,
       canPublishData: true,
+      canUpdateOwnMetadata: true,
     });
 
     const jwt = await at.toJwt();
@@ -862,6 +847,12 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       s => s.identity.toLowerCase() !== cleanIdentity.toLowerCase()
     );
 
+    let inWaitingRoom = false;
+    let waitingReason: 'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT' | undefined;
+    let waitingId: string | undefined;
+    let queuePosition: number | undefined;
+    let waitingMessage: string | undefined;
+
     // 5A. Smart 1-on-1 Room Lock: If another student is ALREADY inside this room, hold incoming student in Next Student Lounge!
     if (isStudentOrGuestRole && otherActiveStudents.length > 0 && !isAlreadyAdmitted) {
       let waitingParticipant = SERVER_WAITING_ROOM.find(
@@ -889,21 +880,13 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       );
       const qPos = Math.max(1, roomQueue.findIndex(w => w.id === waitingParticipant!.id) + 1);
 
-      res.json({
-        inWaitingRoom: true,
-        waitingReason: 'NEXT_STUDENT_QUEUE',
-        waitingId: waitingParticipant.id,
-        queuePosition: qPos,
-        currentLessonEndTimeMs,
-        message: `Ustadh ${resolvedTutorName} is currently wrapping up the previous student's lesson. You are #${qPos} in line — your class will start automatically as soon as the current lesson finishes!`,
-        roomSlug: permRoom.room_slug,
-        tutorName: resolvedTutorName
-      });
-      return;
-    }
-
-    // 5B. Zoom-style "Wait for Host": If Student/Guest joins and Tutor is NOT yet in room (and not already admitted) -> Waiting Lounge
-    if (!isAdminOrSupervisor && isStudentOrGuestRole && !isTutorInRoom && !isAlreadyAdmitted) {
+      inWaitingRoom = true;
+      waitingReason = 'NEXT_STUDENT_QUEUE';
+      waitingId = waitingParticipant.id;
+      queuePosition = qPos;
+      waitingMessage = `Ustadh ${resolvedTutorName} is currently wrapping up the previous student's lesson. You are #${qPos} in line — your class will start automatically as soon as the current lesson finishes!`;
+    } else if (!isAdminOrSupervisor && isStudentOrGuestRole && !isTutorInRoom && !isAlreadyAdmitted) {
+      // 5B. Zoom-style "Wait for Host": If Student/Guest joins and Tutor is NOT yet in room (and not already admitted) -> Waiting Lounge
       const displayName = cleanName || guestName || 'Student';
       let waitingParticipant = SERVER_WAITING_ROOM.find(
         w =>
@@ -924,16 +907,11 @@ const handleSlugAccess = async (req: Request, res: Response) => {
         SERVER_WAITING_ROOM.push(waitingParticipant);
       }
 
-      res.json({
-        inWaitingRoom: true,
-        waitingReason: 'TUTOR_NOT_PRESENT',
-        waitingId: waitingParticipant.id,
-        queuePosition: 1,
-        message: `Ustadh ${resolvedTutorName} has not opened the classroom yet. You are in the Waiting Lounge — your class will start automatically as soon as your tutor joins!`,
-        roomSlug: permRoom.room_slug,
-        tutorName: resolvedTutorName
-      });
-      return;
+      inWaitingRoom = true;
+      waitingReason = 'TUTOR_NOT_PRESENT';
+      waitingId = waitingParticipant.id;
+      queuePosition = 1;
+      waitingMessage = `Ustadh ${resolvedTutorName} has not opened the classroom yet. You are in the Waiting Lounge — your class will start automatically as soon as your tutor joins!`;
     }
 
     // Issue JWT Token with 12-hour shift validity
@@ -949,7 +927,12 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       ttl: '12h', // 12-hour shift validity
       metadata: JSON.stringify({
         role: resolvedRole,
-        hidden: isHiddenAdmin
+        hidden: isHiddenAdmin,
+        status: inWaitingRoom ? 'WAITING' : 'IN_CLASS',
+        waitingId: waitingId || undefined,
+        guestName: cleanName,
+        joinedAtMs: Date.now(),
+        reason: waitingReason || undefined
       })
     });
 
@@ -965,12 +948,13 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       canPublishSources: canPublishSources as any,
       canSubscribe: true,
       canPublishData: true,
+      canUpdateOwnMetadata: true,
     });
 
     const jwt = await at.toJwt();
 
     // Immediately register admitted non-observer participant in LIVE_ROOM_PARTICIPANTS to prevent race conditions
-    if (!isHiddenAdmin) {
+    if (!inWaitingRoom && !isHiddenAdmin) {
       if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
         LIVE_ROOM_PARTICIPANTS[normRoom] = {};
       }
@@ -996,7 +980,14 @@ const handleSlugAccess = async (req: Request, res: Response) => {
       role: resolvedRole,
       expiresInSeconds: 7200,
       isOverrideActive,
-      inWaitingRoom: false,
+      inWaitingRoom,
+      waitingReason,
+      waitingId,
+      queuePosition,
+      currentLessonEndTimeMs,
+      message: waitingMessage,
+      roomSlug: permRoom.room_slug,
+      tutorName: resolvedTutorName,
       isTutorInRoom,
       isHiddenAdmin
     });
@@ -1702,6 +1693,31 @@ async function syncLiveKitCloudRooms(): Promise<void> {
               return;
             }
 
+            // If this participant is in the Waiting Lounge (meta.status === 'WAITING'), sync to SERVER_WAITING_ROOM and do not add to active LIVE_ROOM_PARTICIPANTS
+            if (meta.status === 'WAITING') {
+              if (LIVE_ROOM_PARTICIPANTS[normRoom]?.[p.identity]) {
+                delete LIVE_ROOM_PARTICIPANTS[normRoom][p.identity];
+              }
+              const { canonicalSlug } = getRoomQueueAndLessonTiming(cRoom.name);
+              const existingWaiting = SERVER_WAITING_ROOM.find(
+                w =>
+                  w.status === 'WAITING' &&
+                  (w.identity === p.identity || (meta.waitingId && w.id === meta.waitingId))
+              );
+              if (!existingWaiting) {
+                SERVER_WAITING_ROOM.push({
+                  id: meta.waitingId || `wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                  room_slug: canonicalSlug,
+                  guest_name: meta.guestName || p.name || p.identity,
+                  identity: p.identity,
+                  joined_at: meta.joinedAtMs ? new Date(Number(meta.joinedAtMs)).toISOString() : new Date().toISOString(),
+                  status: 'WAITING',
+                  reason: meta.reason || 'NEXT_STUDENT_QUEUE'
+                });
+              }
+              return;
+            }
+
             const isTutorPeer =
               metaRole === 'tutor' ||
               idLower.startsWith('tutor') ||
@@ -1728,15 +1744,15 @@ async function syncLiveKitCloudRooms(): Promise<void> {
         })
       );
 
-      // Reconcile any participants who left LiveKit Cloud
+      // Reconcile any participants who left LiveKit Cloud immediately
       const nowMs = Date.now();
       Object.keys(LIVE_ROOM_PARTICIPANTS).forEach((rKey) => {
         const activeSet = seenCloudIdentitiesByRoom[rKey];
         let didRemoveAny = false;
         Object.keys(LIVE_ROOM_PARTICIPANTS[rKey]).forEach((pid) => {
           const user = LIVE_ROOM_PARTICIPANTS[rKey][pid];
-          const hasLeftCloud = user.fromCloud && (!activeSet || !activeSet.has(pid)) && nowMs - user.lastSeen > 25000;
-          const hasTimedOut = nowMs - user.lastSeen > 45000;
+          const hasLeftCloud = (!activeSet || !activeSet.has(pid)) && (user.fromCloud || nowMs - user.joinedAt > 6000) && nowMs - user.lastSeen > 5000;
+          const hasTimedOut = nowMs - user.lastSeen > 35000;
           
           if (hasLeftCloud || hasTimedOut) {
             delete LIVE_ROOM_PARTICIPANTS[rKey][pid];

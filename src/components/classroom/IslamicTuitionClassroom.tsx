@@ -54,7 +54,7 @@ import {
   UserRole,
   WaitingRoomParticipant
 } from '../../types';
-import { createOptimizedLiveKitRoom } from '../../services/livekitService';
+import { createOptimizedLiveKitRoom, executeLiveKitCloudRoomAdminAction } from '../../services/livekitService';
 import {
   ChatSafetySettings,
   DEFAULT_CHAT_SAFETY_SETTINGS,
@@ -434,11 +434,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Modals
   const [showDeviceSettingsModal, setShowDeviceSettingsModal] = useState<boolean>(false);
   const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState<boolean>(false);
+  const [pendingHostConfirm, setPendingHostConfirm] = useState<{
+    type: 'REMOVE_STUDENT' | 'REMOVE_TUTOR' | 'END_FOR_ALL' | 'FINISH_LESSON';
+    targetId?: string;
+    targetName?: string;
+  } | null>(null);
 
   // Tutor Waiting Room Queue (Live Badge, Since Time, Admit & Keep in Waiting actions)
   const [waitingQueue, setWaitingQueue] = useState<WaitingRoomParticipant[]>([]);
   const waitingQueueRef = useRef<WaitingRoomParticipant[]>([]);
+  const serverWaitingListRef = useRef<WaitingRoomParticipant[]>([]);
+  const livekitWaitingListRef = useRef<WaitingRoomParticipant[]>([]);
   const [acknowledgedWaitingIds, setAcknowledgedWaitingIds] = useState<Set<string>>(new Set());
+  const acknowledgedWaitingIdsRef = useRef<Set<string>>(new Set());
   const [waitingTicker, setWaitingTicker] = useState<number>(0);
   const [showWaitingRoomModal, setShowWaitingRoomModal] = useState<boolean>(false);
   const notifiedWaitingIdsRef = useRef<Set<string>>(new Set());
@@ -449,6 +457,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     waitingQueueRef.current = waitingQueue;
   }, [waitingQueue]);
 
+  useEffect(() => {
+    acknowledgedWaitingIdsRef.current = acknowledgedWaitingIds;
+  }, [acknowledgedWaitingIds]);
+
   // Active Token Data state (updates with valid LiveKit JWT upon admission from Waiting Room)
   const [activeTokenData, setActiveTokenData] = useState<LiveKitRoomTokenResponse>(tokenData);
 
@@ -456,10 +468,30 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const [isStudentInWaitingLounge, setIsStudentInWaitingLounge] = useState<boolean>(
     Boolean(!isTutor && (tokenData.inWaitingRoom || !tokenData.token))
   );
+  const isStudentInWaitingLoungeRef = useRef<boolean>(
+    Boolean(!isTutor && (tokenData.inWaitingRoom || !tokenData.token))
+  );
+  const waitingLoungeJoinedAtRef = useRef<string>(new Date().toISOString());
+  const isAdmittedExplicitlyRef = useRef<boolean>(false);
+  const hasEnteredActiveClassroomRef = useRef<boolean>(
+    Boolean(!isTutor && !tokenData.inWaitingRoom && tokenData.token)
+  );
+
+  useEffect(() => {
+    isStudentInWaitingLoungeRef.current = isStudentInWaitingLounge;
+  }, [isStudentInWaitingLounge]);
+
   const [studentWaitingId, setStudentWaitingId] = useState<string | null>(tokenData.waitingId || null);
   const [studentWaitingReason, setStudentWaitingReason] = useState<'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT'>(
     (tokenData as any).waitingReason || 'NEXT_STUDENT_QUEUE'
   );
+  const studentWaitingReasonRef = useRef<'NEXT_STUDENT_QUEUE' | 'TUTOR_NOT_PRESENT'>(
+    (tokenData as any).waitingReason || 'NEXT_STUDENT_QUEUE'
+  );
+  useEffect(() => {
+    studentWaitingReasonRef.current = studentWaitingReason;
+  }, [studentWaitingReason]);
+
   const [studentQueuePosition, setStudentQueuePosition] = useState<number>(tokenData.queuePosition || 1);
   const [loungeTutorName, setLoungeTutorName] = useState<string>(() => {
     const raw = tokenData.tutorName || (roomName.match(/\d+/) ? `Tutor ${roomName.match(/\d+/)![0]}` : 'Tutor');
@@ -512,10 +544,31 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, []);
 
-  // Sync incoming waitingList for Tutor without any blocking popup modal (plays gentle chime once per new waiting student)
-  const updateTutorWaitingQueue = useCallback((list: WaitingRoomParticipant[]) => {
-    setWaitingQueue(list);
-    list.forEach((w) => {
+  // Merge server waiting list + LiveKit real-time waiting peers and update Tutor Waiting Queue
+  const refreshCombinedWaitingQueue = useCallback(() => {
+    const combinedMap = new Map<string, WaitingRoomParticipant>();
+    serverWaitingListRef.current.forEach((w) => {
+      const key = (w.guest_name || w.id || '').toLowerCase().trim();
+      if (key) combinedMap.set(key, w);
+    });
+    livekitWaitingListRef.current.forEach((lw) => {
+      const key = (lw.guest_name || lw.id || '').toLowerCase().trim();
+      if (key && !combinedMap.has(key)) {
+        combinedMap.set(key, lw);
+      } else if (key && combinedMap.has(key)) {
+        const existing = combinedMap.get(key)!;
+        combinedMap.set(key, {
+          ...existing,
+          ...(lw as any).identity ? { identity: (lw as any).identity } : {}
+        } as any);
+      }
+    });
+    const merged = Array.from(combinedMap.values()).map((item, idx) => ({
+      ...item,
+      queue_position: idx + 1
+    }));
+    setWaitingQueue(merged);
+    merged.forEach((w) => {
       if ((w as any).tutorAcknowledged) {
         setAcknowledgedWaitingIds(prev => {
           if (prev.has(w.id)) return prev;
@@ -524,12 +577,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           return next;
         });
       }
-      if (!notifiedWaitingIdsRef.current.has(w.id)) {
-        notifiedWaitingIdsRef.current.add(w.id);
+      const notifyKey = (w.guest_name || w.id || '').toLowerCase();
+      if (notifyKey && !notifiedWaitingIdsRef.current.has(notifyKey)) {
+        notifiedWaitingIdsRef.current.add(notifyKey);
         playStudioConnectionChime('connect');
       }
     });
   }, []);
+
+  // Sync incoming waitingList from Server for Tutor without any blocking popup modal
+  const updateTutorWaitingQueue = useCallback((list: WaitingRoomParticipant[]) => {
+    serverWaitingListRef.current = list;
+    refreshCombinedWaitingQueue();
+  }, [refreshCombinedWaitingQueue]);
 
   // Student Next Student Lounge: Local 1-second Remaining Time Countdown (Zero extra server/Firebase load)
   useEffect(() => {
@@ -543,18 +603,28 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     return () => clearInterval(timer);
   }, [isStudentInWaitingLounge, loungeEndTimeMs]);
 
-  // Student Next Student Lounge: Poll every 2.5s for automatic admittance when current student finishes or Tutor allows 2nd sibling in
+  // Student Next Student Lounge: Poll every 1.8s for automatic admittance when current student finishes or Tutor admits
   useEffect(() => {
-    if (!isStudentInWaitingLounge || !studentWaitingId) return;
+    if (!isStudentInWaitingLounge) return;
     let cancelled = false;
 
     const pollStudentLoungeStatus = async () => {
+      // 1. Real-time LiveKit room check: if connected to LiveKit, re-evaluate remote participants for instant auto-promotion!
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        syncParticipantsState(roomRef.current);
+        if (!isStudentInWaitingLoungeRef.current) return;
+      }
+
+      // 2. Server queue & admittance check (when backend API is reachable)
       try {
-        const res = await fetch(`/api/livekit/waiting-room?waitingId=${encodeURIComponent(studentWaitingId)}`);
+        const queryParam = studentWaitingId
+          ? `waitingId=${encodeURIComponent(studentWaitingId)}`
+          : `roomSlug=${encodeURIComponent(roomName)}`;
+        const res = await fetch(`/api/livekit/waiting-room?${queryParam}`);
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
-          if (cancelled) return;
+          if (cancelled || !isStudentInWaitingLoungeRef.current) return;
           if (typeof data.queuePosition === 'number') setStudentQueuePosition(data.queuePosition);
           if (data.tutorName) {
             const m = `${data.tutorName} ${roomName}`.match(/(\d+)/);
@@ -571,7 +641,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             setStudentWaitingReason('NEXT_STUDENT_QUEUE');
           }
 
-          if (data.participant?.status === 'ADMITTED' || data.token) {
+          const isAdmittedByServer =
+            data.participant?.status === 'ADMITTED' ||
+            Boolean(data.token) ||
+            (typeof data.activeStudentCount === 'number' &&
+              data.activeStudentCount === 0 &&
+              (studentWaitingReasonRef.current === 'NEXT_STUDENT_QUEUE' || Boolean(data.tutorPresent)));
+
+          if (isAdmittedByServer) {
+            isAdmittedExplicitlyRef.current = true;
+            if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+              await promoteStudentFromWaitingLoungeRef.current?.(roomRef.current);
+              return;
+            }
             handleResetMicTest();
             if (data.token) {
               setActiveTokenData(prev => ({
@@ -581,9 +663,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 roomName: data.roomName || prev.roomName,
                 inWaitingRoom: false
               }));
+              isStudentInWaitingLoungeRef.current = false;
               setIsStudentInWaitingLounge(false);
             } else {
-              // Fetch newly issued admitted token
               try {
                 const tokenRes = await fetch('/api/livekit/token', {
                   method: 'POST',
@@ -605,6 +687,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     roomName: tokenJson.roomName || prev.roomName,
                     inWaitingRoom: false
                   }));
+                  isStudentInWaitingLoungeRef.current = false;
                   setIsStudentInWaitingLounge(false);
                 }
               } catch (e) {
@@ -618,12 +701,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       } catch {}
     };
 
-    const interval = setInterval(pollStudentLoungeStatus, 2500);
+    const interval = setInterval(pollStudentLoungeStatus, 1800);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [isStudentInWaitingLounge, studentWaitingId]);
+  }, [isStudentInWaitingLounge, studentWaitingId, roomName]);
 
   // Chronometer interval
   useEffect(() => {
@@ -664,6 +747,17 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   };
 
+  // Helper function to check if participant is currently holding in the Waiting Lounge
+  const isParticipantInWaitingLounge = (p: Participant): boolean => {
+    try {
+      if (!p.metadata) return false;
+      const parsed = JSON.parse(p.metadata);
+      return parsed.status === 'WAITING';
+    } catch {
+      return false;
+    }
+  };
+
   // Helper function to resolve accurate participant role from metadata, cache, or identity/name
   const resolveRemoteParticipantRole = useCallback((p: Participant): string => {
     const cached = peerCustomNamesRef.current[p.identity];
@@ -697,6 +791,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
   // Attach and play a remote audio track reliably with zero duplicate elements and instant low-latency playback
   const attachRemoteAudioTrack = useCallback((track: RemoteTrack, room?: Room) => {
+    if (isStudentInWaitingLoungeRef.current) return;
     if (track.kind !== Track.Kind.Audio || !remoteAudioContainerRef.current) return;
 
     const trackId = track.sid || `audio_${Math.random()}`;
@@ -725,13 +820,59 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, []);
 
-  // Synchronize visible participants list excluding hidden admins
+  // Synchronize visible participants list excluding hidden admins & waiting room students
   const syncParticipantsState = useCallback((room: Room) => {
+    // If local student is in the Waiting Lounge, do not attach remote audio and check if classroom is now free!
+    if (isStudentInWaitingLoungeRef.current && !isTutor && !isAdminOrSupervisor) {
+      if (remoteAudioContainerRef.current) {
+        remoteAudioContainerRef.current.innerHTML = '';
+      }
+      const remotePeers = Array.from(room.remoteParticipants.values());
+      const otherActiveStudents = remotePeers.filter((p) => {
+        if (isParticipantHiddenAdmin(p) || isParticipantInWaitingLounge(p)) return false;
+        const r = resolveRemoteParticipantRole(p);
+        return r === 'Student' || r === 'Guest';
+      });
+      const activeTutors = remotePeers.filter((p) => {
+        if (isParticipantHiddenAdmin(p)) return false;
+        return resolveRemoteParticipantRole(p) === 'Tutor';
+      });
+
+      // Compute our queue position among any LiveKit waiting peers
+      const otherWaitingStudents = remotePeers.filter((p) => !isParticipantHiddenAdmin(p) && isParticipantInWaitingLounge(p));
+      const myJoinedMs = new Date(waitingLoungeJoinedAtRef.current).getTime() || Date.now();
+      let earlierWaiters = 0;
+      otherWaitingStudents.forEach((wp) => {
+        try {
+          const meta = wp.metadata ? JSON.parse(wp.metadata) : {};
+          const wMs = meta.joinedAt ? new Date(meta.joinedAt).getTime() : Date.now();
+          if (wMs < myJoinedMs) earlierWaiters += 1;
+        } catch {}
+      });
+      setStudentQueuePosition(earlierWaiters + 1);
+
+      // Auto-enter classroom immediately as soon as the previous student leaves and classroom is empty!
+      if (
+        otherActiveStudents.length === 0 &&
+        earlierWaiters === 0 &&
+        (studentWaitingReasonRef.current === 'NEXT_STUDENT_QUEUE' || activeTutors.length > 0)
+      ) {
+        setTimeout(() => {
+          if (isStudentInWaitingLoungeRef.current && roomRef.current) {
+            promoteStudentFromWaitingLoungeRef.current?.(roomRef.current);
+          }
+        }, 80);
+      }
+      return;
+    }
+
     const visibleList: ParticipantInfo[] = [];
+    const livekitWaiters: WaitingRoomParticipant[] = [];
 
     // Local participant
     if (room.localParticipant) {
       const isHidden = isParticipantHiddenAdmin(room.localParticipant);
+      const isWaiting = isParticipantInWaitingLounge(room.localParticipant) || isStudentInWaitingLoungeRef.current;
       const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
       const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
       const screenPub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
@@ -742,7 +883,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       setIsCameraActive(localHasCam);
       setLocalAudioLevel(Math.min(100, Math.round((room.localParticipant.audioLevel || 0) * 100)));
 
-      if (!isHidden) {
+      if (!isHidden && !isWaiting) {
         visibleList.push({
           id: room.localParticipant.identity,
           name: participantName || room.localParticipant.identity,
@@ -761,6 +902,32 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     let foundScreenShare: string | null = null;
     let foundCameraShare: string | null = null;
     room.remoteParticipants.forEach((p) => {
+      if (isParticipantHiddenAdmin(p)) return;
+
+      // If remote participant is in Waiting Lounge, add to Tutor's Waiting Queue and do NOT show in active class!
+      if (isParticipantInWaitingLounge(p)) {
+        let meta: any = {};
+        try {
+          if (p.metadata) meta = JSON.parse(p.metadata);
+        } catch {}
+        const pDisplayName = resolveRemoteParticipantName(p);
+        const wId = meta.waitingId || `wait_lk_${p.identity}`;
+        const joinedAtStr = meta.joinedAt || new Date().toISOString();
+        const joinedMs = new Date(joinedAtStr).getTime();
+        const waitingSecs = !isNaN(joinedMs) ? Math.max(1, Math.floor((Date.now() - joinedMs) / 1000)) : 1;
+        livekitWaiters.push({
+          id: wId,
+          identity: p.identity,
+          room_slug: roomName,
+          guest_name: pDisplayName,
+          status: 'WAITING',
+          joined_at: joinedAtStr,
+          waiting_seconds: waitingSecs,
+          tutorAcknowledged: Boolean(meta.tutorAcknowledged || acknowledgedWaitingIdsRef.current.has(wId))
+        } as any);
+        return;
+      }
+
       // Ensure any already-published remote audio tracks are attached immediately
       p.audioTrackPublications.forEach((pub) => {
         if (pub.track && pub.isSubscribed) {
@@ -768,46 +935,56 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         }
       });
 
-      if (!isParticipantHiddenAdmin(p)) {
-        const pRole = resolveRemoteParticipantRole(p);
-        const pDisplayName = resolveRemoteParticipantName(p);
+      const pRole = resolveRemoteParticipantRole(p);
+      const pDisplayName = resolveRemoteParticipantName(p);
 
-        const micPub = p.getTrackPublication(Track.Source.Microphone);
-        const camPub = p.getTrackPublication(Track.Source.Camera);
-        const screenPub = p.getTrackPublication(Track.Source.ScreenShare);
+      const micPub = p.getTrackPublication(Track.Source.Microphone);
+      const camPub = p.getTrackPublication(Track.Source.Camera);
+      const screenPub = p.getTrackPublication(Track.Source.ScreenShare);
 
-        if (screenPub?.track && !screenPub.isMuted) {
-          foundScreenShare = pDisplayName;
-        }
-        if (camPub?.track && !camPub.isMuted) {
-          foundCameraShare = pDisplayName;
-        }
-
-        visibleList.push({
-          id: p.identity,
-          name: pDisplayName,
-          role: pRole,
-          isSpeaking: p.isSpeaking,
-          isMuted:
-            peerMuteOverridesRef.current[p.identity.toLowerCase()] !== undefined
-              ? peerMuteOverridesRef.current[p.identity.toLowerCase()]
-              : peerMuteOverridesRef.current[pDisplayName.toLowerCase()] !== undefined
-                ? peerMuteOverridesRef.current[pDisplayName.toLowerCase()]
-                : micPub
-                  ? micPub.isMuted
-                  : true,
-          hasAudioTrack: Boolean(micPub?.track),
-          hasVideoTrack: Boolean(camPub?.track && !camPub.isMuted),
-          isScreenSharing: Boolean(screenPub?.track && !screenPub.isMuted),
-          audioLevel: p.audioLevel
-        });
+      if (screenPub?.track && !screenPub.isMuted) {
+        foundScreenShare = pDisplayName;
       }
+      if (camPub?.track && !camPub.isMuted) {
+        foundCameraShare = pDisplayName;
+      }
+
+      visibleList.push({
+        id: p.identity,
+        name: pDisplayName,
+        role: pRole,
+        isSpeaking: p.isSpeaking,
+        isMuted:
+          peerMuteOverridesRef.current[p.identity.toLowerCase()] !== undefined
+            ? peerMuteOverridesRef.current[p.identity.toLowerCase()]
+            : peerMuteOverridesRef.current[pDisplayName.toLowerCase()] !== undefined
+              ? peerMuteOverridesRef.current[pDisplayName.toLowerCase()]
+              : micPub
+                ? micPub.isMuted
+                : true,
+        hasAudioTrack: Boolean(micPub?.track),
+        hasVideoTrack: Boolean(camPub?.track && !camPub.isMuted),
+        isScreenSharing: Boolean(screenPub?.track && !screenPub.isMuted),
+        audioLevel: p.audioLevel
+      });
     });
 
-    // Also include any active heartbeat peers not yet reflected in visibleList (e.g. during initial WebRTC handshake)
+    if (isTutor) {
+      livekitWaitingListRef.current = livekitWaiters;
+      refreshCombinedWaitingQueue();
+    }
+
+    // Also include any active heartbeat peers not yet reflected in visibleList (excluding anyone in waiting queue)
     serverHeartbeatPeersRef.current.forEach((hbPeer) => {
       const localId = room.localParticipant?.identity || tokenData.participantIdentity || participantName;
       if (hbPeer.identity === localId || hbPeer.name === participantName) return;
+      const isWaitingPeer = livekitWaiters.some(
+        w => (w as any).identity === hbPeer.identity || w.guest_name.toLowerCase() === (hbPeer.name || '').toLowerCase()
+      ) || serverWaitingListRef.current.some(
+        w => (w as any).identity === hbPeer.identity || w.guest_name.toLowerCase() === (hbPeer.name || '').toLowerCase()
+      );
+      if (isWaitingPeer) return;
+
       const alreadyListed = visibleList.some(v => v.id === hbPeer.identity || v.name.toLowerCase() === hbPeer.name.toLowerCase());
       if (!alreadyListed) {
         const normRole = hbPeer.role?.toLowerCase() === 'tutor' ? 'Tutor' : hbPeer.role?.toLowerCase() === 'admin' ? 'Admin' : hbPeer.role?.toLowerCase() === 'supervisor' ? 'Supervisor' : 'Student';
@@ -852,7 +1029,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       setIsTimerRunning(false);
       setElapsedSeconds(0);
     }
-  }, [participantName, userRole, settings?.recordingEnabled, attachRemoteAudioTrack, resolveRemoteParticipantRole, resolveRemoteParticipantName, tokenData.participantIdentity]);
+  }, [participantName, userRole, isTutor, isAdminOrSupervisor, roomName, settings?.recordingEnabled, attachRemoteAudioTrack, resolveRemoteParticipantRole, resolveRemoteParticipantName, tokenData.participantIdentity, refreshCombinedWaitingQueue]);
+
+  const promoteStudentFromWaitingLoungeRef = useRef<((room?: Room | null) => Promise<void>) | null>(null);
 
   const localScreenStreamRef = useRef<MediaStream | null>(null);
 
@@ -1021,6 +1200,80 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     }
   }, [studioNoiseFilter, enableAutoGain, syncParticipantsState]);
 
+  // Promote a Waiting Lounge Student into the Active Classroom in 0ms without reconnecting the room
+  const promoteStudentFromWaitingLoungeToClass = useCallback(async (room?: Room | null) => {
+    if (!isStudentInWaitingLoungeRef.current) return;
+    isStudentInWaitingLoungeRef.current = false;
+    hasEnteredActiveClassroomRef.current = true;
+    setIsStudentInWaitingLounge(false);
+    handleResetMicTest();
+
+    const activeRoom = room || roomRef.current;
+    if (activeRoom && activeRoom.state === ConnectionState.Connected && activeRoom.localParticipant) {
+      try {
+        await activeRoom.localParticipant.setMetadata(
+          JSON.stringify({
+            role: userRole,
+            status: 'ACTIVE'
+          })
+        );
+      } catch {}
+
+      try {
+        const admitHello = new TextEncoder().encode(
+          JSON.stringify({
+            type: 'WAITING_ROOM_ADMITTED_SELF',
+            identity: activeRoom.localParticipant.identity || tokenData.participantIdentity || participantName,
+            name: participantName,
+            waitingId: studentWaitingId
+          })
+        );
+        activeRoom.localParticipant.publishData(admitHello as any, { reliable: true }).catch(() => {});
+
+        const helloPayload = new TextEncoder().encode(
+          JSON.stringify({
+            type: 'PRESENCE_HELLO',
+            identity: activeRoom.localParticipant.identity || tokenData.participantIdentity || participantName,
+            name: participantName,
+            role: 'Student'
+          })
+        );
+        activeRoom.localParticipant.publishData(helloPayload as any, { reliable: true }).catch(() => {});
+      } catch {}
+
+      playStudioConnectionChime('connect');
+      activeRoom.startAudio().catch(() => {});
+      await publishCleanMicrophoneTrack(
+        activeRoom,
+        selectedAudioInput || undefined,
+        studioNoiseFilter,
+        enableAutoGain
+      );
+      syncParticipantsState(activeRoom);
+
+      // Notify any already-present Tutor with chime + toast upon entering classroom
+      activeRoom.remoteParticipants.forEach((existingPeer) => {
+        if (
+          !isParticipantHiddenAdmin(existingPeer) &&
+          !isParticipantInWaitingLounge(existingPeer) &&
+          !notifiedPeersRef.current.has(existingPeer.identity)
+        ) {
+          notifiedPeersRef.current.add(existingPeer.identity);
+          const peerRole = resolveRemoteParticipantRole(existingPeer);
+          const peerName = resolveRemoteParticipantName(existingPeer);
+          setTimeout(() => {
+            playStudioConnectionChime('peer_join');
+            triggerPresenceToast(peerName, peerRole, 'join');
+          }, 250);
+        }
+      });
+    }
+  }, [userRole, tokenData.participantIdentity, participantName, studentWaitingId, publishCleanMicrophoneTrack, selectedAudioInput, studioNoiseFilter, enableAutoGain, syncParticipantsState, resolveRemoteParticipantRole, resolveRemoteParticipantName]);
+
+  useEffect(() => {
+    promoteStudentFromWaitingLoungeRef.current = promoteStudentFromWaitingLoungeToClass;
+  }, [promoteStudentFromWaitingLoungeToClass]);
+
   // Continuous Realtime Tutor Waiting Room Queue Sync:
   // Polls /api/livekit/waiting-room every 3s so the tutor immediately sees waiting students and since-times
   useEffect(() => {
@@ -1040,20 +1293,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       } catch (e) {
         // Non-fatal
       }
+      if (!isCancelled && roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        syncParticipantsState(roomRef.current);
+      }
     };
 
     pollWaitingRoom();
-    const interval = setInterval(pollWaitingRoom, 3000);
+    const interval = setInterval(pollWaitingRoom, 2500);
     return () => {
       isCancelled = true;
       clearInterval(interval);
     };
-  }, [isTutor, roomName, updateTutorWaitingQueue]);
+  }, [isTutor, roomName, updateTutorWaitingQueue, syncParticipantsState]);
 
-  // Connect to LiveKit Room (Stable lifecycle - never disconnects on mute/unmute or device switch)
-  // Holds off connecting if Student is waiting in the Next Student Lounge!
+  // Connect to LiveKit Room (Stable lifecycle - stays connected even in Waiting Lounge for 0ms auto-entry & tutor queue visibility)
   useEffect(() => {
-    if (isStudentInWaitingLounge) return;
     let isCancelled = false;
 
     async function initClassroom() {
@@ -1097,7 +1351,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               room.state === ConnectionState.Connected &&
               room.localParticipant &&
               !isAdminOrSupervisor &&
-              !isParticipantHiddenAdmin(room.localParticipant)
+              !isParticipantHiddenAdmin(room.localParticipant) &&
+              !isStudentInWaitingLoungeRef.current
             ) {
               const helloPayload = new TextEncoder().encode(JSON.stringify({
                 type: 'PRESENCE_HELLO',
@@ -1110,25 +1365,65 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           } catch {}
         };
 
+        const broadcastWaitingLoungePresence = () => {
+          try {
+            if (
+              room.state === ConnectionState.Connected &&
+              room.localParticipant &&
+              isStudentInWaitingLoungeRef.current &&
+              !isTutor &&
+              !isAdminOrSupervisor
+            ) {
+              const wId = studentWaitingId || `wait_lk_${room.localParticipant.identity}`;
+              const waitPayload = new TextEncoder().encode(JSON.stringify({
+                type: 'WAITING_ROOM_JOIN',
+                waitingId: wId,
+                identity: room.localParticipant.identity || tokenData.participantIdentity || participantName,
+                name: participantName,
+                joinedAt: waitingLoungeJoinedAtRef.current
+              }));
+              room.localParticipant.publishData(waitPayload as any, { reliable: true }).catch(() => {});
+            }
+          } catch {}
+        };
+
         room.on(RoomEvent.Connected, () => {
           if (isCancelled) return;
 
-          // STRICT SINGLETON ENFORCEMENT GUARD:
-          // If this participant is a student or guest, ensure no OTHER student is already present in this 1-on-1 session!
+          // STRICT SINGLETON ENFORCEMENT & WAITING LOUNGE COORDINATION:
+          // If this participant is a student or guest, check if another active student is already in this 1-on-1 session!
           if (!isTutor && userRole !== 'admin' && userRole !== 'supervisor') {
-            const existingOtherStudents = Array.from(room.remoteParticipants.values()).filter((p) => {
-              if (isParticipantHiddenAdmin(p)) return false;
+            const existingOtherActiveStudents = Array.from(room.remoteParticipants.values()).filter((p) => {
+              if (isParticipantHiddenAdmin(p) || isParticipantInWaitingLounge(p)) return false;
               const pRole = resolveRemoteParticipantRole(p);
               return pRole === 'Student' || pRole === 'Guest';
             });
+            const activeTutorsInRoom = Array.from(room.remoteParticipants.values()).filter((p) => {
+              if (isParticipantHiddenAdmin(p)) return false;
+              return resolveRemoteParticipantRole(p) === 'Tutor';
+            });
 
-            if (existingOtherStudents.length > 0) {
-              console.warn('[Classroom Singleton Guard] Another student is already active in this room. Redirecting to Waiting Room.');
-              isCancelled = true;
-              try { room.disconnect(); } catch {}
+            if (existingOtherActiveStudents.length > 0 && !isAdmittedExplicitlyRef.current) {
+              console.warn('[Classroom Singleton Guard] Another student is active in this room. Holding in Waiting Lounge with live signaling.');
+              isStudentInWaitingLoungeRef.current = true;
+              hasEnteredActiveClassroomRef.current = false;
               setIsStudentInWaitingLounge(true);
               setStudentWaitingReason('NEXT_STUDENT_QUEUE');
-              // Register into waiting queue on the server to get position & countdown
+              studentWaitingReasonRef.current = 'NEXT_STUDENT_QUEUE';
+
+              const wId = studentWaitingId || `wait_lk_${room.localParticipant.identity}`;
+              if (!studentWaitingId) setStudentWaitingId(wId);
+
+              room.localParticipant.setMetadata(JSON.stringify({
+                role: userRole,
+                status: 'WAITING',
+                joinedAt: waitingLoungeJoinedAtRef.current,
+                waitingId: wId
+              })).catch(() => {});
+
+              broadcastWaitingLoungePresence();
+
+              // Also register on the backend server when reachable to sync queue position & countdown
               fetch('/api/livekit/token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1146,7 +1441,41 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   if (data.currentLessonEndTimeMs) setLoungeEndTimeMs(data.currentLessonEndTimeMs);
                 })
                 .catch(() => {});
+
+              setConnectionStatus(ConnectionState.Connected);
+              syncParticipantsState(room);
               return;
+            }
+
+            // If student was initially marked inWaitingRoom, check if the room is actually empty now!
+            if (isStudentInWaitingLoungeRef.current) {
+              if (
+                existingOtherActiveStudents.length === 0 &&
+                (studentWaitingReasonRef.current === 'NEXT_STUDENT_QUEUE' || activeTutorsInRoom.length > 0)
+              ) {
+                isStudentInWaitingLoungeRef.current = false;
+                hasEnteredActiveClassroomRef.current = true;
+                setIsStudentInWaitingLounge(false);
+                room.localParticipant.setMetadata(JSON.stringify({
+                  role: userRole,
+                  status: 'ACTIVE'
+                })).catch(() => {});
+              } else {
+                const wId = studentWaitingId || `wait_lk_${room.localParticipant.identity}`;
+                if (!studentWaitingId) setStudentWaitingId(wId);
+                room.localParticipant.setMetadata(JSON.stringify({
+                  role: userRole,
+                  status: 'WAITING',
+                  joinedAt: waitingLoungeJoinedAtRef.current,
+                  waitingId: wId
+                })).catch(() => {});
+                broadcastWaitingLoungePresence();
+                setConnectionStatus(ConnectionState.Connected);
+                syncParticipantsState(room);
+                return;
+              }
+            } else {
+              hasEnteredActiveClassroomRef.current = true;
             }
           }
 
@@ -1158,7 +1487,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
           // If a student or tutor is ALREADY in the room when we connect, notify immediately with chime + toast!
           room.remoteParticipants.forEach((existingPeer) => {
-            if (!isParticipantHiddenAdmin(existingPeer) && !notifiedPeersRef.current.has(existingPeer.identity)) {
+            if (
+              !isParticipantHiddenAdmin(existingPeer) &&
+              !isParticipantInWaitingLounge(existingPeer) &&
+              !notifiedPeersRef.current.has(existingPeer.identity)
+            ) {
               notifiedPeersRef.current.add(existingPeer.identity);
               const peerRole = resolveRemoteParticipantRole(existingPeer);
               const peerName = resolveRemoteParticipantName(existingPeer);
@@ -1174,32 +1507,63 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
           if (isCancelled) return;
+          if (isStudentInWaitingLoungeRef.current) {
+            setTimeout(() => {
+              if (!isCancelled && isStudentInWaitingLoungeRef.current) {
+                broadcastWaitingLoungePresence();
+                syncParticipantsState(room);
+              }
+            }, 250);
+            syncParticipantsState(room);
+            return;
+          }
+
           if (!isParticipantHiddenAdmin(participant)) {
+            if (isParticipantInWaitingLounge(participant)) {
+              syncParticipantsState(room);
+              return;
+            }
             const pRole = resolveRemoteParticipantRole(participant);
             const pName = resolveRemoteParticipantName(participant);
-            if (!notifiedPeersRef.current.has(participant.identity)) {
-              notifiedPeersRef.current.add(participant.identity);
-              playStudioConnectionChime('peer_join');
-              triggerPresenceToast(pName, pRole, 'join');
-            }
-            // Reply with our PRESENCE_HELLO so the joining peer immediately gets our exact display name & role
+            // Delay student join toast by 400ms on Tutor/Student screen in case incoming student transitions to WAITING metadata
             setTimeout(() => {
-              if (!isCancelled) broadcastPresenceHello();
-            }, 200);
+              if (isCancelled || !room.remoteParticipants.has(participant.identity)) return;
+              if (isParticipantInWaitingLounge(participant)) {
+                syncParticipantsState(room);
+                return;
+              }
+              if (!notifiedPeersRef.current.has(participant.identity)) {
+                notifiedPeersRef.current.add(participant.identity);
+                playStudioConnectionChime('peer_join');
+                triggerPresenceToast(pName, pRole, 'join');
+              }
+              broadcastPresenceHello();
+              syncParticipantsState(room);
+            }, 350);
           }
           syncParticipantsState(room);
         });
 
         room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
           if (isCancelled) return;
-          if (!isParticipantHiddenAdmin(participant)) {
+          livekitWaitingListRef.current = livekitWaitingListRef.current.filter(
+            (w) => (w as any).identity !== participant.identity && w.guest_name !== resolveRemoteParticipantName(participant)
+          );
+          if (isTutor) {
+            refreshCombinedWaitingQueue();
+          }
+
+          if (!isParticipantHiddenAdmin(participant) && !isParticipantInWaitingLounge(participant)) {
             const pRole = resolveRemoteParticipantRole(participant);
             const pName = resolveRemoteParticipantName(participant);
+            const wasNotified = notifiedPeersRef.current.has(participant.identity);
             notifiedPeersRef.current.delete(participant.identity);
             delete peerCustomNamesRef.current[participant.identity];
             serverHeartbeatPeersRef.current = serverHeartbeatPeersRef.current.filter(hp => hp.identity !== participant.identity);
-            playStudioConnectionChime('peer_leave');
-            triggerPresenceToast(pName, pRole, 'leave');
+            if (!isStudentInWaitingLoungeRef.current && wasNotified) {
+              playStudioConnectionChime('peer_leave');
+              triggerPresenceToast(pName, pRole, 'leave');
+            }
           }
           syncParticipantsState(room);
         });
@@ -1252,7 +1616,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
           if (isCancelled) return;
-          if (track.kind === Track.Kind.Audio) {
+          if (track.kind === Track.Kind.Audio && !isStudentInWaitingLoungeRef.current) {
             attachRemoteAudioTrack(track, room);
           }
           syncParticipantsState(room);
@@ -1272,6 +1636,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             const str = new TextDecoder().decode(payload);
             const msgObj = JSON.parse(str);
             if (msgObj.type === 'CHAT') {
+              if (isStudentInWaitingLoungeRef.current) return;
               const senderRole = msgObj.role || (participant ? resolveRemoteParticipantRole(participant) : 'Participant');
               let senderDisplay = msgObj.sender || participant?.name || 'Peer';
               if (senderRole === 'Tutor' && (userRole === 'student' || userRole === 'parent' || userRole === 'guest')) {
@@ -1286,6 +1651,67 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               }]);
               setUnreadChatCount(prev => prev + 1);
+            } else if (msgObj.type === 'WAITING_ROOM_JOIN') {
+              if (isTutor) {
+                const wId = msgObj.waitingId || `wait_lk_${msgObj.identity || participant?.identity || Date.now()}`;
+                const wName = msgObj.name || participant?.name || msgObj.identity || 'Student';
+                const joinedAtStr = msgObj.joinedAt || new Date().toISOString();
+                const exists = livekitWaitingListRef.current.some(
+                  (w) => w.id === wId || w.guest_name.toLowerCase() === wName.toLowerCase()
+                );
+                if (!exists) {
+                  livekitWaitingListRef.current = [
+                    ...livekitWaitingListRef.current,
+                    {
+                      id: wId,
+                      identity: msgObj.identity || participant?.identity,
+                      room_slug: roomName,
+                      guest_name: wName,
+                      status: 'WAITING',
+                      joined_at: joinedAtStr,
+                      waiting_seconds: 1
+                    } as any
+                  ];
+                  refreshCombinedWaitingQueue();
+                }
+              }
+            } else if (msgObj.type === 'WAITING_ROOM_ADMITTED_SELF') {
+              const wNameLower = (msgObj.name || '').toLowerCase();
+              const wId = msgObj.waitingId;
+              const pId = msgObj.identity || participant?.identity;
+              livekitWaitingListRef.current = livekitWaitingListRef.current.filter(
+                (w) => w.id !== wId && (w as any).identity !== pId && w.guest_name.toLowerCase() !== wNameLower
+              );
+              serverWaitingListRef.current = serverWaitingListRef.current.filter(
+                (w) => w.id !== wId && (w as any).identity !== pId && w.guest_name.toLowerCase() !== wNameLower
+              );
+              if (isTutor) {
+                refreshCombinedWaitingQueue();
+              }
+              syncParticipantsState(room);
+            } else if (msgObj.type === 'WAITING_ROOM_ACTION') {
+              if (isStudentInWaitingLoungeRef.current) {
+                const localId = (room.localParticipant?.identity || tokenData.participantIdentity || '').toLowerCase();
+                const localName = (participantName || '').toLowerCase();
+                const targetWId = msgObj.waitingId;
+                const targetIdLower = (msgObj.targetIdentity || '').toLowerCase();
+                const targetNameLower = (msgObj.targetName || '').toLowerCase();
+                const isForMe =
+                  (targetWId && targetWId === studentWaitingId) ||
+                  (targetIdLower && (targetIdLower === localId || targetIdLower === localName)) ||
+                  (targetNameLower && (targetNameLower === localName || targetNameLower === localId));
+
+                if (isForMe) {
+                  if (msgObj.action === 'ADMIT') {
+                    isAdmittedExplicitlyRef.current = true;
+                    promoteStudentFromWaitingLoungeRef.current?.(room);
+                  } else if (msgObj.action === 'REJECT') {
+                    isCancelled = true;
+                    setLoungeRejectedMessage('The tutor asked to reschedule or closed this session.');
+                    try { room.disconnect(); } catch {}
+                  }
+                }
+              }
             } else if (msgObj.type === 'PRESENCE_HELLO') {
               const peerId = msgObj.identity || participant?.identity;
               const peerRole = msgObj.role || (participant ? resolveRemoteParticipantRole(participant) : 'Student');
@@ -1296,7 +1722,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               }
               if (peerId) {
                 peerCustomNamesRef.current[peerId] = { name: peerName, role: peerRole };
-                if (!notifiedPeersRef.current.has(peerId)) {
+                if (!isStudentInWaitingLoungeRef.current && !notifiedPeersRef.current.has(peerId)) {
                   notifiedPeersRef.current.add(peerId);
                   playStudioConnectionChime('peer_join');
                   triggerPresenceToast(peerName, peerRole, 'join');
@@ -1325,7 +1751,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   } else {
                     pub.track.unmute().catch(() => {});
                   }
-                } else if (!shouldMute && room.localParticipant) {
+                } else if (!shouldMute && room.localParticipant && !isStudentInWaitingLoungeRef.current) {
                   publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
                 }
                 try {
@@ -1369,6 +1795,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 onLeave();
               }
             } else if (msgObj.type === 'END_CLASS_FOR_ALL' || msgObj.type === 'FINISH_STUDENT_LESSON') {
+              // If local student is in Waiting Lounge and Tutor finished the CURRENT student's lesson, auto-enter!
+              if (isStudentInWaitingLoungeRef.current && msgObj.type === 'FINISH_STUDENT_LESSON') {
+                setTimeout(() => {
+                  if (!isCancelled && isStudentInWaitingLoungeRef.current) {
+                    syncParticipantsState(room);
+                  }
+                }, 150);
+                return;
+              }
               // Tutor, Supervisor, or Admin ended class for everyone or finished this student's lesson -> immediately disconnect & exit
               if (!isTutor || (isActualTutor && msgObj.includeTutor)) {
                 const localId = (room.localParticipant.identity || '').toLowerCase();
@@ -1404,14 +1839,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           autoSubscribe: true,
         });
 
-        // Start audio playback immediately upon connection
-        room.startAudio().catch(() => {
-          if (!room.canPlaybackAudio) {
-            setAudioPlaybackBlocked(true);
-          }
-        });
+        // Start audio playback immediately upon connection (unless student is in Waiting Lounge)
+        if (!isStudentInWaitingLoungeRef.current) {
+          room.startAudio().catch(() => {
+            if (!room.canPlaybackAudio) {
+              setAudioPlaybackBlocked(true);
+            }
+          });
+        }
 
-        // Publish local microphone with Studio Voice Filter (unless hidden Admin/Supervisor observer)
+        // Publish local microphone with Studio Voice Filter (unless hidden Admin/Supervisor observer or Waiting Lounge student)
         let isHiddenObserver = isAdminOrSupervisor;
         try {
           if (room.localParticipant.metadata) {
@@ -1422,7 +1859,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         } catch {}
 
-        if (!isHiddenObserver) {
+        if (!isHiddenObserver && !isStudentInWaitingLoungeRef.current) {
           await publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain);
         }
 
@@ -1446,7 +1883,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               } else {
                 pub.track.unmute().catch(() => {});
               }
-            } else if (!shouldMute && room.localParticipant) {
+            } else if (!shouldMute && room.localParticipant && !isStudentInWaitingLoungeRef.current) {
               publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
             }
           }
@@ -1454,6 +1891,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             (!isTutor && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) ||
             (isActualTutor && (data.roomAction === 'REMOVE_TUTOR' || data.roomAction === 'ADMIN_END_CLASS_FOR_ALL'))
           ) {
+            if (isStudentInWaitingLoungeRef.current && data.roomAction === 'FINISH_STUDENT_LESSON') {
+              return;
+            }
             isCancelled = true;
             try { room.disconnect(); } catch {}
             onLeave();
@@ -1481,7 +1921,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 safeApName = match ? `Tutor ${match[1]}` : 'Tutor';
               }
               peerCustomNamesRef.current[ap.identity] = { name: safeApName, role: pRole };
-              if (!notifiedPeersRef.current.has(ap.identity)) {
+              if (!isStudentInWaitingLoungeRef.current && !notifiedPeersRef.current.has(ap.identity)) {
                 notifiedPeersRef.current.add(ap.identity);
                 playStudioConnectionChime('peer_join');
                 triggerPresenceToast(safeApName, pRole, 'join');
@@ -1500,8 +1940,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   const match = `${prevPeer.identity || ''} ${safePrevName} ${roomName}`.match(/(\d+)/);
                   safePrevName = match ? `Tutor ${match[1]}` : 'Tutor';
                 }
-                playStudioConnectionChime('peer_leave');
-                triggerPresenceToast(safePrevName, pRole, 'leave');
+                if (!isStudentInWaitingLoungeRef.current) {
+                  playStudioConnectionChime('peer_leave');
+                  triggerPresenceToast(safePrevName, pRole, 'leave');
+                }
               }
             });
 
@@ -1510,25 +1952,27 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         };
 
-    // Send initial presence heartbeat
+        // Send initial presence heartbeat only if not in Waiting Lounge
         const currentIdentity = tokenData.participantIdentity || participantName;
-        fetch('/api/livekit/rooms/heartbeat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            roomName,
-            identity: currentIdentity,
-            name: participantName,
-            role: userRole,
-            isMuted: isAudioMutedRef.current
+        if (!isStudentInWaitingLoungeRef.current) {
+          fetch('/api/livekit/rooms/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              roomName,
+              identity: currentIdentity,
+              name: participantName,
+              role: userRole,
+              isMuted: isAudioMutedRef.current
+            })
           })
-        })
-          .then(r => {
-            const ct = r.headers.get('content-type') || '';
-            return r.ok && ct.includes('application/json') ? r.json() : null;
-          })
-          .then(handleHeartbeatResponse)
-          .catch(() => {});
+            .then(r => {
+              const ct = r.headers.get('content-type') || '';
+              return r.ok && ct.includes('application/json') ? r.json() : null;
+            })
+            .then(handleHeartbeatResponse)
+            .catch(() => {});
+        }
 
         // Browser Tab Close / Page Navigation Beacon Handler
         const sendLeaveBeacon = () => {
@@ -1564,9 +2008,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
     initClassroom();
 
-    // Continuous Realtime Heartbeat: every 4s during active classes
+    // Continuous Realtime Heartbeat: every 4s during active classes (skipped while student is in Waiting Lounge)
     lastHeartbeatSentAtRef.current = Date.now();
     const heartbeatInterval = setInterval(() => {
+      if (isStudentInWaitingLoungeRef.current) {
+        if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+          syncParticipantsState(roomRef.current);
+        }
+        return;
+      }
       const now = Date.now();
       const targetIntervalMs =
         isIdleStandbyRef.current && waitingQueueRef.current.length === 0 ? 12000 : 4000;
@@ -1610,7 +2060,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 } else {
                   pub.track.unmute().catch(() => {});
                 }
-              } else if (!shouldMute) {
+              } else if (!shouldMute && !isStudentInWaitingLoungeRef.current) {
                 publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
               }
               syncParticipantsState(room);
@@ -1649,7 +2099,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 safeApName = match ? `Tutor ${match[1]}` : 'Tutor';
               }
               peerCustomNamesRef.current[ap.identity] = { name: safeApName, role: pRole };
-              if (!notifiedPeersRef.current.has(ap.identity)) {
+              if (!isStudentInWaitingLoungeRef.current && !notifiedPeersRef.current.has(ap.identity)) {
                 notifiedPeersRef.current.add(ap.identity);
                 playStudioConnectionChime('peer_join');
                 triggerPresenceToast(safeApName, pRole, 'join');
@@ -1667,8 +2117,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   const match = `${prevPeer.identity || ''} ${safePrevName} ${roomName}`.match(/(\d+)/);
                   safePrevName = match ? `Tutor ${match[1]}` : 'Tutor';
                 }
-                playStudioConnectionChime('peer_leave');
-                triggerPresenceToast(safePrevName, pRole, 'leave');
+                if (!isStudentInWaitingLoungeRef.current) {
+                  playStudioConnectionChime('peer_leave');
+                  triggerPresenceToast(safePrevName, pRole, 'leave');
+                }
               }
             });
 
@@ -1717,7 +2169,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         try { pipWindowRef.current.close(); } catch {}
       }
     };
-  }, [activeTokenData.token, activeTokenData.serverUrl, tokenData.isMockSession, roomName, isStudentInWaitingLounge]);
+  }, [activeTokenData.token, activeTokenData.serverUrl, tokenData.isMockSession, roomName]);
 
   // Open Always-On-Top Floating Mini Control Bar (Works in top-level windows AND inside iframes!)
   const openFloatingControlBar = useCallback(async () => {
@@ -2469,9 +2921,29 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     setIsSidebarOpen(prev => !prev);
   };
 
-  // Tutor Admit / Keep in Waiting / Reject Actions
+  // Tutor Admit / Keep in Waiting / Reject Actions (Synchronized via both LiveKit DataChannel & Server API)
   const handleWaitingRoomAction = async (waitingId: string, action: 'ADMIT' | 'REJECT' | 'KEEP_WAITING') => {
     try {
+      const targetWaiter = waitingQueue.find(w => w.id === waitingId);
+      const targetIdentity = (targetWaiter as any)?.identity;
+      const targetName = targetWaiter?.guest_name;
+
+      // Broadcast instant LiveKit DataChannel signal to the waiting student
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected && roomRef.current.localParticipant) {
+        try {
+          const payload = new TextEncoder().encode(
+            JSON.stringify({
+              type: 'WAITING_ROOM_ACTION',
+              waitingId,
+              targetIdentity,
+              targetName,
+              action
+            })
+          );
+          await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+        } catch {}
+      }
+
       if (action === 'KEEP_WAITING') {
         setAcknowledgedWaitingIds(prev => new Set([...prev, waitingId]));
         await fetch('/api/livekit/waiting-room/action', {
@@ -2482,12 +2954,28 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         return;
       }
 
+      if (action === 'REJECT' && targetIdentity) {
+        executeLiveKitCloudRoomAdminAction({
+          roomName,
+          action: 'REMOVE_PARTICIPANT',
+          targetIdentities: [targetIdentity]
+        }).catch(() => {});
+      }
+
       await fetch('/api/livekit/waiting-room/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ waitingId, action })
-      });
-      setWaitingQueue(prev => prev.filter(w => w.id !== waitingId));
+      }).catch(() => {});
+
+      serverWaitingListRef.current = serverWaitingListRef.current.filter(
+        w => w.id !== waitingId && (!targetName || w.guest_name.toLowerCase() !== targetName.toLowerCase())
+      );
+      livekitWaitingListRef.current = livekitWaitingListRef.current.filter(
+        w => w.id !== waitingId && (!targetName || w.guest_name.toLowerCase() !== targetName.toLowerCase())
+      );
+      refreshCombinedWaitingQueue();
+
       setAcknowledgedWaitingIds(prev => {
         const next = new Set(prev);
         next.delete(waitingId);
@@ -2495,6 +2983,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       });
       if (waitingQueue.length <= 1) {
         setShowWaitingRoomModal(false);
+      }
+      if (action === 'ADMIT' && targetName) {
+        triggerPresenceToast(`Admitting ${targetName} into classroom...`, 'Waiting Room', 'join');
       }
     } catch (e) {
       console.warn('Waiting room action error:', e);
@@ -2504,6 +2995,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Tutor Option 1: Finish Current Student's Class (Disconnects current student, stays in room & auto-admits #1 waiting student)
   const handleFinishCurrentStudentLesson = async () => {
     setShowLeaveConfirmModal(false);
+    setPendingHostConfirm(null);
+    const studentIdsToFinish = activeStudentParticipants.map(s => s.id);
     try {
       if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
         const payload = new TextEncoder().encode(JSON.stringify({
@@ -2511,6 +3004,26 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           sender: participantName
         }));
         await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+
+        // Also send instant ADMIT signal to #1 waiting student if anyone is in the waiting queue!
+        if (waitingQueue.length > 0) {
+          const nextWaiter = waitingQueue[0];
+          const admitPayload = new TextEncoder().encode(JSON.stringify({
+            type: 'WAITING_ROOM_ACTION',
+            waitingId: nextWaiter.id,
+            targetIdentity: (nextWaiter as any).identity,
+            targetName: nextWaiter.guest_name,
+            action: 'ADMIT'
+          }));
+          await roomRef.current.localParticipant.publishData(admitPayload as any, { reliable: true }).catch(() => {});
+        }
+      }
+      if (studentIdsToFinish.length > 0) {
+        executeLiveKitCloudRoomAdminAction({
+          roomName,
+          action: 'REMOVE_PARTICIPANT',
+          targetIdentities: studentIdsToFinish
+        }).catch(() => {});
       }
       const res = await fetch('/api/livekit/rooms/control', {
         method: 'POST',
@@ -2548,15 +3061,35 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Disconnect a specific selected student, keep tutor and other students in the room
   const handleRemoveSelectedStudent = async (studentIdentity: string, studentName: string) => {
     setShowLeaveConfirmModal(false);
+    setPendingHostConfirm(null);
+    const remainingStudents = activeStudentParticipants.filter(s => s.id !== studentIdentity);
     try {
       if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
         const payload = new TextEncoder().encode(JSON.stringify({
           type: 'FINISH_STUDENT_LESSON',
           sender: participantName,
-          targetIdentities: [studentIdentity]
+          targetIdentities: [studentIdentity, studentName]
         }));
         await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+
+        // If removing this student leaves 0 active students in the room and someone is waiting, auto-admit #1 waiting student immediately!
+        if (remainingStudents.length === 0 && waitingQueue.length > 0) {
+          const nextWaiter = waitingQueue[0];
+          const admitPayload = new TextEncoder().encode(JSON.stringify({
+            type: 'WAITING_ROOM_ACTION',
+            waitingId: nextWaiter.id,
+            targetIdentity: (nextWaiter as any).identity,
+            targetName: nextWaiter.guest_name,
+            action: 'ADMIT'
+          }));
+          await roomRef.current.localParticipant.publishData(admitPayload as any, { reliable: true }).catch(() => {});
+        }
       }
+      executeLiveKitCloudRoomAdminAction({
+        roomName,
+        action: 'REMOVE_PARTICIPANT',
+        targetIdentities: [studentIdentity]
+      }).catch(() => {});
       const res = await fetch('/api/livekit/rooms/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2575,16 +3108,15 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     notifiedPeersRef.current.delete(studentIdentity);
     delete peerCustomNamesRef.current[studentIdentity];
     serverHeartbeatPeersRef.current = serverHeartbeatPeersRef.current.filter(hp => hp.identity !== studentIdentity);
-    
+
     // Reset timer only if no students are left
-    const remainingStudents = activeStudentParticipants.filter(s => s.id !== studentIdentity);
     if (remainingStudents.length === 0) {
       setElapsedSeconds(0);
       setIsTimerRunning(false);
       setChatMessages([]);
       setUnreadChatCount(0);
     }
-    
+
     if (roomRef.current) {
       syncParticipantsState(roomRef.current);
     }
@@ -2632,7 +3164,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       } catch {}
     }
 
-    // 3. Persist on server & trigger LiveKit server-side track mute + heartbeat command delivery
+    // 3. Enforce via LiveKit Cloud Twirp API + Server Control Endpoint
+    executeLiveKitCloudRoomAdminAction({
+      roomName,
+      action: 'MUTE_PARTICIPANT',
+      targetIdentities: [targetIdentity],
+      muted: nextMuted
+    }).catch(() => {});
+
     try {
       await fetch('/api/livekit/rooms/control', {
         method: 'POST',
@@ -2652,15 +3191,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const handleRemoveTutorFromMeeting = async (tutorIdentity: string, tutorName: string) => {
     if (!isAdmin) return;
     setShowLeaveConfirmModal(false);
+    setPendingHostConfirm(null);
     try {
       if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
         const payload = new TextEncoder().encode(JSON.stringify({
           type: 'REMOVE_TUTOR',
           sender: participantName,
-          targetIdentities: [tutorIdentity]
+          targetIdentities: [tutorIdentity, tutorName]
         }));
         await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
       }
+      executeLiveKitCloudRoomAdminAction({
+        roomName,
+        action: 'REMOVE_PARTICIPANT',
+        targetIdentities: [tutorIdentity]
+      }).catch(() => {});
       const res = await fetch('/api/livekit/rooms/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2693,6 +3238,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Tutor / Supervisor / Admin Option: End Class for Everyone (Disconnects all students, plus Tutor if triggered by Admin/Supervisor, & closes classroom)
   const handleEndClassForEveryone = async () => {
     setShowLeaveConfirmModal(false);
+    setPendingHostConfirm(null);
     try {
       if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
         const payload = new TextEncoder().encode(JSON.stringify({
@@ -2702,6 +3248,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         }));
         await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
       }
+      executeLiveKitCloudRoomAdminAction({
+        roomName,
+        action: isAdminOrSupervisor ? 'END_ROOM' : 'REMOVE_PARTICIPANT',
+        targetIdentities: isAdminOrSupervisor ? undefined : activeStudentParticipants.map(s => s.id)
+      }).catch(() => {});
       await fetch('/api/livekit/rooms/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2720,6 +3271,35 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       try { roomRef.current.disconnect(); } catch {}
     }
     onLeave();
+  };
+
+  // Zoom-Style Confirmation Triggers (Prevents accidental ending of class or removal of participants)
+  const requestRemoveStudent = (studentIdentity: string, studentName: string) => {
+    setPendingHostConfirm({
+      type: 'REMOVE_STUDENT',
+      targetId: studentIdentity,
+      targetName: studentName
+    });
+  };
+
+  const requestRemoveTutor = (tutorIdentity: string, tutorName: string) => {
+    setPendingHostConfirm({
+      type: 'REMOVE_TUTOR',
+      targetId: tutorIdentity,
+      targetName: tutorName
+    });
+  };
+
+  const requestEndClassForEveryone = () => {
+    setPendingHostConfirm({
+      type: 'END_FOR_ALL'
+    });
+  };
+
+  const requestFinishCurrentLesson = () => {
+    setPendingHostConfirm({
+      type: 'FINISH_LESSON'
+    });
   };
 
   // Render shared screen preview inside the meeting room whenever remote OR local screen share is active!
@@ -4546,6 +5126,81 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 }`}
               >
                 Keep Camera Off
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ZOOM-STYLE HOST ACTION CONFIRMATION MODAL */}
+      {pendingHostConfirm && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-[60] animate-in fade-in">
+          <div
+            className={`border rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center ${
+              isLight ? 'bg-white border-rose-200 text-[#14231B]' : 'bg-[#0F1B15] border-rose-500/40 text-white'
+            }`}
+          >
+            <div className="w-12 h-12 mx-auto rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-500">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-rose-500">
+                {pendingHostConfirm.type === 'END_FOR_ALL'
+                  ? 'End Meeting for All?'
+                  : pendingHostConfirm.type === 'REMOVE_STUDENT'
+                    ? `Remove ${pendingHostConfirm.targetName || 'Student'}?`
+                    : pendingHostConfirm.type === 'REMOVE_TUTOR'
+                      ? `Remove ${pendingHostConfirm.targetName || 'Tutor'}?`
+                      : 'Finish Current Lesson?'}
+              </h3>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
+                {pendingHostConfirm.type === 'END_FOR_ALL'
+                  ? 'This will disconnect all connected participants and close the classroom for everyone.'
+                  : pendingHostConfirm.type === 'REMOVE_STUDENT'
+                    ? `Are you sure you want to remove ${pendingHostConfirm.targetName || 'this student'} from the live classroom?`
+                    : pendingHostConfirm.type === 'REMOVE_TUTOR'
+                      ? `Are you sure you want to disconnect ${pendingHostConfirm.targetName || 'the tutor'} from this meeting?`
+                      : 'This will finish the current student’s lesson and keep your classroom open for the next student.'}
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const conf = pendingHostConfirm;
+                  setPendingHostConfirm(null);
+                  setShowLeaveConfirmModal(false);
+                  if (conf.type === 'END_FOR_ALL') {
+                    await handleEndClassForEveryone();
+                  } else if (conf.type === 'REMOVE_STUDENT' && conf.targetId) {
+                    await handleRemoveSelectedStudent(conf.targetId, conf.targetName || 'Student');
+                  } else if (conf.type === 'REMOVE_TUTOR' && conf.targetId) {
+                    await handleRemoveTutorFromMeeting(conf.targetId, conf.targetName || 'Tutor');
+                  } else if (conf.type === 'FINISH_LESSON') {
+                    await handleFinishCurrentStudentLesson();
+                  }
+                }}
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md"
+              >
+                {pendingHostConfirm.type === 'END_FOR_ALL'
+                  ? 'Yes, End Meeting for All'
+                  : pendingHostConfirm.type === 'REMOVE_STUDENT'
+                    ? 'Yes, Remove Student'
+                    : pendingHostConfirm.type === 'REMOVE_TUTOR'
+                      ? 'Yes, Remove Tutor'
+                      : 'Yes, Finish Lesson'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPendingHostConfirm(null)}
+                className={`w-full py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  isLight ? 'hover:bg-gray-100 text-[#5A6B61]' : 'hover:bg-white/5 text-[#8AA393]'
+                }`}
+              >
+                Cancel / Do Not Disconnect
               </button>
             </div>
           </div>

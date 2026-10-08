@@ -139,7 +139,11 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
         admittedWaitingId: admittedId
       });
 
-      if (data.inWaitingRoom) {
+      if (data.token) {
+        setInWaitingRoom(false);
+        setTokenData(data as LiveKitRoomTokenResponse);
+        await joinClassroomSession(data as LiveKitRoomTokenResponse, currentUserRole, displayName || currentUserName);
+      } else if (data.inWaitingRoom) {
         setInWaitingRoom(true);
         setWaitingId(data.waitingId || null);
         setWaitingReason((data as any).waitingReason || 'NEXT_STUDENT_QUEUE');
@@ -154,12 +158,6 @@ export const ZoomStyleJoinModal: React.FC<ZoomStyleJoinModalProps> = ({
         setWaitingMessage(data.message || 'Your class will start automatically as soon as the current lesson finishes!');
         setIsLoading(false);
         return;
-      }
-
-      if (data.token) {
-        setInWaitingRoom(false);
-        setTokenData(data as LiveKitRoomTokenResponse);
-        await joinClassroomSession(data as LiveKitRoomTokenResponse, currentUserRole, displayName || currentUserName);
       } else {
         setErrorMessage('Failed to issue access token');
       }

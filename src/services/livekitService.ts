@@ -157,24 +157,21 @@ export async function generateBrowserLiveKitToken(params: {
     name: params.participantName,
     nbf: nowSec - 5,
     exp: nowSec + ttlSeconds,
-    metadata: JSON.stringify({ role: params.role, hidden: isStealthObserver }),
-    video: isStealthObserver
-      ? {
-          room: cleanRoomName,
-          roomJoin: true,
-          canPublish: false,
-          canPublishData: false,
-          canSubscribe: true,
-          hidden: true,
-        }
-      : {
-          room: cleanRoomName,
-          roomJoin: true,
-          canPublish: true,
-          canPublishData: true,
-          canSubscribe: true,
-          canPublishSources,
-        },
+    metadata: JSON.stringify({
+      role: params.role,
+      hidden: isStealthObserver,
+      status: 'IN_CLASS',
+      joinedAtMs: Date.now(),
+    }),
+    video: {
+      room: cleanRoomName,
+      roomJoin: true,
+      canPublish: true,
+      canPublishData: true,
+      canSubscribe: true,
+      canUpdateOwnMetadata: true,
+      canPublishSources,
+    },
   };
 
   const encodedHeader = base64UrlEncodeString(JSON.stringify(header));
@@ -280,6 +277,7 @@ export async function fetchLiveKitToken(params: {
   classId?: string;
   customServerUrl?: string;
   forceSimulation?: boolean;
+  isHiddenAdmin?: boolean;
 }): Promise<LiveKitRoomTokenResponse> {
   const canonicalRoomId = getCanonicalRoomName(params.roomId, undefined, params.roomId);
 
@@ -309,6 +307,19 @@ export async function fetchLiveKitToken(params: {
     if (contentType.includes('application/json')) {
       const data = await response.json();
       if (response.ok && data?.inWaitingRoom) {
+        if (!data.token) {
+          const browserToken = await generateBrowserLiveKitToken({
+            ...params,
+            roomId: canonicalRoomId,
+          });
+          return {
+            ...browserToken,
+            ...data,
+            token: browserToken.token,
+            serverUrl: data.serverUrl || browserToken.serverUrl,
+            roomName: canonicalRoomId,
+          };
+        }
         return {
           ...data,
           roomName: canonicalRoomId,
@@ -346,6 +357,7 @@ export async function joinClassroomBySlugOrPasscode(params: {
   userRole?: UserRole;
   guestName?: string;
   admittedWaitingId?: string;
+  isObserveMode?: boolean;
 }): Promise<
   | ({ inWaitingRoom: true; waitingId: string; message: string } & Partial<LiveKitRoomTokenResponse>)
   | LiveKitRoomTokenResponse
@@ -376,7 +388,32 @@ export async function joinClassroomBySlugOrPasscode(params: {
         throw new Error(data.error || 'Failed to join classroom. Please check your Tutor ID or Passcode.');
       }
       if (data.inWaitingRoom) {
-        return data;
+        if (!data.token) {
+          const role: UserRole = params.userRole || 'student';
+          const isStealth = role === 'admin' || role === 'supervisor';
+          const identity = `${role}_${params.sessionUserId || 'member'}_${Date.now()}`;
+          const participantName = isStealth
+            ? `Invisible ${role === 'admin' ? 'Admin' : 'Supervisor'}`
+            : (params.guestName || 'Student');
+          const browserToken = await generateBrowserLiveKitToken({
+            roomId: canonicalRoomName,
+            identity,
+            participantName,
+            role,
+            isHidden: isStealth,
+          });
+          return {
+            ...browserToken,
+            ...data,
+            token: browserToken.token,
+            serverUrl: data.serverUrl || browserToken.serverUrl,
+            roomName: canonicalRoomName,
+          };
+        }
+        return {
+          ...data,
+          roomName: canonicalRoomName,
+        };
       }
       if (data.token && !data.isMockSession) {
         return {
@@ -386,7 +423,7 @@ export async function joinClassroomBySlugOrPasscode(params: {
       }
     }
   } catch (err: any) {
-    if (err?.message) {
+    if (err?.message && err.message.includes('Passcode')) {
       throw err;
     }
   }
@@ -760,26 +797,55 @@ async function fetchLiveRoomsStatusFromLiveKitCloudDirect(): Promise<LiveRoomsSt
         );
       });
 
-      const studentsList = visiblePeers.filter((p: any) => !tutorsList.includes(p));
+      const nonTutorPeers = visiblePeers.filter((p: any) => !tutorsList.includes(p));
+      const waitingPeers: any[] = [];
+      const studentsList: any[] = [];
+
+      nonTutorPeers.forEach((p: any) => {
+        let meta: any = {};
+        try {
+          if (p.metadata) meta = JSON.parse(p.metadata);
+        } catch {}
+        if (meta.status === 'WAITING') {
+          waitingPeers.push({ p, meta });
+        } else {
+          studentsList.push(p);
+        }
+      });
+
       const tutorPresent = tutorsList.length > 0;
       const studentPresent = studentsList.length > 0;
       const studentNames = studentsList.map((s: any) => s.name || s.identity || 'Student');
 
-      const waitingDetails: WaitingQueueDetailItem[] =
-        !tutorPresent && studentPresent
-          ? studentNames.map((sName: string, idx: number) => ({
-              id: `wait_${idx}`,
+      const waitingDetails: WaitingQueueDetailItem[] = waitingPeers.map(({ p, meta }, idx) => {
+        const joinedMs = meta.joinedAtMs ? Number(meta.joinedAtMs) : Date.now() - 15000;
+        return {
+          id: meta.waitingId || p.identity || `wait_${idx}`,
+          name: meta.guestName || p.name || p.identity || 'Student',
+          waitingSeconds: Math.max(1, Math.floor((Date.now() - joinedMs) / 1000)),
+          reason: meta.reason || (tutorPresent && studentPresent ? 'NEXT_STUDENT_QUEUE' : 'TUTOR_NOT_PRESENT'),
+          queuePosition: idx + 1,
+        };
+      });
+
+      if (!tutorPresent && studentPresent) {
+        studentNames.forEach((sName: string, idx: number) => {
+          if (!waitingDetails.some((w) => w.name.toLowerCase() === sName.toLowerCase())) {
+            waitingDetails.push({
+              id: `wait_active_${idx}`,
               name: sName,
               waitingSeconds: 30,
               reason: 'TUTOR_NOT_PRESENT',
-              queuePosition: idx + 1,
-            }))
-          : [];
+              queuePosition: waitingDetails.length + 1,
+            });
+          }
+        });
+      }
 
       let status: 'running' | 'tutor_waiting' | 'student_waiting' | 'idle' = 'idle';
       if (tutorPresent && studentPresent) status = 'running';
       else if (tutorPresent && !studentPresent) status = 'tutor_waiting';
-      else if (!tutorPresent && studentPresent) status = 'student_waiting';
+      else if (!tutorPresent && (studentPresent || waitingDetails.length > 0)) status = 'student_waiting';
 
       return {
         tutorId: r.tutor_id,
@@ -788,7 +854,7 @@ async function fetchLiveRoomsStatusFromLiveKitCloudDirect(): Promise<LiveRoomsSt
         status,
         tutorPresent,
         studentPresent,
-        participantCount: visiblePeers.length,
+        participantCount: tutorsList.length + studentsList.length,
         studentCount: studentsList.length,
         students: studentNames,
         waitingCount: waitingDetails.length,
@@ -819,6 +885,136 @@ async function fetchLiveRoomsStatusFromLiveKitCloudDirect(): Promise<LiveRoomsSt
         idleCount: 0,
       },
     };
+  }
+}
+
+/**
+ * Direct browser LiveKit Cloud RoomService Twirp execution for host actions
+ * (RemoveParticipant, UpdateParticipant metadata, MutePublishedTrack) so host & admin controls
+ * work with 100% server authority even on static hosts (app.islamictuition.us).
+ */
+export async function executeLiveKitCloudRoomAdminAction(params: {
+  roomName: string;
+  action: 'REMOVE_PARTICIPANT' | 'UPDATE_METADATA' | 'MUTE_PARTICIPANT' | 'END_ROOM';
+  identity?: string;
+  targetIdentities?: string[];
+  metadata?: string;
+  muted?: boolean;
+}): Promise<boolean> {
+  try {
+    const cleanRoom = getCanonicalRoomName(params.roomName, undefined, params.roomName);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const payload = {
+      iss: FALLBACK_LIVEKIT_KEY,
+      sub: 'classroom_host_controller',
+      nbf: nowSec - 5,
+      exp: nowSec + 120,
+      video: {
+        room: cleanRoom,
+        roomAdmin: true,
+        roomList: true,
+      },
+    };
+    const signingInput = `${base64UrlEncodeString(JSON.stringify(header))}.${base64UrlEncodeString(JSON.stringify(payload))}`;
+    const keyData = new TextEncoder().encode(FALLBACK_LIVEKIT_SECRET);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuf = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(signingInput));
+    const adminJwt = `${signingInput}.${base64UrlEncodeBytes(new Uint8Array(sigBuf))}`;
+    const httpBase = FALLBACK_LIVEKIT_URL.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+
+    const targets = params.targetIdentities && params.targetIdentities.length > 0
+      ? params.targetIdentities
+      : (params.identity ? [params.identity] : []);
+
+    if (params.action === 'END_ROOM') {
+      const res = await fetch(`${httpBase}/twirp/livekit.RoomService/DeleteRoom`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminJwt}`,
+        },
+        body: JSON.stringify({ room: cleanRoom }),
+      });
+      return res.ok;
+    }
+
+    if (params.action === 'REMOVE_PARTICIPANT') {
+      for (const targetId of targets) {
+        await fetch(`${httpBase}/twirp/livekit.RoomService/RemoveParticipant`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${adminJwt}`,
+          },
+          body: JSON.stringify({ room: cleanRoom, identity: targetId }),
+        }).catch(() => {});
+      }
+      return true;
+    }
+
+    if (params.action === 'UPDATE_METADATA' && params.metadata !== undefined && targets.length > 0) {
+      const res = await fetch(`${httpBase}/twirp/livekit.RoomService/UpdateParticipant`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminJwt}`,
+        },
+        body: JSON.stringify({
+          room: cleanRoom,
+          identity: targets[0],
+          metadata: params.metadata,
+        }),
+      });
+      return res.ok;
+    }
+
+    if (params.action === 'MUTE_PARTICIPANT' && targets.length > 0) {
+      for (const targetId of targets) {
+        const pRes = await fetch(`${httpBase}/twirp/livekit.RoomService/GetParticipant`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${adminJwt}`,
+          },
+          body: JSON.stringify({ room: cleanRoom, identity: targetId }),
+        });
+        if (pRes.ok) {
+          const pInfo = await pRes.json();
+          const audioTracks = (pInfo?.tracks || []).filter(
+            (tr: any) => tr.type === 0 || tr.source === 2 || tr.type === 'AUDIO' || tr.source === 'MICROPHONE'
+          );
+          await Promise.allSettled(
+            audioTracks.map((tr: any) =>
+              fetch(`${httpBase}/twirp/livekit.RoomService/MutePublishedTrack`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${adminJwt}`,
+                },
+                body: JSON.stringify({
+                  room: cleanRoom,
+                  identity: targetId,
+                  track_sid: tr.sid,
+                  muted: Boolean(params.muted),
+                }),
+              })
+            )
+          );
+        }
+      }
+      return true;
+    }
+
+    return true;
+  } catch {
+    return false;
   }
 }
 

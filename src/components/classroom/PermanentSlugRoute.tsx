@@ -240,7 +240,9 @@ export const PermanentSlugRoute: React.FC = () => {
         admittedWaitingId: admittedId
       });
 
-      if (data.inWaitingRoom) {
+      if (data.token) {
+        setTokenData(data as LiveKitRoomTokenResponse);
+      } else if (data.inWaitingRoom) {
         setInWaitingRoom(true);
         setWaitingId(data.waitingId || null);
         setWaitingReason((data as any).waitingReason || 'NEXT_STUDENT_QUEUE');
@@ -250,10 +252,6 @@ export const PermanentSlugRoute: React.FC = () => {
         setWaitingMessage(data.message || 'Your class will start automatically as soon as the current lesson finishes!');
         setIsLoading(false);
         return;
-      }
-
-      if (data.token) {
-        setTokenData(data as LiveKitRoomTokenResponse);
       } else {
         setErrorMessage('Could not connect to the classroom. Please check your passcode.');
       }
