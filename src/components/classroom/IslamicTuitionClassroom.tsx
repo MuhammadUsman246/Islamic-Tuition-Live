@@ -3910,156 +3910,41 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         </div>
       </header>
 
-      {/* GRANULAR HOST & STEALTH MODERATOR CONTROL BAR FOR TUTORS, ADMINS, AND SUPERVISORS */}
-      {isTutor && (
+      {/* SLEEK STEALTH OBSERVATION NOTICE FOR ADMIN & SUPERVISOR */}
+      {isAdminOrSupervisor && (
         <div
-          className={`px-3 py-1.5 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 ${
+          className={`px-3 py-1.5 border-b flex items-center justify-between gap-2 z-20 shrink-0 text-xs font-semibold ${
             isAdmin
               ? isLight
-                ? 'bg-purple-50 border-purple-300 text-purple-950'
-                : 'bg-[#170F26] border-purple-500/45 text-purple-100'
-              : isSupervisor
-                ? isLight
-                  ? 'bg-blue-50 border-blue-300 text-blue-950'
-                  : 'bg-[#0D1A29] border-blue-500/45 text-blue-100'
-                : isLight
-                  ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
-                  : 'bg-[#0C1A13] border-emerald-500/40 text-emerald-100'
+                ? 'bg-purple-100 border-purple-300 text-purple-950'
+                : 'bg-purple-950/80 border-purple-500/40 text-purple-200'
+              : isLight
+                ? 'bg-blue-100 border-blue-300 text-blue-950'
+                : 'bg-blue-950/80 border-blue-500/40 text-blue-200'
           }`}
         >
-          <div className="flex items-center space-x-2 min-w-0">
-            <span
-              className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shrink-0 border ${
-                isAdmin
-                  ? 'bg-purple-500/25 border-purple-400/50 text-purple-300'
-                  : isSupervisor
-                    ? 'bg-blue-500/25 border-blue-400/50 text-blue-300'
-                    : 'bg-emerald-500/25 border-emerald-400/50 text-emerald-300'
-              }`}
-            >
-              {isAdmin
-                ? '🕵️ Stealth Super-Admin'
-                : isSupervisor
-                  ? '🕵️ Stealth Supervisor'
-                  : '🛡️ Classroom Host (Tutor)'}
-            </span>
-            <span className="text-[11px] font-bold truncate">
-              {isAdmin
-                ? 'Invisible to Room · Full Super-Host Controls (Mute/Unmute Any User, Remove Tutor/Student, End Meeting for All)'
-                : isSupervisor
-                  ? 'Invisible to Room · Supervisor Controls (Mute/Unmute User, Remove Participant, End Meeting for All, Leave Silently)'
-                  : 'Live Host Controls · Mute/Unmute Specific Student, Remove Participant, or End Meeting for All'}
+          <div className="flex items-center space-x-2 truncate">
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shrink-0" />
+            <span className="truncate">
+              {isAdmin ? '🕵️ Stealth Super-Admin Mode' : '🕵️ Stealth Supervisor Mode'} — Observing class silently. Access controls in the Participants list.
             </span>
           </div>
-
-          <div className="flex items-center flex-wrap gap-1.5 shrink-0">
-            {/* Admin Exclusive Controls for the Active Tutor: Mute/Unmute Tutor & Remove Tutor */}
-            {isAdmin && activeTutorParticipant && (
-              <>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleToggleRemoteParticipantMute(
-                      activeTutorParticipant.id,
-                      activeTutorParticipant.name,
-                      activeTutorParticipant.isMuted
-                    )
-                  }
-                  className={`px-2.5 py-1 rounded-lg text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors ${
-                    activeTutorParticipant.isMuted
-                      ? 'bg-emerald-600 hover:bg-emerald-500'
-                      : 'bg-slate-700 hover:bg-slate-600'
-                  }`}
-                  title={
-                    activeTutorParticipant.isMuted
-                      ? `Unmute Tutor (${activeTutorParticipant.name})`
-                      : `Mute Tutor (${activeTutorParticipant.name})`
-                  }
-                >
-                  {activeTutorParticipant.isMuted ? (
-                    <Mic className="w-3 h-3" />
-                  ) : (
-                    <MicOff className="w-3 h-3" />
-                  )}
-                  <span>
-                    {activeTutorParticipant.isMuted
-                      ? `Unmute Tutor (${activeTutorParticipant.name})`
-                      : `Mute Tutor (${activeTutorParticipant.name})`}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
-                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
-                  title={`Remove Participant: ${activeTutorParticipant.name} (Tutor)`}
-                >
-                  <UserX className="w-3 h-3" />
-                  <span>Remove Tutor ({activeTutorParticipant.name})</span>
-                </button>
-              </>
-            )}
-
-            {/* Tutor, Admin & Supervisor Controls for Each Active Student: Mute/Unmute Specific User & Remove Participant */}
-            {activeStudentParticipants.map((stu) => (
-              <React.Fragment key={stu.id}>
-                <button
-                  type="button"
-                  onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
-                  className={`px-2.5 py-1 rounded-lg text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors ${
-                    stu.isMuted
-                      ? 'bg-emerald-600 hover:bg-emerald-500'
-                      : 'bg-slate-700 hover:bg-slate-600'
-                  }`}
-                  title={stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}
-                >
-                  {stu.isMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-                  <span>{stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
-                  className="px-2.5 py-1 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
-                  title={`Remove Participant: ${stu.name}`}
-                >
-                  <UserX className="w-3 h-3" />
-                  <span>Remove {stu.name}</span>
-                </button>
-              </React.Fragment>
-            ))}
-
-            {/* End Meeting for All (Available to Tutor, Admin, and Supervisor) */}
-            <button
-              type="button"
-              onClick={handleEndClassForEveryone}
-              className="px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors border border-rose-400/40"
-              title="End Meeting for All connected participants in real-time"
-            >
-              <PhoneOff className="w-3 h-3" />
-              <span>End Meeting for All</span>
-            </button>
-
-            {/* Leave Silently Anytime without disturbing class (Admin & Supervisor Stealth Mode) */}
-            {isAdminOrSupervisor && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (pipWindowRef.current && !pipWindowRef.current.closed) {
-                    try { pipWindowRef.current.close(); } catch {}
-                  }
-                  if (roomRef.current) {
-                    try { roomRef.current.disconnect(); } catch {}
-                  }
-                  onLeave();
-                }}
-                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
-                title="Exit stealth observation immediately while keeping the class running undisturbed"
-              >
-                <span>Leave Silently</span>
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (pipWindowRef.current && !pipWindowRef.current.closed) {
+                try { pipWindowRef.current.close(); } catch {}
+              }
+              if (roomRef.current) {
+                try { roomRef.current.disconnect(); } catch {}
+              }
+              onLeave();
+            }}
+            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-extrabold shrink-0 transition-colors cursor-pointer shadow-2xs"
+            title="Exit stealth observation immediately without disturbing the class"
+          >
+            Leave Silently
+          </button>
         </div>
       )}
 
@@ -4331,50 +4216,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   </div>
 
                   <div className="flex items-center space-x-1.5 shrink-0">
-                    {isAdmin && activeTutorParticipant && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleToggleRemoteParticipantMute(
-                              activeTutorParticipant.id,
-                              activeTutorParticipant.name,
-                              activeTutorParticipant.isMuted
-                            )
-                          }
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold text-white border cursor-pointer transition-colors flex items-center space-x-1 ${
-                            activeTutorParticipant.isMuted
-                              ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/40'
-                              : 'bg-slate-700 hover:bg-slate-600 border-slate-500/40'
-                          }`}
-                          title={
-                            activeTutorParticipant.isMuted
-                              ? `Unmute ${activeTutorParticipant.name}`
-                              : `Mute ${activeTutorParticipant.name}`
-                          }
-                        >
-                          {activeTutorParticipant.isMuted ? (
-                            <Mic className="w-3 h-3" />
-                          ) : (
-                            <MicOff className="w-3 h-3" />
-                          )}
-                          <span>{activeTutorParticipant.isMuted ? 'Unmute' : 'Mute'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
-                          className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/40 cursor-pointer transition-colors"
-                          title={`Admin Super-Host: Remove ${activeTutorParticipant.name} from meeting`}
-                        >
-                          Remove Participant
-                        </button>
-                      </>
-                    )}
-
                     {(activeTutorParticipant || isActualTutor) && (
                       <span
-                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
                           (activeTutorParticipant ? activeTutorParticipant.isMuted : isAudioMuted)
                             ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                             : activeTutorParticipant?.isSpeaking
@@ -4439,34 +4283,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                       </div>
 
                       <div className="flex items-center space-x-1.5 shrink-0">
-                        {isTutor && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
-                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold text-white border cursor-pointer transition-colors flex items-center space-x-1 ${
-                                stu.isMuted
-                                  ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/40'
-                                  : 'bg-slate-700 hover:bg-slate-600 border-slate-500/40'
-                              }`}
-                              title={stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}
-                            >
-                              {stu.isMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-                              <span>{stu.isMuted ? 'Unmute' : 'Mute'}</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
-                              className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/40 cursor-pointer transition-colors"
-                              title={`Remove Participant: ${stu.name}`}
-                            >
-                              Remove Participant
-                            </button>
-                          </>
-                        )}
                         <span
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
                             stu.isMuted
                               ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                               : stu.isSpeaking
@@ -4689,9 +4507,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                           <button
                             type="button"
-                            onClick={() => handleRemoveTutorFromMeeting(p.id, p.name)}
-                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-400/30 flex items-center space-x-0.5 cursor-pointer mr-1 transition-colors"
-                            title={`Admin Super-Host: Remove Participant ${p.name} (Tutor)`}
+                            onClick={() => requestRemoveTutor(p.id, p.name)}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/30 flex items-center space-x-0.5 cursor-pointer mr-1 transition-colors"
+                            title={`Remove Participant: ${p.name}`}
                           >
                             <span>Remove</span>
                           </button>
@@ -4715,7 +4533,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                           <button
                             type="button"
-                            onClick={() => handleRemoveSelectedStudent(p.id, p.name)}
+                            onClick={() => requestRemoveStudent(p.id, p.name)}
                             className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/30 flex items-center space-x-0.5 cursor-pointer mr-1 transition-colors"
                             title={`Remove Participant: ${p.name}`}
                           >
@@ -4749,7 +4567,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <div className="mt-2 pt-2 border-t border-white/10 flex items-center justify-between gap-1.5">
                   <button
                     type="button"
-                    onClick={handleEndClassForEveryone}
+                    onClick={requestEndClassForEveryone}
                     className="w-full py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-extrabold flex items-center justify-center space-x-1.5 cursor-pointer transition-colors shadow-2xs"
                     title="End Meeting for All connected participants in real-time"
                   >
@@ -5276,8 +5094,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                       <button
                         type="button"
-                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
-                        className="py-2.5 px-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                        onClick={() => requestRemoveStudent(stu.id, stu.name)}
+                        className="py-2.5 px-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                       >
                         <UserX className="w-3.5 h-3.5" />
                         <span className="truncate">Remove {stu.name}</span>
@@ -5313,8 +5131,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                       <button
                         type="button"
-                        onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
-                        className="py-2.5 px-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                        onClick={() => requestRemoveTutor(activeTutorParticipant.id, activeTutorParticipant.name)}
+                        className="py-2.5 px-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                       >
                         <UserX className="w-3.5 h-3.5" />
                         <span className="truncate">Remove {activeTutorParticipant.name}</span>
@@ -5325,7 +5143,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   {/* 4. End Meeting for All (Tutor + All Students) */}
                   <button
                     type="button"
-                    onClick={handleEndClassForEveryone}
+                    onClick={requestEndClassForEveryone}
                     className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                   >
                     <PhoneOff className="w-3.5 h-3.5" />
@@ -5367,8 +5185,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                       <button
                         type="button"
-                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
-                        className="py-2.5 px-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                        onClick={() => requestRemoveStudent(stu.id, stu.name)}
+                        className="py-2.5 px-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                       >
                         <UserX className="w-3.5 h-3.5" />
                         <span className="truncate">Remove {stu.name}</span>
@@ -5379,7 +5197,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   {/* 3. End Meeting for All */}
                   <button
                     type="button"
-                    onClick={handleEndClassForEveryone}
+                    onClick={requestEndClassForEveryone}
                     className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                   >
                     <PhoneOff className="w-3.5 h-3.5" />
@@ -5405,7 +5223,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
                         <button
                           type="button"
-                          onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                          onClick={() => requestRemoveStudent(stu.id, stu.name)}
                           className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
                         >
                           <span className="flex items-center space-x-1.5">
@@ -5422,7 +5240,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     /* Default Fallback Button if no student is active in room */
                     <button
                       type="button"
-                      onClick={handleFinishCurrentStudentLesson}
+                      onClick={requestFinishCurrentLesson}
                       className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
                     >
                       <span className="flex items-center space-x-1.5">
@@ -5438,7 +5256,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   {/* Option 2: End Meeting for All (disconnects all students & closes room) */}
                   <button
                     type="button"
-                    onClick={handleEndClassForEveryone}
+                    onClick={requestEndClassForEveryone}
                     className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                   >
                     <PhoneOff className="w-3.5 h-3.5" />
