@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Calendar, AlertCircle, CheckCircle, Clock, Trash2 } from 'lucide-react';
+import { X, Calendar, AlertCircle, CheckCircle, Clock, Trash2, Eye } from 'lucide-react';
 import { TimetableClass, Tutor, Student, DayOfWeek, ClassDuration, PKT_TIME_SLOTS } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
 import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
+import { isSameTutor } from '../../services/dataService';
+import { TutorScheduleViewModal } from './TutorScheduleViewModal';
 
 interface ClassModalProps {
   isOpen: boolean;
@@ -70,6 +72,7 @@ export const ClassModal: React.FC<ClassModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
+  const [isTutorScheduleModalOpen, setIsTutorScheduleModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (initialClass) {
@@ -278,9 +281,20 @@ export const ClassModal: React.FC<ClassModalProps> = ({
                 <label className="block text-xs font-semibold text-[#161F1A]">
                   Assigned Tutor <span className="text-red-500">*</span>
                 </label>
-                <span className="text-[10px] text-gray-500 font-medium">
-                  {tutorOptions.length} tutors
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsTutorScheduleModalOpen(true)}
+                    className="text-[10px] font-bold text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded flex items-center gap-1 cursor-pointer transition-colors"
+                    title="View selected tutor's full 7-day weekly timetable schedule"
+                  >
+                    <Eye className="w-3 h-3 text-[#2D8B5C]" />
+                    <span>View Tutor Timetable</span>
+                  </button>
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    {tutorOptions.length} tutors
+                  </span>
+                </div>
               </div>
               <SearchableSelect
                 id="modal_tutor_select"
@@ -550,6 +564,19 @@ export const ClassModal: React.FC<ClassModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Tutor Schedule Inspector Modal */}
+      <TutorScheduleViewModal
+        isOpen={isTutorScheduleModalOpen}
+        onClose={() => setIsTutorScheduleModalOpen(false)}
+        tutor={tutors.find(t => isSameTutor(t.tutorId, tutorId) || isSameTutor(t.id, tutorId)) || null}
+        classes={existingClasses}
+        students={students}
+        onSelectSlotToBook={(_tId, day, slot) => {
+          setSelectedDays([day]);
+          setStartTimePKT(slot);
+        }}
+      />
     </div>
   );
 };

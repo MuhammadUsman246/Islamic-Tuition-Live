@@ -21,9 +21,12 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
-  Check
+  Check,
+  Eye
 } from 'lucide-react';
 import { Tutor, Student, DayOfWeek, TimetableClass } from '../../types';
+import { isSameTutor } from '../../services/dataService';
+import { TutorScheduleViewModal } from '../modals/TutorScheduleViewModal';
 
 interface TutorSlotAvailabilityInspectorProps {
   tutors: Tutor[];
@@ -84,6 +87,7 @@ export const TutorSlotAvailabilityInspector: React.FC<TutorSlotAvailabilityInspe
   const [viewLayout, setViewLayout] = useState<'inline' | 'matrix'>('inline');
   const [highlightSlot, setHighlightSlot] = useState<string>('');
   const [showOccupiedMap, setShowOccupiedMap] = useState<Record<string, boolean>>({});
+  const [inspectingTutorForSchedule, setInspectingTutorForSchedule] = useState<Tutor | null>(null);
 
   // Format 24h time to 12h readable string (e.g. 03:00 -> 3:00 AM)
   const format12Hour = (time24: string) => {
@@ -122,34 +126,33 @@ export const TutorSlotAvailabilityInspector: React.FC<TutorSlotAvailabilityInspe
     const slotsToProcess = segment.slots;
 
     const computed = slotsToProcess.map((slot) => {
-      // Find all classes booked at this day and slot
+      // Find all classes booked at this day and slot (normalized day & time check)
       const matchingClasses = classes.filter(c => {
-        if (c.dayOfWeek !== selectedDay) return false;
         if (c.status === 'Cancelled') return false;
-        return c.startTimePKT === slot;
+        const cDays = c.days && Array.isArray(c.days) ? c.days : [c.dayOfWeek || (c as any).day];
+        const matchesDay = cDays.some(d => d?.toLowerCase() === selectedDay.toLowerCase());
+        if (!matchesDay) return false;
+
+        const slotNorm = slot.trim();
+        const startNorm = (c.startTimePKT || c.time || c.startTime || '').trim();
+        return (
+          slotNorm === startNorm ||
+          slotNorm === startNorm.padStart(5, '0') ||
+          startNorm.startsWith(slotNorm)
+        );
       });
 
-      // Map occupied tutor IDs
-      const busyTutorIds = new Set<string>();
-      const tutorClassMap: Record<string, TimetableClass[]> = {};
+      // Split tutors into Available and Busy using isSameTutor for 100% ID variant precision
+      const isTutorBusy = (t: Tutor) => {
+        return matchingClasses.some(c => isSameTutor(c.tutorId, t.tutorId) || isSameTutor(c.tutorId, t.id));
+      };
 
-      matchingClasses.forEach((cls) => {
-        if (cls.tutorId) {
-          busyTutorIds.add(cls.tutorId);
-          if (!tutorClassMap[cls.tutorId]) {
-            tutorClassMap[cls.tutorId] = [];
-          }
-          tutorClassMap[cls.tutorId].push(cls);
-        }
-      });
-
-      // Split tutors into Available and Busy
-      const availableTutors = activeTutors.filter(t => !busyTutorIds.has(t.tutorId) && !busyTutorIds.has(t.id));
+      const availableTutors = activeTutors.filter(t => !isTutorBusy(t));
       const busyTutors = activeTutors
-        .filter(t => busyTutorIds.has(t.tutorId) || busyTutorIds.has(t.id))
+        .filter(t => isTutorBusy(t))
         .map(t => ({
           tutor: t,
-          assignedClasses: tutorClassMap[t.tutorId] || tutorClassMap[t.id] || []
+          assignedClasses: matchingClasses.filter(c => isSameTutor(c.tutorId, t.tutorId) || isSameTutor(c.tutorId, t.id))
         }));
 
       // Filter by search query if any
@@ -479,25 +482,38 @@ export const TutorSlotAvailabilityInspector: React.FC<TutorSlotAvailabilityInspe
                       </span>
                     </div>
 
-                    {/* Middle Column: Inline Available Tutor Badges (1-Click Assignment) */}
+                    {/* Middle Column: Inline Available Tutor Badges (1-Click Assignment & Timetable Inspector) */}
                     <div className="flex-1 flex flex-wrap items-center gap-1.5">
                       {data.availableTutors.map((tutor) => (
-                        <button
+                        <div
                           key={tutor.id || tutor.tutorId}
-                          type="button"
-                          onClick={() => onAddClass && onAddClass(tutor.tutorId, selectedDay, data.slot)}
-                          className="group inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-50/90 hover:bg-emerald-600 hover:text-white text-emerald-950 border border-emerald-300 hover:border-emerald-600 rounded-lg text-xs font-bold transition-all duration-150 shadow-2xs cursor-pointer active:scale-95"
-                          title={`Click to book class with ${tutor.realName || tutor.tutorId} at ${data.display12}`}
+                          className="inline-flex items-center gap-1 p-1 bg-emerald-50/90 border border-emerald-300 rounded-lg shadow-2xs"
                         >
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 group-hover:bg-white shrink-0 shadow-2xs" />
-                          <span>{tutor.tutorId}</span>
-                          {tutor.realName && (
-                            <span className="text-[10px] text-emerald-700 group-hover:text-emerald-100 font-normal">
-                              ({tutor.realName.split(' ')[0]})
-                            </span>
-                          )}
-                          <Plus className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white opacity-70 group-hover:opacity-100 ml-0.5" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => onAddClass && onAddClass(tutor.tutorId, selectedDay, data.slot)}
+                            className="group inline-flex items-center gap-1.5 px-2 py-0.5 text-emerald-950 font-bold text-xs hover:bg-emerald-600 hover:text-white rounded-md transition-all cursor-pointer"
+                            title={`Click to book class with ${tutor.realName || tutor.tutorId} at ${data.display12}`}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 group-hover:bg-white shrink-0 shadow-2xs" />
+                            <span>{tutor.tutorId}</span>
+                            {tutor.realName && (
+                              <span className="text-[10px] text-emerald-700 group-hover:text-emerald-100 font-normal">
+                                ({tutor.realName.split(' ')[0]})
+                              </span>
+                            )}
+                            <Plus className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white opacity-70 group-hover:opacity-100 ml-0.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setInspectingTutorForSchedule(tutor)}
+                            className="p-1 hover:bg-emerald-200 text-emerald-800 rounded-md transition-colors cursor-pointer"
+                            title={`View ${tutor.tutorId}'s full weekly timetable schedule`}
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       ))}
                     </div>
 
@@ -668,6 +684,19 @@ export const TutorSlotAvailabilityInspector: React.FC<TutorSlotAvailabilityInspe
           )}
         </div>
       )}
+      {/* Tutor Schedule Matrix Modal Inspector */}
+      <TutorScheduleViewModal
+        isOpen={Boolean(inspectingTutorForSchedule)}
+        onClose={() => setInspectingTutorForSchedule(null)}
+        tutor={inspectingTutorForSchedule}
+        classes={classes}
+        students={students}
+        onSelectSlotToBook={(tutorId, day, slot) => {
+          if (onAddClass) {
+            onAddClass(tutorId, day, slot);
+          }
+        }}
+      />
     </div>
   );
 };

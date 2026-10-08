@@ -5974,9 +5974,8 @@ export async function getClassesForTutor(tutorId: string, forceRefresh = false):
  */
 export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = false): Promise<Student[]> {
   if (!tutorId) return [];
-  const canonicalTutorId = normalizeTutorId(tutorId);
 
-  // In-memory filter for Active/Trial/Confirmed students (Optimization 3)
+  // In-memory filter for Active/Trial/Confirmed students
   const isTargetTutorActive = (s: Student) =>
     isSameTutor(s.assignedTutorId, tutorId) &&
     (s.status === 'Active' || s.status === 'Trial' || s.status === 'Confirmed');
@@ -5992,16 +5991,16 @@ export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = 
 
   if (!isFirestoreQuotaExceeded()) {
     try {
-      // Scoped query: Strictly fetch only active, trial, and confirmed students for this tutor
+      // Scoped query: Fetch active students and filter in-memory with isSameTutor for 100% ID variant matching
       const q = query(
         collection(db, STUDENTS_COL),
-        where('assignedTutorId', '==', canonicalTutorId),
-        where('status', 'in', ['Active', 'Trial', 'Confirmed'])
+        where('status', 'in', ['Active', 'Trial', 'Confirmed']),
+        limit(250)
       );
       const snap = await getDocs(q);
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
-        return items;
+        return items.filter(isTargetTutorActive);
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, STUDENTS_COL);
@@ -6015,31 +6014,34 @@ export async function getStudentsForTutorDirect(tutorId: string, forceRefresh = 
 /**
  * Scoped query for Tutor's recent lessons (~25 docs instead of 150)
  */
-export async function getLessonsForTutor(tutorId: string, limitCount = 30): Promise<Lesson[]> {
+export async function getLessonsForTutor(tutorId: string, limitCount = 300): Promise<Lesson[]> {
   if (!tutorId) return [];
   if (CACHE.lessons) {
-    return CACHE.lessons.filter(l => l.tutorId === tutorId).slice(0, limitCount);
+    return CACHE.lessons.filter(l => isSameTutor(l.tutorId, tutorId)).slice(0, limitCount);
   }
   const stored = loadCachedCollection<Lesson[]>('lessons');
   if (stored && stored.length > 0) {
     CACHE.lessons = stored;
-    return stored.filter(l => l.tutorId === tutorId).slice(0, limitCount);
+    return stored.filter(l => isSameTutor(l.tutorId, tutorId)).slice(0, limitCount);
   }
 
   if (!isFirestoreQuotaExceeded()) {
     try {
-      const q = query(collection(db, LESSONS_COL), where('tutorId', '==', tutorId), limit(limitCount));
+      // Fetch recent lessons and filter with isSameTutor to cover all ID variants
+      const cutoffDateStr = getRecentLessonCutoffDate(90);
+      const q = query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(limitCount));
       const snap = await getDocs(q);
       if (!snap.empty) {
         const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Lesson));
-        return cleanExpiredScreenshots(items);
+        const cleaned = cleanExpiredScreenshots(items);
+        return cleaned.filter(l => isSameTutor(l.tutorId, tutorId));
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, LESSONS_COL);
     }
   }
 
-  return (isCleanDataMode() ? [] : SEED_LESSONS).filter(l => l.tutorId === tutorId).slice(0, limitCount);
+  return (isCleanDataMode() ? [] : SEED_LESSONS).filter(l => isSameTutor(l.tutorId, tutorId)).slice(0, limitCount);
 }
 
 /**

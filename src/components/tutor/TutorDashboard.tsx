@@ -160,10 +160,36 @@ export const TutorDashboard: React.FC<TutorDashboardProps> = ({
     })
     .map(sanitizeStudentForTutor);
 
-  // Filter lessons ONLY for currently active assigned students on this tutor's schedule
-  const activeStudentIds = new Set(myAssignedStudents.map(s => s.studentId));
+  // Filter lessons for assigned students on this tutor's schedule flexibly by studentId, id, or name
+  const assignedStudentKeys = new Set<string>();
+  myAssignedStudents.forEach(s => {
+    if (s.studentId) {
+      assignedStudentKeys.add(s.studentId.trim().toLowerCase());
+      assignedStudentKeys.add(s.studentId.replace(/[^a-z0-9]/g, '').toLowerCase());
+    }
+    if ((s as any).id) {
+      assignedStudentKeys.add(String((s as any).id).trim().toLowerCase());
+      assignedStudentKeys.add(String((s as any).id).replace(/[^a-z0-9]/g, '').toLowerCase());
+    }
+    if (s.name) {
+      assignedStudentKeys.add(s.name.trim().toLowerCase());
+    }
+  });
+
+  const isMatchAssignedStudent = (l: Lesson) => {
+    if (!l) return false;
+    const lId = (l.studentId || '').trim().toLowerCase();
+    const lClean = lId.replace(/[^a-z0-9]/g, '');
+    const lName = (l.studentName || '').trim().toLowerCase();
+    return (
+      (lId && assignedStudentKeys.has(lId)) ||
+      (lClean && assignedStudentKeys.has(lClean)) ||
+      (lName && assignedStudentKeys.has(lName))
+    );
+  };
+
   const myLessons = lessons.filter(l => 
-    isSameTutor(l.tutorId, tutor?.tutorId) && activeStudentIds.has(l.studentId)
+    isSameTutor(l.tutorId, tutor?.tutorId) && isMatchAssignedStudent(l)
   );
 
   // One-time New Student Notifications tracking for Tutor (ONLY newly added/assigned students, never existing roster)
