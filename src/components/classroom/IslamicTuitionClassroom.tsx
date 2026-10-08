@@ -213,15 +213,16 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   onLeave,
   className = '',
 }) => {
-  const isTutor =
-    userRole === 'tutor' ||
-    userRole === 'admin' ||
-    userRole === 'supervisor' ||
-    tokenData?.role === 'tutor' ||
-    tokenData?.role === 'admin' ||
-    tokenData?.role === 'supervisor' ||
-    (tokenData?.participantIdentity || '').toLowerCase().includes('tutor') ||
-    (participantName || '').toLowerCase().startsWith('tutor');
+  const normalizedRole = (userRole || tokenData?.role || '').toLowerCase();
+  const isAdmin = normalizedRole === 'admin';
+  const isSupervisor = normalizedRole === 'supervisor';
+  const isAdminOrSupervisor = isAdmin || isSupervisor;
+  const isActualTutor =
+    !isAdminOrSupervisor &&
+    (normalizedRole === 'tutor' ||
+      (tokenData?.participantIdentity || '').toLowerCase().includes('tutor') ||
+      (participantName || '').toLowerCase().startsWith('tutor'));
+  const isTutor = isActualTutor || isAdminOrSupervisor;
   const isStudent = !isTutor;
 
   // Theme Mode: Default to 'dark' (Enhanced Premium High-Contrast Black) with 1-click Light/Dark toggle
@@ -256,10 +257,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const filterAudioCtxRef = useRef<AudioContext | null>(null);
   const rawMicStreamRef = useRef<MediaStream | null>(null);
 
-  // Connection & Track States
+  // Connection & Track States (Admins & Supervisors always enter auto-muted in stealth mode)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionState>(ConnectionState.Connecting);
-  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(initialMuted);
-  const isAudioMutedRef = useRef<boolean>(initialMuted);
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(initialMuted || isAdminOrSupervisor);
+  const isAudioMutedRef = useRef<boolean>(initialMuted || isAdminOrSupervisor);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [showCameraConfirmModal, setShowCameraConfirmModal] = useState<boolean>(false);
@@ -308,7 +309,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const presenceToastTimerRef = useRef<any>(null);
   const notifiedPeersRef = useRef<Set<string>>(new Set());
   const peerCustomNamesRef = useRef<Record<string, { name: string; role: string }>>({});
-  const serverHeartbeatPeersRef = useRef<Array<{ identity: string; name: string; role: string }>>([]);
+  const peerMuteOverridesRef = useRef<Record<string, boolean>>({});
+  const lastProcessedMuteCommandIdRef = useRef<string>('');
+  const serverHeartbeatPeersRef = useRef<Array<{ identity: string; name: string; role: string; isMuted?: boolean }>>([]);
 
   const triggerPresenceToast = useCallback((name: string, roleLabel: string, type: 'join' | 'leave') => {
     if (presenceToastTimerRef.current) {
@@ -641,12 +644,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Helper function to check if participant is a hidden admin
+  // Helper function to check if participant is a hidden admin or supervisor observer
   const isParticipantHiddenAdmin = (p: Participant): boolean => {
     try {
+      const idOrName = `${p.identity || ''} ${p.name || ''}`.toLowerCase();
+      if (
+        idOrName.includes('admin_obs') ||
+        idOrName.includes('supervisor_obs') ||
+        idOrName.includes('observer') ||
+        idOrName.includes('invisible')
+      ) {
+        return true;
+      }
       if (!p.metadata) return false;
       const parsed = JSON.parse(p.metadata);
-      return Boolean(parsed.hidden || ((parsed.role === 'admin' || parsed.role === 'supervisor') && parsed.hidden));
+      return Boolean(parsed.hidden || parsed.role === 'admin' || parsed.role === 'supervisor');
     } catch {
       return false;
     }
@@ -776,7 +788,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           name: pDisplayName,
           role: pRole,
           isSpeaking: p.isSpeaking,
-          isMuted: micPub ? micPub.isMuted : true,
+          isMuted:
+            peerMuteOverridesRef.current[p.identity.toLowerCase()] !== undefined
+              ? peerMuteOverridesRef.current[p.identity.toLowerCase()]
+              : peerMuteOverridesRef.current[pDisplayName.toLowerCase()] !== undefined
+                ? peerMuteOverridesRef.current[pDisplayName.toLowerCase()]
+                : micPub
+                  ? micPub.isMuted
+                  : true,
           hasAudioTrack: Boolean(micPub?.track),
           hasVideoTrack: Boolean(camPub?.track && !camPub.isMuted),
           isScreenSharing: Boolean(screenPub?.track && !screenPub.isMuted),
@@ -797,12 +816,18 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           const match = `${hbPeer.identity || ''} ${hbDisplayName} ${roomName}`.match(/(\d+)/);
           hbDisplayName = match ? `Tutor ${match[1]}` : 'Tutor';
         }
+        const resolvedHbMuted =
+          peerMuteOverridesRef.current[hbPeer.identity.toLowerCase()] !== undefined
+            ? peerMuteOverridesRef.current[hbPeer.identity.toLowerCase()]
+            : peerMuteOverridesRef.current[hbDisplayName.toLowerCase()] !== undefined
+              ? peerMuteOverridesRef.current[hbDisplayName.toLowerCase()]
+              : Boolean(hbPeer.isMuted);
         visibleList.push({
           id: hbPeer.identity,
           name: hbDisplayName,
           role: normRole,
           isSpeaking: false,
-          isMuted: false,
+          isMuted: resolvedHbMuted,
           hasAudioTrack: true,
           hasVideoTrack: false,
           isScreenSharing: false,
@@ -1059,8 +1084,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.Disconnected, () => {
           if (isCancelled) return;
-          // If a student is disconnected by the server (e.g. Tutor ended class for everyone or finished student's lesson), exit cleanly
-          if (!isTutor) {
+          // If a student or tutor is disconnected by the server (e.g. Admin removed tutor or Tutor/Admin ended class), exit cleanly
+          if (!isAdminOrSupervisor) {
             isCancelled = true;
             onLeave();
           }
@@ -1068,12 +1093,17 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         const broadcastPresenceHello = () => {
           try {
-            if (room.state === ConnectionState.Connected && room.localParticipant && !isParticipantHiddenAdmin(room.localParticipant)) {
+            if (
+              room.state === ConnectionState.Connected &&
+              room.localParticipant &&
+              !isAdminOrSupervisor &&
+              !isParticipantHiddenAdmin(room.localParticipant)
+            ) {
               const helloPayload = new TextEncoder().encode(JSON.stringify({
                 type: 'PRESENCE_HELLO',
                 identity: room.localParticipant.identity || tokenData.participantIdentity || participantName,
                 name: participantName,
-                role: isTutor ? 'Tutor' : 'Student'
+                role: isActualTutor ? 'Tutor' : 'Student'
               }));
               room.localParticipant.publishData(helloPayload as any, { reliable: true }).catch(() => {});
             }
@@ -1189,13 +1219,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           syncParticipantsState(room);
         });
 
-        room.on(RoomEvent.TrackMuted, () => {
+        room.on(RoomEvent.TrackMuted, (pub, participant) => {
           if (isCancelled) return;
+          if (participant?.identity) {
+            peerMuteOverridesRef.current[participant.identity.toLowerCase()] = true;
+          }
           syncParticipantsState(room);
         });
 
-        room.on(RoomEvent.TrackUnmuted, () => {
+        room.on(RoomEvent.TrackUnmuted, (pub, participant) => {
           if (isCancelled) return;
+          if (participant?.identity) {
+            peerMuteOverridesRef.current[participant.identity.toLowerCase()] = false;
+          }
           syncParticipantsState(room);
         });
 
@@ -1267,10 +1303,85 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 }
               }
               syncParticipantsState(room);
+            } else if (msgObj.type === 'HOST_MUTE_COMMAND') {
+              const targetIdLower = (msgObj.targetIdentity || '').toLowerCase();
+              const targetNameLower = (msgObj.targetName || '').toLowerCase();
+              const shouldMute = Boolean(msgObj.muted);
+              if (targetIdLower) peerMuteOverridesRef.current[targetIdLower] = shouldMute;
+              if (targetNameLower) peerMuteOverridesRef.current[targetNameLower] = shouldMute;
+
+              const localId = (room.localParticipant?.identity || tokenData.participantIdentity || '').toLowerCase();
+              const localName = (participantName || '').toLowerCase();
+              if (
+                (targetIdLower && (targetIdLower === localId || targetIdLower === localName)) ||
+                (targetNameLower && (targetNameLower === localName || targetNameLower === localId))
+              ) {
+                setIsAudioMuted(shouldMute);
+                isAudioMutedRef.current = shouldMute;
+                const pub = room.localParticipant?.getTrackPublication(Track.Source.Microphone);
+                if (pub?.track) {
+                  if (shouldMute) {
+                    pub.track.mute().catch(() => {});
+                  } else {
+                    pub.track.unmute().catch(() => {});
+                  }
+                } else if (!shouldMute && room.localParticipant) {
+                  publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
+                }
+                try {
+                  const stateEcho = new TextEncoder().encode(
+                    JSON.stringify({
+                      type: 'PARTICIPANT_MUTE_STATE_CHANGED',
+                      identity: room.localParticipant?.identity || tokenData.participantIdentity || participantName,
+                      name: participantName,
+                      muted: shouldMute
+                    })
+                  );
+                  room.localParticipant?.publishData(stateEcho as any, { reliable: true }).catch(() => {});
+                } catch {}
+              }
+              syncParticipantsState(room);
+            } else if (msgObj.type === 'PARTICIPANT_MUTE_STATE_CHANGED') {
+              const idLower = (msgObj.identity || '').toLowerCase();
+              const nameLower = (msgObj.name || '').toLowerCase();
+              const mutedState = Boolean(msgObj.muted);
+              if (idLower) peerMuteOverridesRef.current[idLower] = mutedState;
+              if (nameLower) peerMuteOverridesRef.current[nameLower] = mutedState;
+              syncParticipantsState(room);
+            } else if (msgObj.type === 'REMOVE_TUTOR') {
+              // Admin removed the Tutor from the meeting -> immediately disconnect & exit Tutor
+              if (isActualTutor) {
+                const localId = (room.localParticipant.identity || '').toLowerCase();
+                const localName = (participantName || '').toLowerCase();
+                if (
+                  msgObj.targetIdentities &&
+                  Array.isArray(msgObj.targetIdentities) &&
+                  msgObj.targetIdentities.length > 0 &&
+                  !msgObj.targetIdentities.some((t: string) => {
+                    const tl = (t || '').toLowerCase();
+                    return tl === localId || tl === localName;
+                  })
+                ) {
+                  return;
+                }
+                isCancelled = true;
+                try { room.disconnect(); } catch {}
+                onLeave();
+              }
             } else if (msgObj.type === 'END_CLASS_FOR_ALL' || msgObj.type === 'FINISH_STUDENT_LESSON') {
-              // Tutor ended class for everyone or finished this student's lesson -> immediately disconnect & exit student
-              if (!isTutor) {
-                if (msgObj.type === 'FINISH_STUDENT_LESSON' && msgObj.targetIdentities && !msgObj.targetIdentities.includes(room.localParticipant.identity)) {
+              // Tutor, Supervisor, or Admin ended class for everyone or finished this student's lesson -> immediately disconnect & exit
+              if (!isTutor || (isActualTutor && msgObj.includeTutor)) {
+                const localId = (room.localParticipant.identity || '').toLowerCase();
+                const localName = (participantName || '').toLowerCase();
+                if (
+                  msgObj.type === 'FINISH_STUDENT_LESSON' &&
+                  msgObj.targetIdentities &&
+                  Array.isArray(msgObj.targetIdentities) &&
+                  !msgObj.targetIdentities.some((t: string) => {
+                    const tl = (t || '').toLowerCase();
+                    return tl === localId || tl === localName;
+                  })
+                ) {
                   // Not targeted to us, ignore!
                   return;
                 }
@@ -1300,12 +1411,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         });
 
-        // Publish local microphone with Studio Voice Filter (unless hidden observer)
-        let isHiddenObserver = false;
+        // Publish local microphone with Studio Voice Filter (unless hidden Admin/Supervisor observer)
+        let isHiddenObserver = isAdminOrSupervisor;
         try {
           if (room.localParticipant.metadata) {
             const meta = JSON.parse(room.localParticipant.metadata);
-            isHiddenObserver = Boolean(meta.hidden);
+            if (meta.hidden || meta.role === 'admin' || meta.role === 'supervisor') {
+              isHiddenObserver = true;
+            }
           }
         } catch {}
 
@@ -1317,7 +1430,30 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         const handleHeartbeatResponse = (data: any) => {
           if (isCancelled || !data) return;
-          if (!isTutor && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) {
+          if (
+            data.pendingMuteCommand &&
+            data.pendingMuteCommand.commandId &&
+            data.pendingMuteCommand.commandId !== lastProcessedMuteCommandIdRef.current
+          ) {
+            lastProcessedMuteCommandIdRef.current = data.pendingMuteCommand.commandId;
+            const shouldMute = Boolean(data.pendingMuteCommand.muted);
+            setIsAudioMuted(shouldMute);
+            isAudioMutedRef.current = shouldMute;
+            const pub = room.localParticipant?.getTrackPublication(Track.Source.Microphone);
+            if (pub?.track) {
+              if (shouldMute) {
+                pub.track.mute().catch(() => {});
+              } else {
+                pub.track.unmute().catch(() => {});
+              }
+            } else if (!shouldMute && room.localParticipant) {
+              publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
+            }
+          }
+          if (
+            (!isTutor && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) ||
+            (isActualTutor && (data.roomAction === 'REMOVE_TUTOR' || data.roomAction === 'ADMIN_END_CLASS_FOR_ALL'))
+          ) {
             isCancelled = true;
             try { room.disconnect(); } catch {}
             onLeave();
@@ -1332,8 +1468,12 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               (ap: any) => ap.identity !== localId && ap.name !== participantName && ap.role !== 'admin' && ap.role !== 'supervisor'
             );
 
-            // Detect new joins via heartbeat if not already notified via WebRTC
+            // Detect new joins & sync mute state via heartbeat
             remoteHbPeers.forEach((ap: any) => {
+              if (typeof ap.isMuted === 'boolean') {
+                peerMuteOverridesRef.current[ap.identity.toLowerCase()] = ap.isMuted;
+                if (ap.name) peerMuteOverridesRef.current[ap.name.toLowerCase()] = ap.isMuted;
+              }
               const pRole = ap.role?.toLowerCase() === 'tutor' ? 'Tutor' : 'Student';
               let safeApName = ap.name || ap.identity;
               if (pRole === 'Tutor' && (userRole === 'student' || userRole === 'parent' || userRole === 'guest')) {
@@ -1379,7 +1519,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             roomName,
             identity: currentIdentity,
             name: participantName,
-            role: userRole
+            role: userRole,
+            isMuted: isAudioMutedRef.current
           })
         })
           .then(r => {
@@ -1441,7 +1582,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           roomName,
           identity: tokenData.participantIdentity || participantName,
           name: participantName,
-          role: userRole
+          role: userRole,
+          isMuted: isAudioMutedRef.current
         })
       })
         .then(r => {
@@ -1450,7 +1592,34 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         })
         .then(data => {
           if (isCancelled || !data) return;
-          if (!isTutor && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) {
+          if (
+            data.pendingMuteCommand &&
+            data.pendingMuteCommand.commandId &&
+            data.pendingMuteCommand.commandId !== lastProcessedMuteCommandIdRef.current
+          ) {
+            lastProcessedMuteCommandIdRef.current = data.pendingMuteCommand.commandId;
+            const shouldMute = Boolean(data.pendingMuteCommand.muted);
+            setIsAudioMuted(shouldMute);
+            isAudioMutedRef.current = shouldMute;
+            const room = roomRef.current;
+            if (room && room.localParticipant) {
+              const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+              if (pub?.track) {
+                if (shouldMute) {
+                  pub.track.mute().catch(() => {});
+                } else {
+                  pub.track.unmute().catch(() => {});
+                }
+              } else if (!shouldMute) {
+                publishCleanMicrophoneTrack(room, selectedAudioInput || undefined, studioNoiseFilter, enableAutoGain).catch(() => {});
+              }
+              syncParticipantsState(room);
+            }
+          }
+          if (
+            (!isTutor && (data.roomAction === 'END_CLASS_FOR_ALL' || data.roomAction === 'FINISH_STUDENT_LESSON')) ||
+            (isActualTutor && (data.roomAction === 'REMOVE_TUTOR' || data.roomAction === 'ADMIN_END_CLASS_FOR_ALL'))
+          ) {
             isCancelled = true;
             if (roomRef.current) {
               try { roomRef.current.disconnect(); } catch {}
@@ -1469,6 +1638,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             );
 
             remoteHbPeers.forEach((ap: any) => {
+              if (typeof ap.isMuted === 'boolean') {
+                peerMuteOverridesRef.current[ap.identity.toLowerCase()] = ap.isMuted;
+                if (ap.name) peerMuteOverridesRef.current[ap.name.toLowerCase()] = ap.isMuted;
+              }
               const pRole = ap.role?.toLowerCase() === 'tutor' ? 'Tutor' : 'Student';
               let safeApName = ap.name || ap.identity;
               if (pRole === 'Tutor' && (userRole === 'student' || userRole === 'parent' || userRole === 'guest')) {
@@ -1835,6 +2008,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             await pub.track.mute();
             setIsAudioMuted(true);
             isAudioMutedRef.current = true;
+          }
+          if (!isAdminOrSupervisor && roomRef.current.localParticipant) {
+            try {
+              const stateEcho = new TextEncoder().encode(
+                JSON.stringify({
+                  type: 'PARTICIPANT_MUTE_STATE_CHANGED',
+                  identity: roomRef.current.localParticipant.identity || tokenData.participantIdentity || participantName,
+                  name: participantName,
+                  muted: isAudioMutedRef.current
+                })
+              );
+              roomRef.current.localParticipant.publishData(stateEcho as any, { reliable: true }).catch(() => {});
+            } catch {}
           }
           syncParticipantsState(roomRef.current);
           return;
@@ -2409,14 +2595,110 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     );
   };
 
-  // Tutor Option 2: End Class for Everyone (Disconnects all students & closes classroom)
+  // Host Action (Tutor, Supervisor, or Admin): Remotely Mute or Unmute a Specific Participant in Real-Time
+  const handleToggleRemoteParticipantMute = useCallback(async (
+    targetIdentity: string,
+    targetName: string,
+    currentMuted: boolean
+  ) => {
+    const nextMuted = !currentMuted;
+    const idKey = (targetIdentity || '').toLowerCase();
+    const nameKey = (targetName || '').toLowerCase();
+    if (idKey) peerMuteOverridesRef.current[idKey] = nextMuted;
+    if (nameKey) peerMuteOverridesRef.current[nameKey] = nextMuted;
+
+    // 1. Immediate optimistic UI update across local view
+    setFilteredParticipants(prev =>
+      prev.map(p =>
+        p.id.toLowerCase() === idKey || p.name.toLowerCase() === nameKey
+          ? { ...p, isMuted: nextMuted }
+          : p
+      )
+    );
+
+    // 2. Broadcast instant WebRTC DataChannel signal to all connected clients in the room
+    const room = roomRef.current;
+    if (room && room.state === ConnectionState.Connected && room.localParticipant) {
+      try {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({
+            type: 'HOST_MUTE_COMMAND',
+            targetIdentity,
+            targetName,
+            muted: nextMuted
+          })
+        );
+        await room.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+      } catch {}
+    }
+
+    // 3. Persist on server & trigger LiveKit server-side track mute + heartbeat command delivery
+    try {
+      await fetch('/api/livekit/rooms/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          action: nextMuted ? 'MUTE_PARTICIPANT' : 'UNMUTE_PARTICIPANT',
+          targetIdentity,
+          targetName,
+          muted: nextMuted
+        })
+      });
+    } catch {}
+  }, [roomName]);
+
+  // Admin Super-Host Action: Remove Tutor from Meeting (while keeping classroom open or under Admin control)
+  const handleRemoveTutorFromMeeting = async (tutorIdentity: string, tutorName: string) => {
+    if (!isAdmin) return;
+    setShowLeaveConfirmModal(false);
+    try {
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        const payload = new TextEncoder().encode(JSON.stringify({
+          type: 'REMOVE_TUTOR',
+          sender: participantName,
+          targetIdentities: [tutorIdentity]
+        }));
+        await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
+      }
+      const res = await fetch('/api/livekit/rooms/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          action: 'REMOVE_TUTOR',
+          targetIdentities: [tutorIdentity]
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.waitingList) {
+        updateTutorWaitingQueue(data.waitingList);
+      }
+    } catch {}
+
+    notifiedPeersRef.current.delete(tutorIdentity);
+    delete peerCustomNamesRef.current[tutorIdentity];
+    serverHeartbeatPeersRef.current = serverHeartbeatPeersRef.current.filter(hp => hp.identity !== tutorIdentity);
+
+    if (roomRef.current) {
+      syncParticipantsState(roomRef.current);
+    }
+    triggerPresenceToast(
+      `Removed ${tutorName} (Tutor) from the meeting`,
+      'Admin Super-Host',
+      'leave'
+    );
+  };
+
+  // Tutor / Supervisor / Admin Option: End Class for Everyone (Disconnects all students, plus Tutor if triggered by Admin/Supervisor, & closes classroom)
   const handleEndClassForEveryone = async () => {
     setShowLeaveConfirmModal(false);
     try {
       if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
         const payload = new TextEncoder().encode(JSON.stringify({
           type: 'END_CLASS_FOR_ALL',
-          sender: participantName
+          sender: participantName,
+          includeTutor: isAdminOrSupervisor
         }));
         await roomRef.current.localParticipant.publishData(payload as any, { reliable: true }).catch(() => {});
       }
@@ -2425,7 +2707,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           roomName,
-          action: 'END_CLASS_FOR_ALL'
+          action: 'END_CLASS_FOR_ALL',
+          includeTutor: isAdminOrSupervisor
         })
       }).catch(() => {});
     } catch {}
@@ -2519,7 +2802,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   const activeTutorParticipant = filteredParticipants.find(p => p.role === 'Tutor');
   const activeStudentParticipants = filteredParticipants.filter(p => p.role === 'Student' || p.role === 'Guest');
   const connectedStudentsNames = activeStudentParticipants.map(s => s.name).join(', ');
-  const tutorDisplayName = activeTutorParticipant?.name || (isTutor ? participantName : 'Tutor');
+  const fallbackRoomTutorLabel = roomName.match(/(\d+)/) ? `Tutor ${roomName.match(/(\d+)/)![1]}` : 'Tutor';
+  const tutorDisplayName = activeTutorParticipant?.name || (isActualTutor ? participantName : fallbackRoomTutorLabel);
   const isBothTutorAndStudentPresent = Boolean(activeTutorParticipant && activeStudentParticipants.length > 0);
 
   // Zero-Load Idle Standby Mode: Active when Tutor is in the room with 0 students and not sharing screen
@@ -2917,11 +3201,17 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <span className="truncate">
                   {isBothTutorAndStudentPresent
                     ? `${tutorDisplayName} + ${connectedStudentsNames}`
-                    : isTutor
+                    : isActualTutor
                       ? `${participantName} · Waiting for Student`
                       : activeTutorParticipant
-                        ? `${tutorDisplayName} + ${participantName}`
-                        : `${participantName} · Waiting for Tutor...`}
+                        ? isAdminOrSupervisor
+                          ? `${tutorDisplayName} · Waiting for Student`
+                          : `${tutorDisplayName} + ${participantName}`
+                        : isAdminOrSupervisor
+                          ? activeStudentParticipants.length > 0
+                            ? `${connectedStudentsNames} · Waiting for ${tutorDisplayName}`
+                            : `Room Idle · Waiting for ${tutorDisplayName} & Student`
+                          : `${participantName} · Waiting for Tutor...`}
                 </span>
               </button>
 
@@ -3039,6 +3329,159 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           </button>
         </div>
       </header>
+
+      {/* GRANULAR HOST & STEALTH MODERATOR CONTROL BAR FOR TUTORS, ADMINS, AND SUPERVISORS */}
+      {isTutor && (
+        <div
+          className={`px-3 py-1.5 border-b flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 ${
+            isAdmin
+              ? isLight
+                ? 'bg-purple-50 border-purple-300 text-purple-950'
+                : 'bg-[#170F26] border-purple-500/45 text-purple-100'
+              : isSupervisor
+                ? isLight
+                  ? 'bg-blue-50 border-blue-300 text-blue-950'
+                  : 'bg-[#0D1A29] border-blue-500/45 text-blue-100'
+                : isLight
+                  ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
+                  : 'bg-[#0C1A13] border-emerald-500/40 text-emerald-100'
+          }`}
+        >
+          <div className="flex items-center space-x-2 min-w-0">
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shrink-0 border ${
+                isAdmin
+                  ? 'bg-purple-500/25 border-purple-400/50 text-purple-300'
+                  : isSupervisor
+                    ? 'bg-blue-500/25 border-blue-400/50 text-blue-300'
+                    : 'bg-emerald-500/25 border-emerald-400/50 text-emerald-300'
+              }`}
+            >
+              {isAdmin
+                ? '🕵️ Stealth Super-Admin'
+                : isSupervisor
+                  ? '🕵️ Stealth Supervisor'
+                  : '🛡️ Classroom Host (Tutor)'}
+            </span>
+            <span className="text-[11px] font-bold truncate">
+              {isAdmin
+                ? 'Invisible to Room · Full Super-Host Controls (Mute/Unmute Any User, Remove Tutor/Student, End Meeting for All)'
+                : isSupervisor
+                  ? 'Invisible to Room · Supervisor Controls (Mute/Unmute User, Remove Participant, End Meeting for All, Leave Silently)'
+                  : 'Live Host Controls · Mute/Unmute Specific Student, Remove Participant, or End Meeting for All'}
+            </span>
+          </div>
+
+          <div className="flex items-center flex-wrap gap-1.5 shrink-0">
+            {/* Admin Exclusive Controls for the Active Tutor: Mute/Unmute Tutor & Remove Tutor */}
+            {isAdmin && activeTutorParticipant && (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleToggleRemoteParticipantMute(
+                      activeTutorParticipant.id,
+                      activeTutorParticipant.name,
+                      activeTutorParticipant.isMuted
+                    )
+                  }
+                  className={`px-2.5 py-1 rounded-lg text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors ${
+                    activeTutorParticipant.isMuted
+                      ? 'bg-emerald-600 hover:bg-emerald-500'
+                      : 'bg-slate-700 hover:bg-slate-600'
+                  }`}
+                  title={
+                    activeTutorParticipant.isMuted
+                      ? `Unmute Tutor (${activeTutorParticipant.name})`
+                      : `Mute Tutor (${activeTutorParticipant.name})`
+                  }
+                >
+                  {activeTutorParticipant.isMuted ? (
+                    <Mic className="w-3 h-3" />
+                  ) : (
+                    <MicOff className="w-3 h-3" />
+                  )}
+                  <span>
+                    {activeTutorParticipant.isMuted
+                      ? `Unmute Tutor (${activeTutorParticipant.name})`
+                      : `Mute Tutor (${activeTutorParticipant.name})`}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
+                  title={`Remove Participant: ${activeTutorParticipant.name} (Tutor)`}
+                >
+                  <UserX className="w-3 h-3" />
+                  <span>Remove Tutor ({activeTutorParticipant.name})</span>
+                </button>
+              </>
+            )}
+
+            {/* Tutor, Admin & Supervisor Controls for Each Active Student: Mute/Unmute Specific User & Remove Participant */}
+            {activeStudentParticipants.map((stu) => (
+              <React.Fragment key={stu.id}>
+                <button
+                  type="button"
+                  onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
+                  className={`px-2.5 py-1 rounded-lg text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors ${
+                    stu.isMuted
+                      ? 'bg-emerald-600 hover:bg-emerald-500'
+                      : 'bg-slate-700 hover:bg-slate-600'
+                  }`}
+                  title={stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}
+                >
+                  {stu.isMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                  <span>{stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
+                  title={`Remove Participant: ${stu.name}`}
+                >
+                  <UserX className="w-3 h-3" />
+                  <span>Remove {stu.name}</span>
+                </button>
+              </React.Fragment>
+            ))}
+
+            {/* End Meeting for All (Available to Tutor, Admin, and Supervisor) */}
+            <button
+              type="button"
+              onClick={handleEndClassForEveryone}
+              className="px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors border border-rose-400/40"
+              title="End Meeting for All connected participants in real-time"
+            >
+              <PhoneOff className="w-3 h-3" />
+              <span>End Meeting for All</span>
+            </button>
+
+            {/* Leave Silently Anytime without disturbing class (Admin & Supervisor Stealth Mode) */}
+            {isAdminOrSupervisor && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (pipWindowRef.current && !pipWindowRef.current.closed) {
+                    try { pipWindowRef.current.close(); } catch {}
+                  }
+                  if (roomRef.current) {
+                    try { roomRef.current.disconnect(); } catch {}
+                  }
+                  onLeave();
+                }}
+                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors"
+                title="Exit stealth observation immediately while keeping the class running undisturbed"
+              >
+                <span>Leave Silently</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* MULTIPLE STUDENTS IN CLASS NOTICE FOR TUTOR */}
       {isTutor && activeStudentParticipants.length >= 2 && (
@@ -3290,46 +3733,89 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   <div className="flex items-center space-x-2.5 min-w-0 text-left">
                     <span
                       className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                        activeTutorParticipant ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
+                        activeTutorParticipant || isActualTutor ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
                       }`}
                     />
                     <div className="min-w-0">
                       <div className={`text-xs font-extrabold truncate ${isLight ? 'text-[#14231B]' : 'text-white'}`}>
                         {activeTutorParticipant
-                          ? `${activeTutorParticipant.name}${isTutor ? ' (You)' : ''}`
-                          : isTutor
+                          ? `${activeTutorParticipant.name}${isActualTutor ? ' (You)' : ''}`
+                          : isActualTutor
                             ? `${participantName} (You)`
-                            : 'Waiting for Tutor...'}
+                            : `Waiting for ${tutorDisplayName}...`}
                       </div>
                       <div className={`text-[10px] font-bold uppercase tracking-wider ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
-                        {activeTutorParticipant || isTutor ? 'Tutor · Connected' : 'Tutor Not in Room Yet'}
+                        {activeTutorParticipant || isActualTutor ? 'Tutor (Host) · Connected' : 'Tutor Not in Room Yet'}
                       </div>
                     </div>
                   </div>
 
-                  {(activeTutorParticipant || isTutor) && (
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
-                        (activeTutorParticipant ? activeTutorParticipant.isMuted : isAudioMuted)
-                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                          : activeTutorParticipant?.isSpeaking
-                            ? 'bg-emerald-500 text-slate-950 font-extrabold'
-                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      }`}
-                    >
-                      {(activeTutorParticipant ? activeTutorParticipant.isMuted : isAudioMuted) ? (
-                        <>
-                          <MicOff className="w-3 h-3" />
-                          <span>Muted</span>
-                        </>
-                      ) : (
-                        <>
-                          <Mic className="w-3 h-3" />
-                          <span>{activeTutorParticipant?.isSpeaking ? 'Speaking' : 'Live'}</span>
-                        </>
-                      )}
-                    </span>
-                  )}
+                  <div className="flex items-center space-x-1.5 shrink-0">
+                    {isAdmin && activeTutorParticipant && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleToggleRemoteParticipantMute(
+                              activeTutorParticipant.id,
+                              activeTutorParticipant.name,
+                              activeTutorParticipant.isMuted
+                            )
+                          }
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold text-white border cursor-pointer transition-colors flex items-center space-x-1 ${
+                            activeTutorParticipant.isMuted
+                              ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/40'
+                              : 'bg-slate-700 hover:bg-slate-600 border-slate-500/40'
+                          }`}
+                          title={
+                            activeTutorParticipant.isMuted
+                              ? `Unmute ${activeTutorParticipant.name}`
+                              : `Mute ${activeTutorParticipant.name}`
+                          }
+                        >
+                          {activeTutorParticipant.isMuted ? (
+                            <Mic className="w-3 h-3" />
+                          ) : (
+                            <MicOff className="w-3 h-3" />
+                          )}
+                          <span>{activeTutorParticipant.isMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/40 cursor-pointer transition-colors"
+                          title={`Admin Super-Host: Remove ${activeTutorParticipant.name} from meeting`}
+                        >
+                          Remove Participant
+                        </button>
+                      </>
+                    )}
+
+                    {(activeTutorParticipant || isActualTutor) && (
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
+                          (activeTutorParticipant ? activeTutorParticipant.isMuted : isAudioMuted)
+                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                            : activeTutorParticipant?.isSpeaking
+                              ? 'bg-emerald-500 text-slate-950 font-extrabold'
+                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}
+                      >
+                        {(activeTutorParticipant ? activeTutorParticipant.isMuted : isAudioMuted) ? (
+                          <>
+                            <MicOff className="w-3 h-3" />
+                            <span>Muted</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mic className="w-3 h-3" />
+                            <span>{activeTutorParticipant?.isSpeaking ? 'Speaking' : 'Live'}</span>
+                          </>
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* PLUS CONNECTOR BADGE */}
@@ -3372,27 +3858,55 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                         </div>
                       </div>
 
-                      <span
-                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
-                          stu.isMuted
-                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                            : stu.isSpeaking
-                              ? 'bg-emerald-500 text-slate-950 font-extrabold'
-                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                        }`}
-                      >
-                        {stu.isMuted ? (
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        {isTutor && (
                           <>
-                            <MicOff className="w-3 h-3" />
-                            <span>Muted</span>
-                          </>
-                        ) : (
-                          <>
-                            <Mic className="w-3 h-3" />
-                            <span>{stu.isSpeaking ? 'Speaking' : 'Live'}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold text-white border cursor-pointer transition-colors flex items-center space-x-1 ${
+                                stu.isMuted
+                                  ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/40'
+                                  : 'bg-slate-700 hover:bg-slate-600 border-slate-500/40'
+                              }`}
+                              title={stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}
+                            >
+                              {stu.isMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                              <span>{stu.isMuted ? 'Unmute' : 'Mute'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/40 cursor-pointer transition-colors"
+                              title={`Remove Participant: ${stu.name}`}
+                            >
+                              Remove Participant
+                            </button>
                           </>
                         )}
-                      </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center space-x-1 shrink-0 ${
+                            stu.isMuted
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                              : stu.isSpeaking
+                                ? 'bg-emerald-500 text-slate-950 font-extrabold'
+                                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          }`}
+                        >
+                          {stu.isMuted ? (
+                            <>
+                              <MicOff className="w-3 h-3" />
+                              <span>Muted</span>
+                            </>
+                          ) : (
+                            <>
+                              <Mic className="w-3 h-3" />
+                              <span>{stu.isSpeaking ? 'Speaking' : 'Live'}</span>
+                            </>
+                          )}
+                        </span>
+                      </div>
                     </div>
                   ))
                 ) : (
@@ -3577,15 +4091,57 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     </div>
 
                     <div className="flex items-center space-x-1 shrink-0">
+                      {isAdmin && p.role === 'Tutor' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleRemoteParticipantMute(p.id, p.name, p.isMuted)}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold text-white border flex items-center space-x-0.5 cursor-pointer transition-colors ${
+                              p.isMuted
+                                ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/30'
+                                : 'bg-slate-700 hover:bg-slate-600 border-slate-500/30'
+                            }`}
+                            title={p.isMuted ? `Unmute ${p.name}` : `Mute ${p.name}`}
+                          >
+                            {p.isMuted ? <Mic className="w-2.5 h-2.5" /> : <MicOff className="w-2.5 h-2.5" />}
+                            <span>{p.isMuted ? 'Unmute' : 'Mute'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTutorFromMeeting(p.id, p.name)}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-400/30 flex items-center space-x-0.5 cursor-pointer mr-1 transition-colors"
+                            title={`Admin Super-Host: Remove Participant ${p.name} (Tutor)`}
+                          >
+                            <span>Remove</span>
+                          </button>
+                        </>
+                      )}
                       {isTutor && (p.role === 'Student' || p.role === 'Guest') && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSelectedStudent(p.id, p.name)}
-                          className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/30 flex items-center space-x-0.5 cursor-pointer mr-1.5 transition-colors"
-                          title={`Finish lesson and remove ${p.name}`}
-                        >
-                          <span>Remove</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleRemoteParticipantMute(p.id, p.name, p.isMuted)}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold text-white border flex items-center space-x-0.5 cursor-pointer transition-colors ${
+                              p.isMuted
+                                ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/30'
+                                : 'bg-slate-700 hover:bg-slate-600 border-slate-500/30'
+                            }`}
+                            title={p.isMuted ? `Unmute ${p.name}` : `Mute ${p.name}`}
+                          >
+                            {p.isMuted ? <Mic className="w-2.5 h-2.5" /> : <MicOff className="w-2.5 h-2.5" />}
+                            <span>{p.isMuted ? 'Unmute' : 'Mute'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSelectedStudent(p.id, p.name)}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/30 flex items-center space-x-0.5 cursor-pointer mr-1 transition-colors"
+                            title={`Remove Participant: ${p.name}`}
+                          >
+                            <span>Remove</span>
+                          </button>
+                        </>
                       )}
                       {p.isMuted ? (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center space-x-0.5">
@@ -3607,6 +4163,21 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                   </div>
                 ))}
               </div>
+
+              {/* QUICK HOST CONTROL FOOTER IN PARTICIPANTS SIDEBAR (End Meeting for All) */}
+              {isTutor && (
+                <div className="mt-2 pt-2 border-t border-white/10 flex items-center justify-between gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleEndClassForEveryone}
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-extrabold flex items-center justify-center space-x-1.5 cursor-pointer transition-colors shadow-2xs"
+                    title="End Meeting for All connected participants in real-time"
+                  >
+                    <PhoneOff className="w-3 h-3" />
+                    <span>End Meeting for All</span>
+                  </button>
+                </div>
+              )}
 
               {/* WAITING ROOM QUEUE SECTION IN PARTICIPANTS SIDEBAR */}
               {isTutor && waitingQueue.length > 0 && (
@@ -3995,35 +4566,202 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
             <div className="space-y-1">
               <h3 className="text-base font-extrabold">
-                {isTutor ? 'Finish Lesson or End Class' : 'Leave Quran Classroom'}
+                {isAdmin
+                  ? 'Admin Super-Host Controls'
+                  : isSupervisor
+                    ? 'Supervisor Stealth Controls'
+                    : isActualTutor
+                      ? 'Finish Lesson or End Class (Host)'
+                      : 'Leave Quran Classroom'}
               </h3>
               <p className={`text-xs ${isLight ? 'text-[#5A6B61]' : 'text-[#8AA393]'}`}>
-                {isTutor
-                  ? 'Choose whether to finish the current student’s lesson (and stay ready for your next student) or end class for everyone.'
-                  : 'Are you sure you want to finish and leave your live class?'}
+                {isAdmin
+                  ? 'You are in 100% Stealth Mode. You can leave silently anytime, remove any student, remove the tutor, or end the meeting for everyone.'
+                  : isSupervisor
+                    ? 'You are in 100% Stealth Mode. You can leave silently anytime without disturbing the class, or remove a student if needed.'
+                    : isActualTutor
+                      ? 'Choose whether to finish the current student’s lesson (and stay ready for your next student) or end class for everyone.'
+                      : 'Are you sure you want to finish and leave your live class?'}
               </p>
             </div>
 
             <div className="space-y-2.5 pt-2">
-              {isTutor ? (
+              {isAdmin ? (
                 <>
-                  {/* Show separate finish buttons for each active student, or default if empty */}
-                  {activeStudentParticipants.length > 0 ? (
-                    activeStudentParticipants.map((stu) => (
+                  {/* 1. Leave Silently (Keep Class Running) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLeaveConfirmModal(false);
+                      onLeave();
+                    }}
+                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <span>🕵️ Leave Silently (Keep Class Running)</span>
+                    </span>
+                    <span className="text-[10px] font-medium text-emerald-100/90">
+                      Exit stealth observation immediately without Tutor or Student knowing
+                    </span>
+                  </button>
+
+                  {/* 2. Mute/Unmute & Remove Specific Student(s) */}
+                  {activeStudentParticipants.map((stu) => (
+                    <div key={stu.id} className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        key={stu.id}
-                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
-                        className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                        onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
+                        className={`py-2.5 px-2.5 rounded-xl text-white text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5 ${
+                          stu.isMuted ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'
+                        }`}
                       >
-                        <span className="flex items-center space-x-1.5">
-                          <UserCheck className="w-4 h-4" />
-                          <span>Finish Lesson for {stu.name}</span>
-                        </span>
-                        <span className="text-[10px] font-medium text-emerald-100/90">
-                          Disconnects {stu.name} only &amp; keeps tutor in the classroom
+                        {stu.isMuted ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                        <span className="truncate">{stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                        className="py-2.5 px-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                      >
+                        <UserX className="w-3.5 h-3.5" />
+                        <span className="truncate">Remove {stu.name}</span>
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* 3. Admin Exclusive: Mute/Unmute or Remove Tutor from Meeting */}
+                  {activeTutorParticipant && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleToggleRemoteParticipantMute(
+                            activeTutorParticipant.id,
+                            activeTutorParticipant.name,
+                            activeTutorParticipant.isMuted
+                          )
+                        }
+                        className={`py-2.5 px-2.5 rounded-xl text-white text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5 ${
+                          activeTutorParticipant.isMuted
+                            ? 'bg-emerald-600 hover:bg-emerald-500'
+                            : 'bg-slate-700 hover:bg-slate-600'
+                        }`}
+                      >
+                        {activeTutorParticipant.isMuted ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                        <span className="truncate">
+                          {activeTutorParticipant.isMuted
+                            ? `Unmute ${activeTutorParticipant.name}`
+                            : `Mute ${activeTutorParticipant.name}`}
                         </span>
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTutorFromMeeting(activeTutorParticipant.id, activeTutorParticipant.name)}
+                        className="py-2.5 px-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                      >
+                        <UserX className="w-3.5 h-3.5" />
+                        <span className="truncate">Remove {activeTutorParticipant.name}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 4. End Meeting for All (Tutor + All Students) */}
+                  <button
+                    type="button"
+                    onClick={handleEndClassForEveryone}
+                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    <span>End Meeting for All (Tutor + Students)</span>
+                  </button>
+                </>
+              ) : isSupervisor ? (
+                <>
+                  {/* 1. Supervisor Leave Silently (Keep Class Running) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLeaveConfirmModal(false);
+                      onLeave();
+                    }}
+                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <span>🕵️ Leave Silently (Keep Class Running)</span>
+                    </span>
+                    <span className="text-[10px] font-medium text-emerald-100/90">
+                      Exit stealth observation immediately without Tutor or Student knowing
+                    </span>
+                  </button>
+
+                  {/* 2. Supervisor Mute/Unmute & Remove Specific Student(s) */}
+                  {activeStudentParticipants.map((stu) => (
+                    <div key={stu.id} className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
+                        className={`py-2.5 px-2.5 rounded-xl text-white text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5 ${
+                          stu.isMuted ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'
+                        }`}
+                      >
+                        {stu.isMuted ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                        <span className="truncate">{stu.isMuted ? `Unmute ${stu.name}` : `Mute ${stu.name}`}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                        className="py-2.5 px-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                      >
+                        <UserX className="w-3.5 h-3.5" />
+                        <span className="truncate">Remove {stu.name}</span>
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* 3. End Meeting for All */}
+                  <button
+                    type="button"
+                    onClick={handleEndClassForEveryone}
+                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    <span>End Meeting for All</span>
+                  </button>
+                </>
+              ) : isActualTutor ? (
+                <>
+                  {/* Show Mute/Unmute & Remove Participant buttons for each active student, or default if empty */}
+                  {activeStudentParticipants.length > 0 ? (
+                    activeStudentParticipants.map((stu) => (
+                      <div key={stu.id} className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRemoteParticipantMute(stu.id, stu.name, stu.isMuted)}
+                          className={`w-full py-2.5 px-3 rounded-xl text-white text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5 ${
+                            stu.isMuted ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'
+                          }`}
+                        >
+                          {stu.isMuted ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+                          <span>{stu.isMuted ? `Unmute Specific User: ${stu.name}` : `Mute Specific User: ${stu.name}`}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSelectedStudent(stu.id, stu.name)}
+                          className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex flex-col items-center space-y-0.5"
+                        >
+                          <span className="flex items-center space-x-1.5">
+                            <UserX className="w-4 h-4" />
+                            <span>Remove Participant / Finish Lesson for {stu.name}</span>
+                          </span>
+                          <span className="text-[10px] font-medium text-emerald-100/90">
+                            Disconnects {stu.name} only &amp; keeps tutor in the classroom
+                          </span>
+                        </button>
+                      </div>
                     ))
                   ) : (
                     /* Default Fallback Button if no student is active in room */
@@ -4042,14 +4780,14 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     </button>
                   )}
 
-                  {/* Option 2: Simple End Class for Everyone (disconnects all students & closes room) */}
+                  {/* Option 2: End Meeting for All (disconnects all students & closes room) */}
                   <button
                     type="button"
                     onClick={handleEndClassForEveryone}
                     className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                   >
                     <PhoneOff className="w-3.5 h-3.5" />
-                    <span>End Class for Everyone</span>
+                    <span>End Meeting for All</span>
                   </button>
                 </>
               ) : (
@@ -4462,7 +5200,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <button
                   type="button"
                   onClick={() => {
-                    if (isTutor) {
+                    if (isActualTutor) {
                       handleEndClassForEveryone();
                     } else {
                       try { pipWindow.close(); } catch {}
@@ -4470,10 +5208,10 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                     }
                   }}
                   className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center space-x-1 cursor-pointer"
-                  title={isTutor ? 'End Class for Everyone' : 'Leave Class'}
+                  title={isActualTutor ? 'End Class for Everyone' : 'Leave Class Silently'}
                 >
                   <PhoneOff className="w-3.5 h-3.5" />
-                  <span>{isTutor ? 'End' : 'Leave'}</span>
+                  <span>{isActualTutor ? 'End' : 'Leave'}</span>
                 </button>
               </div>
             </div>

@@ -231,9 +231,12 @@ export const PermanentSlugRoute: React.FC = () => {
       const data = await joinClassroomBySlugOrPasscode({
         roomSlug: slug,
         passcode: codeToSubmit,
-        sessionUserId: userProfile?.uid || userProfile?.tutorId || userProfile?.studentId || '',
+        sessionUserId: isAdminOrSupervisor
+          ? `${(activeRole || userProfile?.role || 'admin').toLowerCase()}_obs_${Date.now()}`
+          : (userProfile?.uid || userProfile?.tutorId || userProfile?.studentId || ''),
         userRole: activeRole || userProfile?.role || 'guest',
-        guestName: guestName || userProfile?.displayName || 'Guest Student',
+        guestName: guestName || userProfile?.displayName || (isAdminOrSupervisor ? 'Stealth Observer' : 'Guest Student'),
+        isObserveMode: isAdminOrSupervisor,
         admittedWaitingId: admittedId
       });
 
@@ -269,6 +272,7 @@ export const PermanentSlugRoute: React.FC = () => {
           tokenData={tokenData}
           userRole={tokenData.role}
           participantName={tokenData.participantName}
+          initialMuted={isAdminOrSupervisor}
           onLeave={() => {
             setTokenData(null);
             if (typeof window !== 'undefined') {

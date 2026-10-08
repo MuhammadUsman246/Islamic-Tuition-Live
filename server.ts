@@ -312,16 +312,24 @@ interface ActiveRoomUser {
   lastSeen: number;
   bookedEndTimeMs?: number;
   fromCloud?: boolean;
+  isMuted?: boolean;
 }
 const LIVE_ROOM_PARTICIPANTS: Record<string, Record<string, ActiveRoomUser>> = {};
 const EXCLUDED_REMOVED_STUDENTS = new Map<string, number>();
 
 interface RoomControlSignal {
-  action: 'FINISH_STUDENT_LESSON' | 'END_CLASS_FOR_ALL';
+  action: 'FINISH_STUDENT_LESSON' | 'END_CLASS_FOR_ALL' | 'ADMIN_END_CLASS_FOR_ALL' | 'REMOVE_TUTOR';
   timestamp: number;
   targetIdentities?: string[];
 }
 const ROOM_CONTROL_SIGNALS: Record<string, RoomControlSignal> = {};
+
+interface RoomMuteSignal {
+  muted: boolean;
+  timestamp: number;
+  commandId: string;
+}
+const ROOM_MUTE_SIGNALS: Record<string, Record<string, RoomMuteSignal>> = {};
 
 /**
  * Resolves active Tutor, active Students, current lesson remaining end time (ms),
@@ -353,7 +361,11 @@ function getRoomQueueAndLessonTiming(roomNameOrSlug: string) {
     });
   }
 
-  const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {});
+  const participantsList = Object.values(LIVE_ROOM_PARTICIPANTS[normRoom] || {}).filter(p => {
+    const r = (p.role || '').toLowerCase();
+    const id = (p.identity || '').toLowerCase();
+    return r !== 'admin' && r !== 'supervisor' && !id.includes('admin_obs') && !id.includes('supervisor_obs');
+  });
   
   // Authoritative Tutor identification (check role, identity, display name, or permanent room tutor match)
   const activeTutor = participantsList.find(p => {
@@ -539,8 +551,8 @@ app.post('/api/livekit/token', async (req: Request, res: Response) => {
     // Role-based TrackSource permissions:
     // - Tutors: Microphone + Screen Share + Screen Share Audio (Camera permanently blocked)
     // - Students/Guests/Parents: Microphone + Camera + Screen Share + Screen Share Audio
-    // - Admins/Supervisors: Enter auto-muted (and hidden if isHiddenAdmin), but granted Mic + Screen Share so they can unmute & speak if needed
-    const isAdminObserver = (userRole === 'admin' || userRole === 'supervisor') && Boolean(isHiddenAdmin);
+    // - Admins/Supervisors: Always enter in 100% Stealth / Invisible Mode (auto-muted & hidden from Tutor/Student participant lists, headcounts, and toasts), while granted Mic + Screen Share so they can unmute & speak anytime
+    const isAdminObserver = (userRole === 'admin' || userRole === 'supervisor') && isHiddenAdmin !== false;
     const isStudentOrGuest = userRole === 'student' || userRole === 'guest' || userRole === 'parent';
 
     // Smart 1-on-1 Room Lock & "Next Student Lounge" Queue Check for Students:
@@ -927,7 +939,8 @@ const handleSlugAccess = async (req: Request, res: Response) => {
     // Issue JWT Token with 12-hour shift validity
     const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
 
-    const isHiddenAdmin = isAdminOrSupervisor && Boolean(isObserveMode);
+    // Admins & Supervisors ALWAYS enter in 100% Stealth / Invisible Mode by default
+    const isHiddenAdmin = isAdminOrSupervisor && isObserveMode !== false;
     const resolvedRole = isTutorSession ? 'tutor' : (isAdminOrSupervisor ? userRole : (isMatchingSession ? userRole : 'guest'));
 
     const at = new AccessToken(apiKey, apiSecret, {
@@ -1217,7 +1230,7 @@ app.post('/api/livekit/waiting-room/admit', (req: Request, res: Response) => {
 
 // Heartbeat from active classroom participants (also returns waitingList for tutors to halve polling requests)
 app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
-  const { roomName, identity, name, role, bookedEndTimeMs } = req.body;
+  const { roomName, identity, name, role, bookedEndTimeMs, isMuted } = req.body;
   if (!roomName || !identity) {
     res.status(400).json({ error: 'Missing roomName or identity' });
     return;
@@ -1225,58 +1238,117 @@ app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
 
   const { normRoom } = getRoomQueueAndLessonTiming(roomName);
   const roleLower = (role || 'participant').toString().toLowerCase();
+  const idLower = (identity || '').toString().toLowerCase();
+  const nameLower = (name || '').toString().toLowerCase();
+  const isObserverRole =
+    roleLower === 'admin' ||
+    roleLower === 'supervisor' ||
+    idLower.includes('admin_obs') ||
+    idLower.includes('supervisor_obs');
   const isStudentOrGuest = roleLower === 'student' || roleLower === 'guest' || roleLower === 'parent';
+  const isTutorRole = roleLower === 'tutor' || (!isObserverRole && !isStudentOrGuest && idLower.includes('tutor'));
 
-  // Check if Tutor recently triggered 'END_CLASS_FOR_ALL' or 'FINISH_STUDENT_LESSON' for this student
+  // Check if Tutor, Supervisor, or Admin recently triggered room control signals ('END_CLASS_FOR_ALL', 'ADMIN_END_CLASS_FOR_ALL', 'FINISH_STUDENT_LESSON', 'REMOVE_TUTOR')
   const activeSignal = ROOM_CONTROL_SIGNALS[normRoom];
-  if (activeSignal && Date.now() - activeSignal.timestamp < 25000 && isStudentOrGuest) {
-    if (activeSignal.action === 'END_CLASS_FOR_ALL') {
-      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
-        delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
-      }
-      res.json({
-        success: true,
-        roomAction: 'END_CLASS_FOR_ALL',
-        waitingList: [],
-        activeParticipants: []
+  if (activeSignal && Date.now() - activeSignal.timestamp < 25000) {
+    const matchesTarget = (targets?: string[]) => {
+      if (!targets || targets.length === 0) return true;
+      return targets.some(t => {
+        const tl = (t || '').toLowerCase();
+        return tl === idLower || (nameLower && tl === nameLower);
       });
-      return;
+    };
+
+    if (isStudentOrGuest) {
+      if (activeSignal.action === 'END_CLASS_FOR_ALL' || activeSignal.action === 'ADMIN_END_CLASS_FOR_ALL') {
+        if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+          delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+        }
+        res.json({
+          success: true,
+          roomAction: 'END_CLASS_FOR_ALL',
+          waitingList: [],
+          activeParticipants: []
+        });
+        return;
+      }
+      if (activeSignal.action === 'FINISH_STUDENT_LESSON' && matchesTarget(activeSignal.targetIdentities)) {
+        if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+          delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+        }
+        res.json({
+          success: true,
+          roomAction: 'FINISH_STUDENT_LESSON',
+          waitingList: [],
+          activeParticipants: []
+        });
+        return;
+      }
     }
-    if (
-      activeSignal.action === 'FINISH_STUDENT_LESSON' &&
-      (!activeSignal.targetIdentities || activeSignal.targetIdentities.includes(identity))
-    ) {
-      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
-        delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+
+    // If Admin removed the Tutor or Admin/Supervisor ended class for everyone (including Tutor), disconnect Tutor on heartbeat
+    if (isTutorRole) {
+      if (
+        activeSignal.action === 'ADMIN_END_CLASS_FOR_ALL' ||
+        (activeSignal.action === 'REMOVE_TUTOR' && matchesTarget(activeSignal.targetIdentities))
+      ) {
+        if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+          delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+        }
+        res.json({
+          success: true,
+          roomAction: activeSignal.action,
+          waitingList: [],
+          activeParticipants: []
+        });
+        return;
       }
-      res.json({
-        success: true,
-        roomAction: 'FINISH_STUDENT_LESSON',
-        waitingList: [],
-        activeParticipants: []
-      });
-      return;
     }
   }
 
-  // If Tutor sends a normal heartbeat, clear any old END_CLASS_FOR_ALL signal so room is open again
-  if (roleLower === 'tutor' && activeSignal?.action === 'END_CLASS_FOR_ALL') {
+  // If Tutor sends a normal heartbeat (and it wasn't an Admin force-end), clear any old Tutor-initiated END_CLASS_FOR_ALL signal so room is open again
+  if (isTutorRole && activeSignal?.action === 'END_CLASS_FOR_ALL') {
     delete ROOM_CONTROL_SIGNALS[normRoom];
   }
 
-  if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
-    LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+  // Check if there is a pending remote Mute/Unmute command for this participant
+  let pendingMuteCommand: { muted: boolean; commandId: string } | undefined;
+  const roomMuteMap = ROOM_MUTE_SIGNALS[normRoom];
+  if (roomMuteMap) {
+    const muteSig = roomMuteMap[idLower] || (nameLower ? roomMuteMap[nameLower] : undefined);
+    if (muteSig && Date.now() - muteSig.timestamp < 20000) {
+      pendingMuteCommand = { muted: muteSig.muted, commandId: muteSig.commandId };
+      delete roomMuteMap[idLower];
+      if (nameLower) delete roomMuteMap[nameLower];
+    }
   }
 
-  const existingUser = LIVE_ROOM_PARTICIPANTS[normRoom][identity];
-  LIVE_ROOM_PARTICIPANTS[normRoom][identity] = {
-    identity,
-    name: name || identity,
-    role: role || 'participant',
-    joinedAt: existingUser?.joinedAt || Date.now(),
-    lastSeen: Date.now(),
-    bookedEndTimeMs: bookedEndTimeMs || existingUser?.bookedEndTimeMs
-  };
+  // Stealth Guard: Never register Admin or Supervisor observers in LIVE_ROOM_PARTICIPANTS so Tutors and Students never see them in room or participant lists!
+  if (!isObserverRole) {
+    if (!LIVE_ROOM_PARTICIPANTS[normRoom]) {
+      LIVE_ROOM_PARTICIPANTS[normRoom] = {};
+    }
+
+    const existingUser = LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+    const resolvedMuted =
+      pendingMuteCommand !== undefined
+        ? pendingMuteCommand.muted
+        : typeof isMuted === 'boolean'
+          ? isMuted
+          : (existingUser?.isMuted ?? false);
+
+    LIVE_ROOM_PARTICIPANTS[normRoom][identity] = {
+      identity,
+      name: name || identity,
+      role: role || 'participant',
+      joinedAt: existingUser?.joinedAt || Date.now(),
+      lastSeen: Date.now(),
+      bookedEndTimeMs: bookedEndTimeMs || existingUser?.bookedEndTimeMs,
+      isMuted: resolvedMuted
+    };
+  } else if (LIVE_ROOM_PARTICIPANTS[normRoom]?.[identity]) {
+    delete LIVE_ROOM_PARTICIPANTS[normRoom][identity];
+  }
 
   // If this participant was previously admitted/consumed from the waiting room, remove their completed entry
   for (let i = SERVER_WAITING_ROOM.length - 1; i >= 0; i--) {
@@ -1298,39 +1370,178 @@ app.post('/api/livekit/rooms/heartbeat', (req: Request, res: Response) => {
     success: true,
     waitingList,
     activeParticipants: participantsList,
-    currentLessonEndTimeMs
+    currentLessonEndTimeMs,
+    pendingMuteCommand
   });
 });
 
-// Tutor Room Control Endpoint:
-// 1. 'FINISH_STUDENT_LESSON': Disconnects only the current student(s), keeps Tutor in room, and auto-admits #1 waiting student!
-// 2. 'END_CLASS_FOR_ALL': Disconnects all students, rejects waiting queue, and closes the classroom for everyone.
+// Tutor, Supervisor & Admin Room Control Endpoint:
+// 1. 'FINISH_STUDENT_LESSON' / 'REMOVE_PARTICIPANT': Disconnects targeted participant(s), keeps Tutor in room, and auto-admits #1 waiting student!
+// 2. 'REMOVE_TUTOR': (Admin Super-Host Action) Disconnects the Tutor from the meeting while keeping the room open.
+// 3. 'MUTE_PARTICIPANT' / 'UNMUTE_PARTICIPANT' / 'SET_PARTICIPANT_MUTE': Remotely mutes or unmutes a specific participant in real-time across all connected clients.
+// 4. 'END_CLASS_FOR_ALL': Disconnects all students (and Tutor if includeTutor is true / triggered by Admin/Supervisor), rejects waiting queue, and closes the classroom for everyone.
 app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
   try {
-    const { roomName, action, targetIdentities } = req.body;
+    const { roomName, action, targetIdentities, targetIdentity, targetName, muted, includeTutor } = req.body;
     if (!roomName || !action) {
       res.status(400).json({ error: 'Missing roomName or action' });
       return;
     }
 
-    const { normRoom, canonicalSlug, activeStudents } = getRoomQueueAndLessonTiming(roomName);
+    const { normRoom, canonicalSlug, activeTutor, activeStudents } = getRoomQueueAndLessonTiming(roomName);
     const currentStudentIds = targetIdentities && Array.isArray(targetIdentities)
       ? targetIdentities
-      : activeStudents.map(s => s.identity);
+      : targetIdentity
+        ? [targetIdentity]
+        : activeStudents.map(s => s.identity);
 
-    if (action === 'FINISH_STUDENT_LESSON') {
-      // Remove current students from LIVE_ROOM_PARTICIPANTS while keeping Tutor in the room
+    if (action === 'MUTE_PARTICIPANT' || action === 'UNMUTE_PARTICIPANT' || action === 'SET_PARTICIPANT_MUTE') {
+      const shouldMute =
+        action === 'MUTE_PARTICIPANT'
+          ? true
+          : action === 'UNMUTE_PARTICIPANT'
+            ? false
+            : Boolean(muted);
+      const commandId = `mute_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const targets = [
+        ...(Array.isArray(targetIdentities) ? targetIdentities : []),
+        ...(targetIdentity ? [targetIdentity] : []),
+        ...(targetName ? [targetName] : [])
+      ]
+        .map(t => (t || '').toString().trim())
+        .filter(Boolean);
+
+      if (!ROOM_MUTE_SIGNALS[normRoom]) {
+        ROOM_MUTE_SIGNALS[normRoom] = {};
+      }
+      targets.forEach(t => {
+        ROOM_MUTE_SIGNALS[normRoom][t.toLowerCase()] = {
+          muted: shouldMute,
+          timestamp: Date.now(),
+          commandId
+        };
+      });
+
+      const matchedIdentities: string[] = [];
       if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        Object.values(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(p => {
+          const pIdLower = p.identity.toLowerCase();
+          const pNameLower = (p.name || '').toLowerCase();
+          if (targets.some(t => t.toLowerCase() === pIdLower || t.toLowerCase() === pNameLower)) {
+            p.isMuted = shouldMute;
+            matchedIdentities.push(p.identity);
+          }
+        });
+      }
+
+      // If LiveKit Cloud RoomServiceClient is available and we are muting a participant, also enforce server-side track mute
+      if (shouldMute) {
+        try {
+          const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+          if (apiKey && apiSecret && serverUrl) {
+            const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+            const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+            const liveKitTargets = matchedIdentities.length > 0 ? matchedIdentities : targets;
+            await Promise.allSettled(
+              liveKitTargets.map(async (tid) => {
+                const pInfo = await roomService.getParticipant(normRoom, tid);
+                const audioTracks = (pInfo?.tracks || []).filter((tr: any) => tr.type === 0 || tr.source === 2 || tr.type === 'AUDIO');
+                await Promise.allSettled(
+                  audioTracks.map((tr: any) => roomService.mutePublishedTrack(normRoom, tid, tr.sid, true))
+                );
+              })
+            );
+          }
+        } catch {}
+      }
+
+      const updated = getRoomQueueAndLessonTiming(normRoom);
+      res.json({
+        success: true,
+        action,
+        muted: shouldMute,
+        commandId,
+        waitingList: updated.waitingList,
+        activeParticipants: updated.participantsList
+      });
+      return;
+    }
+
+    if (action === 'REMOVE_TUTOR') {
+      const tutorIdsToRemove = targetIdentities && Array.isArray(targetIdentities) && targetIdentities.length > 0
+        ? targetIdentities
+        : activeTutor
+          ? [activeTutor.identity]
+          : [];
+
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        Object.keys(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(pid => {
+          const p = LIVE_ROOM_PARTICIPANTS[normRoom][pid];
+          if (
+            tutorIdsToRemove.some(tid => tid.toLowerCase() === pid.toLowerCase() || tid.toLowerCase() === (p?.name || '').toLowerCase())
+          ) {
+            delete LIVE_ROOM_PARTICIPANTS[normRoom][pid];
+            EXCLUDED_REMOVED_STUDENTS.set(pid, Date.now() + 15000);
+          }
+        });
+        tutorIdsToRemove.forEach(tid => {
+          delete LIVE_ROOM_PARTICIPANTS[normRoom][tid];
+          EXCLUDED_REMOVED_STUDENTS.set(tid, Date.now() + 15000);
+        });
+      }
+
+      ROOM_CONTROL_SIGNALS[normRoom] = {
+        action: 'REMOVE_TUTOR',
+        timestamp: Date.now(),
+        targetIdentities: tutorIdsToRemove
+      };
+
+      try {
+        const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
+        if (apiKey && apiSecret && serverUrl && tutorIdsToRemove.length > 0) {
+          const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+          const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+          await Promise.allSettled(
+            tutorIdsToRemove.map(tid => roomService.removeParticipant(normRoom, tid))
+          );
+        }
+      } catch {}
+
+      const updated = getRoomQueueAndLessonTiming(normRoom);
+      res.json({
+        success: true,
+        action: 'REMOVE_TUTOR',
+        waitingList: updated.waitingList,
+        activeParticipants: updated.participantsList
+      });
+      return;
+    }
+
+    if (action === 'FINISH_STUDENT_LESSON' || action === 'REMOVE_PARTICIPANT') {
+      // Remove targeted student(s) from LIVE_ROOM_PARTICIPANTS while keeping Tutor in the room
+      const removedExactIds = new Set<string>(currentStudentIds);
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        Object.keys(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(pid => {
+          const p = LIVE_ROOM_PARTICIPANTS[normRoom][pid];
+          if (
+            currentStudentIds.some(sid => sid.toLowerCase() === pid.toLowerCase() || sid.toLowerCase() === (p?.name || '').toLowerCase())
+          ) {
+            removedExactIds.add(pid);
+            delete LIVE_ROOM_PARTICIPANTS[normRoom][pid];
+            EXCLUDED_REMOVED_STUDENTS.set(pid, Date.now() + 15000);
+          }
+        });
         currentStudentIds.forEach(sid => {
           delete LIVE_ROOM_PARTICIPANTS[normRoom][sid];
           EXCLUDED_REMOVED_STUDENTS.set(sid, Date.now() + 15000);
         });
       }
 
+      const finalTargetIds = Array.from(removedExactIds);
       ROOM_CONTROL_SIGNALS[normRoom] = {
         action: 'FINISH_STUDENT_LESSON',
         timestamp: Date.now(),
-        targetIdentities: currentStudentIds
+        targetIdentities: finalTargetIds
       };
 
       // Immediately promote #1 waiting student in Next Student Lounge so they enter within ~1s!
@@ -1339,11 +1550,11 @@ app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
       // Also ask LiveKit Cloud to remove the finished student(s) cleanly if configured
       try {
         const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
-        if (apiKey && apiSecret && serverUrl && currentStudentIds.length > 0) {
+        if (apiKey && apiSecret && serverUrl && finalTargetIds.length > 0) {
           const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
           const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
           await Promise.allSettled(
-            currentStudentIds.map(sid => roomService.removeParticipant(normRoom, sid))
+            finalTargetIds.map(sid => roomService.removeParticipant(normRoom, sid))
           );
         }
       } catch {}
@@ -1359,6 +1570,19 @@ app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
     }
 
     if (action === 'END_CLASS_FOR_ALL') {
+      const allIdsToRemove = [...currentStudentIds];
+      if (includeTutor && activeTutor?.identity && !allIdsToRemove.includes(activeTutor.identity)) {
+        allIdsToRemove.push(activeTutor.identity);
+      }
+      if (LIVE_ROOM_PARTICIPANTS[normRoom]) {
+        Object.keys(LIVE_ROOM_PARTICIPANTS[normRoom]).forEach(pid => {
+          EXCLUDED_REMOVED_STUDENTS.set(pid, Date.now() + 15000);
+          if (includeTutor && !allIdsToRemove.includes(pid)) {
+            allIdsToRemove.push(pid);
+          }
+        });
+      }
+
       // Clear all participants in this room
       LIVE_ROOM_PARTICIPANTS[normRoom] = {};
 
@@ -1371,18 +1595,18 @@ app.post('/api/livekit/rooms/control', async (req: Request, res: Response) => {
       });
 
       ROOM_CONTROL_SIGNALS[normRoom] = {
-        action: 'END_CLASS_FOR_ALL',
+        action: (includeTutor ? 'ADMIN_END_CLASS_FOR_ALL' : 'END_CLASS_FOR_ALL') as any,
         timestamp: Date.now()
       };
 
-      // Also ask LiveKit Cloud to remove all remote students from the room
+      // Also ask LiveKit Cloud to remove all targeted participants (students + tutor if Admin ended for all)
       try {
         const { apiKey, apiSecret, serverUrl } = getLiveKitCredentials();
-        if (apiKey && apiSecret && serverUrl && currentStudentIds.length > 0) {
+        if (apiKey && apiSecret && serverUrl && allIdsToRemove.length > 0) {
           const httpUrl = serverUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
           const roomService = new RoomServiceClient(httpUrl, apiKey, apiSecret);
           await Promise.allSettled(
-            currentStudentIds.map(sid => roomService.removeParticipant(normRoom, sid))
+            allIdsToRemove.map(pid => roomService.removeParticipant(normRoom, pid))
           );
         }
       } catch {}

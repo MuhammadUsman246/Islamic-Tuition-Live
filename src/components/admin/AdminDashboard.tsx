@@ -385,6 +385,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         identity: `admin_obs_${Date.now()}`,
         participantName: 'Academy Admin (Observer)',
         role: 'admin',
+        isHiddenAdmin: true,
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
 
@@ -394,6 +395,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       alert(`Could not enter classroom observation: ${err?.message || err}`);
     } finally {
       setIsConnectingAdminObserver(false);
+    }
+  };
+
+  const handleAdminDirectRoomControl = async (
+    tutorIdStr: string,
+    action: 'FINISH_STUDENT_LESSON' | 'REMOVE_TUTOR' | 'END_CLASS_FOR_ALL'
+  ) => {
+    try {
+      const roomName = getCanonicalRoomName(tutorIdStr);
+      await fetch('/api/livekit/rooms/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          action,
+          includeTutor: action === 'END_CLASS_FOR_ALL'
+        })
+      });
+      await refreshAdminLiveStatus();
+    } catch (err) {
+      console.warn('Admin room control error:', err);
     }
   };
 
@@ -2175,18 +2197,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* Action Buttons: Enter & Observe Class + Fallback */}
+                  {/* Action Buttons: Enter & Observe Class (Stealth Super-Host) + Direct Remote Controls */}
                   <div className="pt-3 border-t border-[#EAE6DE] space-y-2">
                     <button
                       type="button"
                       disabled={isConnectingAdminObserver}
                       onClick={() => handleAdminEnterAndObserveClass(t)}
                       className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer disabled:opacity-50 active:scale-95 ring-2 ring-emerald-400/20"
-                      title="Enter this tutor's live classroom to inspect audio, video, screen share, and student engagement"
+                      title="Enter this tutor's live classroom in 100% Stealth Mode (invisible to Tutor & Student) with full Super-Host control"
                     >
                       <Eye className="w-4 h-4 text-emerald-200" />
-                      <span>{isConnectingAdminObserver && adminActiveObservingTutor?.tutorId === t.tutorId ? 'Connecting...' : `Enter & Observe Class`}</span>
+                      <span>
+                        {isConnectingAdminObserver && adminActiveObservingTutor?.tutorId === t.tutorId
+                          ? 'Connecting Stealth Mode...'
+                          : '🕵️ Enter & Observe (Stealth Super-Host)'}
+                      </span>
                     </button>
+
+                    {/* Direct Admin Super-Host Room Controls when Tutor or Student is in Room */}
+                    {(computed.status === 'running' || computed.status === 'tutor_waiting' || computed.participantCount > 0) && (
+                      <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleAdminDirectRoomControl(t.tutorId, 'FINISH_STUDENT_LESSON')}
+                          className="px-2 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-extrabold cursor-pointer transition-colors"
+                          title="Remove current student from room (keeps tutor in room & admits next waiting student)"
+                        >
+                          Remove Student
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAdminDirectRoomControl(t.tutorId, 'REMOVE_TUTOR')}
+                          className="px-2 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-900 border border-orange-200 text-[10px] font-extrabold cursor-pointer transition-colors"
+                          title="Remove Tutor from this meeting"
+                        >
+                          Remove Tutor
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAdminDirectRoomControl(t.tutorId, 'END_CLASS_FOR_ALL')}
+                          className="px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-200 text-[10px] font-extrabold cursor-pointer transition-colors"
+                          title="End meeting for everyone (disconnects both Tutor and Students)"
+                        >
+                          End for All
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-[11px] text-[#5A6B61] px-1">
                       <span className="flex items-center space-x-1">

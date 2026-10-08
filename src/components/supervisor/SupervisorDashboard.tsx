@@ -272,7 +272,8 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
         roomId: roomName,
         identity: `supervisor_obs_${Date.now()}`,
         participantName: 'Academic Supervisor (Observer)',
-        role: 'admin', // Supervisor gets immediate entry authority with 0 admit wait
+        role: 'supervisor',
+        isHiddenAdmin: true,
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
 
@@ -282,6 +283,23 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       alert(`Could not enter classroom observation: ${err?.message || err}`);
     } finally {
       setIsConnectingObserver(false);
+    }
+  };
+
+  const handleSupervisorRemoveStudentFromCard = async (tutorIdStr: string) => {
+    try {
+      const roomName = getCanonicalRoomName(tutorIdStr);
+      await fetch('/api/livekit/rooms/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          action: 'FINISH_STUDENT_LESSON'
+        })
+      });
+      await refreshSupervisorLiveStatus();
+    } catch (err) {
+      console.warn('Supervisor student removal error:', err);
     }
   };
 
@@ -579,7 +597,7 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
             <IslamicTuitionClassroom
               roomName={observerTokenData.roomName}
               tokenData={observerTokenData}
-              userRole="admin"
+              userRole="supervisor"
               participantName="Academic Supervisor (Observer)"
               initialMuted={true}
               onLeave={() => {
@@ -990,18 +1008,35 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* Action Buttons: Enter & Observe Class + Fallback */}
+                  {/* Action Buttons: Enter & Observe Class (Stealth Supervisor) + Student Moderation */}
                   <div className="pt-3 border-t border-[#EAE6DE] space-y-2">
                     <button
                       type="button"
                       disabled={isConnectingObserver}
                       onClick={() => handleEnterAndObserveClass(t)}
                       className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer disabled:opacity-50 active:scale-95 ring-2 ring-emerald-400/20"
-                      title="Enter this tutor's live classroom to inspect audio, video, screen share, and student engagement"
+                      title="Enter this tutor's live classroom in 100% Stealth Mode (invisible to Tutor & Student)"
                     >
                       <Eye className="w-4 h-4 text-emerald-200" />
-                      <span>{isConnectingObserver && activeObservingTutor?.tutorId === t.tutorId ? 'Connecting...' : `Enter & Observe Class`}</span>
+                      <span>
+                        {isConnectingObserver && activeObservingTutor?.tutorId === t.tutorId
+                          ? 'Connecting Stealth Mode...'
+                          : '🕵️ Enter & Observe (Stealth Supervisor)'}
+                      </span>
                     </button>
+
+                    {computed.status === 'running' && (
+                      <div className="flex items-center justify-between gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleSupervisorRemoveStudentFromCard(t.tutorId)}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-extrabold cursor-pointer transition-colors"
+                          title="Finish current student's lesson & admit next waiting student (Tutor remains in room)"
+                        >
+                          Remove Current Student (Keep Tutor in Room)
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-[11px] text-[#5A6B61] px-1">
                       <span className="flex items-center space-x-1">
