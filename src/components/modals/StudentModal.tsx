@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserPlus, CheckCircle, Key, Shield, CreditCard, Share2, Calendar } from 'lucide-react';
+import { X, UserPlus, CheckCircle, Key, CreditCard, Share2, Calendar, ArrowRight } from 'lucide-react';
 import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency } from '../../types';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
 import { registerUserAccount, addReferral, getNextSequentialStudentId, notifyTrial5SessionsCompleted } from '../../services/dataService';
-import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface StudentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (studentData: Omit<Student, 'id'>, id?: string) => Promise<void>;
+  onSaveAndGoToTimetable?: (studentId: string) => void;
   tutors: Tutor[];
   students?: Student[];
   initialStudent?: Student | null;
@@ -19,6 +19,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onSaveAndGoToTimetable,
   tutors,
   students = [],
   initialStudent
@@ -115,26 +116,34 @@ export const StudentModal: React.FC<StudentModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveStudentRecord = async (redirectToTimetable: boolean) => {
+    if (!name.trim()) {
+      alert('Please enter the student full name.');
+      return;
+    }
+    if (!parentName.trim()) {
+      alert('Please enter the parent / guardian name.');
+      return;
+    }
     setSaving(true);
     const finalStudentEmail = email.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}@academy.com`;
     const finalParentEmail = parentEmail.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}.parent@academy.com`;
+    const effectiveTutorId = initialStudent ? (initialStudent.assignedTutorId || 'Unassigned') : 'Unassigned';
 
     try {
       await onSave(
         {
           studentId,
-          name,
+          name: name.trim(),
           age: age === '' ? undefined : Number(age),
           joiningDate,
           trialStartDate: initialStudent?.trialStartDate || joiningDate,
           email: finalStudentEmail,
           phone,
-          parentName,
+          parentName: parentName.trim(),
           parentEmail: finalParentEmail,
           parentPhone,
-          assignedTutorId,
+          assignedTutorId: effectiveTutorId,
           status,
           courseType,
           country,
@@ -162,7 +171,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         notifyTrial5SessionsCompleted({
           studentId,
           name: name.trim(),
-          assignedTutorId,
+          assignedTutorId: effectiveTutorId,
           courseType,
           parentName: parentName.trim(),
           parentPhone,
@@ -210,11 +219,19 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       }
 
       onClose();
+      if (redirectToTimetable && onSaveAndGoToTimetable) {
+        onSaveAndGoToTimetable(studentId);
+      }
     } catch (err: any) {
       alert("Error saving student: " + err.message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await saveStudentRecord(false);
   };
 
   return (
@@ -355,71 +372,49 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             </div>
           </div>
 
-          {/* Academic Assignment */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">Assigned Tutor</label>
-              <select
-                value={assignedTutorId || 'Unassigned'}
-                onChange={(e) => setAssignedTutorId(e.target.value)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white font-medium"
-              >
-                <option value="Unassigned">-- Unassigned (Assign later from Master Sheet) --</option>
-                <optgroup label="🏢 In-Office Shift (1:00 AM – 7:00 AM)">
-                  {tutors
-                    .filter(t => !isRemoteCustomShiftTutor(t.tutorId))
-                    .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
-                    .map((t, idx) => (
-                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
-                        {t.tutorId} ({t.realName || t.displayName || t.tutorId})
-                      </option>
-                    ))}
-                </optgroup>
-                <optgroup label="🌐 Remote / Outside Office (Tutor 1, 11, 12)">
-                  {tutors
-                    .filter(t => isRemoteCustomShiftTutor(t.tutorId))
-                    .sort((a, b) => (a.tutorId || '').localeCompare(b.tutorId || '', undefined, { numeric: true, sensitivity: 'base' }))
-                    .map((t, idx) => (
-                      <option key={`${t.id || t.tutorId}_${idx}`} value={t.tutorId}>
-                        {t.tutorId} ({t.realName || t.displayName || t.tutorId})
-                      </option>
-                    ))}
-                </optgroup>
-              </select>
-            </div>
+          {/* Academic Status & Course Type (Tutor is assigned & synced automatically via Master Timetable) */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Academic Status</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as StudentStatus)}
+                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
+                >
+                  <option value="Trial">Trial (5 Free Sessions)</option>
+                  <option value="Confirmed">Confirmed</option>
+                  <option value="Active">Active</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Not Taking">Not Taking</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">Academic Status</label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as StudentStatus)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
-              >
-                <option value="Trial">Trial (5 Free Sessions)</option>
-                <option value="Confirmed">Confirmed</option>
-                <option value="Active">Active</option>
-                <option value="Pending">Pending</option>
-                <option value="Not Taking">Not Taking</option>
-                <option value="Inactive">Inactive</option>
-              </select>
+              <div>
+                <label className="block text-xs font-semibold text-[#161F1A] mb-1">Course Type</label>
+                <select
+                  value={courseType}
+                  onChange={(e) => setCourseType(e.target.value as CourseType)}
+                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
+                >
+                  <option value="Noorani Qaida">Noorani Qaida</option>
+                  <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                  <option value="Hifz">Hifz</option>
+                  <option value="Tajweed">Tajweed</option>
+                  <option value="Salah / Daily Prayers">Salah / Daily Prayers</option>
+                  <option value="Duas">Duas</option>
+                  <option value="Ahadith">Ahadith</option>
+                  <option value="Islamic Studies">Islamic Studies</option>
+                </select>
+              </div>
             </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">Course Type</label>
-              <select
-                value={courseType}
-                onChange={(e) => setCourseType(e.target.value as CourseType)}
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
-              >
-                <option value="Noorani Qaida">Noorani Qaida</option>
-                <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
-                <option value="Hifz">Hifz</option>
-                <option value="Tajweed">Tajweed</option>
-                <option value="Salah / Daily Prayers">Salah / Daily Prayers</option>
-                <option value="Duas">Duas</option>
-                <option value="Ahadith">Ahadith</option>
-                <option value="Islamic Studies">Islamic Studies</option>
-              </select>
+            <div className="px-3 py-2 bg-[#FAF9F7] border border-[#E3DFD7] rounded-lg flex items-center justify-between text-[11px] text-[#5A6B61]">
+              <span>
+                ⏳ <strong>Tutor & Slot Assignment:</strong> {initialStudent && initialStudent.assignedTutorId && initialStudent.assignedTutorId !== 'Unassigned'
+                  ? `Currently assigned to ${initialStudent.assignedTutorId} (synced via Master Timetable)`
+                  : 'Starts as Unassigned — pick any available slot on the Master Timetable to auto-assign & sync'}
+              </span>
             </div>
           </div>
 
@@ -765,19 +760,36 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="pt-4 border-t border-[#E3DFD7] flex items-center justify-end space-x-3">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-medium text-[#5A6B61] hover:bg-gray-100 rounded-lg">
+          <div className="pt-4 border-t border-[#E3DFD7] flex flex-wrap items-center justify-between gap-3">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-medium text-[#5A6B61] hover:bg-gray-100 rounded-lg cursor-pointer">
               Cancel
             </button>
-            <button
-              id="submit_student_button"
-              type="submit"
-              disabled={saving}
-              className="px-5 py-2 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg shadow-sm flex items-center space-x-2"
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>{saving ? 'Saving...' : 'Save Student'}</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                id="submit_student_button"
+                type="submit"
+                disabled={saving}
+                className="px-4 py-2 text-xs font-semibold text-[#1E5C3D] bg-[#E8F5EE] hover:bg-[#D5EDE0] border border-emerald-300 rounded-lg shadow-2xs flex items-center space-x-1.5 cursor-pointer transition-colors"
+                title="Saves student as Unassigned and pins them at the top of the Master Timetable student picker"
+              >
+                <CheckCircle className="w-4 h-4 text-[#2D8B5C]" />
+                <span>{saving ? 'Saving...' : 'Save Student'}</span>
+              </button>
+              {onSaveAndGoToTimetable && (
+                <button
+                  id="submit_student_and_timetable_button"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => saveStudentRecord(true)}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg shadow-sm flex items-center space-x-1.5 cursor-pointer transition-colors"
+                  title="Saves student and takes you straight to the Master Timetable to book a slot"
+                >
+                  <Calendar className="w-4 h-4 text-[#E8A93E]" />
+                  <span>{saving ? 'Saving...' : 'Save & Go to Timetable'}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </form>
       </div>

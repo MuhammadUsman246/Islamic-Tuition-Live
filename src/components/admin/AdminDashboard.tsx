@@ -204,8 +204,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Modal states
   const [activePreviewImage, setActivePreviewImage] = useState<string | null>(null);
   const [isClassModalOpen, setIsClassModalOpen] = useState<boolean>(false);
-  const [selectedSlot, setSelectedSlot] = useState<{ day: DayOfWeek; time: string } | undefined>();
+  const [selectedSlot, setSelectedSlot] = useState<{ day: DayOfWeek; time: string; tutorId?: string } | undefined>();
   const [selectedClass, setSelectedClass] = useState<TimetableClass | null>(null);
+  const [pendingStudentIdForSlot, setPendingStudentIdForSlot] = useState<string | null>(null);
 
   // Global Command Palette (Cmd+K / Ctrl+K) & Quick Action speed-dial states
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
@@ -1077,6 +1078,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
       }
     }
+
+    // 100% Automatic Two-Way Sync: Ensure the booked tutor is synced to the student's profile across the dashboard
+    if (classData.studentId && classData.tutorId && classData.tutorId !== 'Unassigned' && classData.status !== 'Cancelled') {
+      const targetStudent = students.find(
+        s => s.studentId === classData.studentId || s.id === classData.studentId
+      );
+      if (targetStudent && targetStudent.assignedTutorId !== classData.tutorId) {
+        await updateStudent(targetStudent.id, { assignedTutorId: classData.tutorId });
+      }
+    }
+
+    if (pendingStudentIdForSlot === classData.studentId) {
+      setPendingStudentIdForSlot(null);
+    }
+
     await onRefreshData();
   };
 
@@ -3691,6 +3707,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           {/* Shift Segmented Toggle: All Faculty vs In-Office (1am-7am) vs Remote / Custom Shift (Tutor 1, 11, 12) */}
+          {pendingStudentIdForSlot && (() => {
+            const pendingStu = students.find(s => s.studentId === pendingStudentIdForSlot);
+            return (
+              <div className="p-3 bg-[#E8F5EE] border border-emerald-300 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-[#1E5C3D] shadow-2xs">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#2D8B5C] shrink-0" />
+                  <span>
+                    <strong>Ready to Book Slot:</strong> {pendingStu ? `${pendingStu.name} (${pendingStu.studentId})` : pendingStudentIdForSlot} is pre-selected! Click any empty slot on the timetable below to assign their tutor &amp; schedule.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingStudentIdForSlot(null)}
+                  className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 px-2 py-0.5 rounded bg-white/80 border border-emerald-200 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#FAF9F7] p-2.5 rounded-xl border border-[#E3DFD7]">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider pr-1">Shift Category:</span>
@@ -3754,7 +3791,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               students={students}
               classes={filteredClasses}
               onAddClass={(tutorId, day, slot) => {
-                setSelectedSlot({ day, time: slot });
+                setSelectedSlot({ day, time: slot, tutorId });
                 setSelectedClass(null);
                 setTutorFilter(tutorId);
                 setIsClassModalOpen(true);
@@ -7403,6 +7440,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={isClassModalOpen}
         onClose={() => setIsClassModalOpen(false)}
         onSave={handleSaveClass}
+        onRegisterStudent={handleSaveStudent}
         onDelete={handleDeleteClass}
         tutors={tutors}
         students={students}
@@ -7410,12 +7448,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         initialClass={selectedClass}
         existingClasses={classes}
         defaultTutorId={tutorFilter === 'all' ? undefined : tutorFilter}
+        preselectedStudentId={pendingStudentIdForSlot}
       />
 
       <StudentModal
         isOpen={isStudentModalOpen}
         onClose={() => setIsStudentModalOpen(false)}
         onSave={handleSaveStudent}
+        onSaveAndGoToTimetable={(newStuId) => {
+          setPendingStudentIdForSlot(newStuId);
+          setCurrentTab('timetable');
+        }}
         tutors={tutors}
         students={students}
         initialStudent={selectedStudent}

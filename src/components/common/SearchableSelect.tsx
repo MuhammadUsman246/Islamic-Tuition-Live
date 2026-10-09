@@ -8,6 +8,7 @@ export interface SearchableOption {
   badge?: string;
   badgeColor?: string;
   disabled?: boolean;
+  group?: string;
 }
 
 interface SearchableSelectProps {
@@ -164,46 +165,54 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 No results found for "{searchQuery}"
               </div>
             ) : (
-              filteredOptions.map(opt => {
+              filteredOptions.map((opt, idx) => {
                 const isSelected = opt.value === value;
+                const prevGroup = idx > 0 ? filteredOptions[idx - 1].group : undefined;
+                const showGroupHeader = Boolean(opt.group && opt.group !== prevGroup);
                 return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    disabled={opt.disabled}
-                    onClick={() => {
-                      if (!opt.disabled) {
-                        onChange(opt.value);
-                        setIsOpen(false);
-                      }
-                    }}
-                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between transition-colors ${
-                      isSelected
-                        ? 'bg-[#2D8B5C]/10 text-[#2D8B5C] font-semibold'
-                        : 'text-[#161F1A] hover:bg-[#FAF9F7]'
-                    } ${opt.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-                  >
-                    <div className="flex flex-col truncate pr-2">
-                      <span className="truncate">{opt.label}</span>
-                      {opt.subLabel && (
-                        <span className="text-[10px] text-gray-500 font-normal truncate">
-                          {opt.subLabel}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-1.5 shrink-0">
-                      {opt.badge && (
-                        <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                            opt.badgeColor || 'bg-gray-100 text-gray-600'
-                          }`}
-                        >
-                          {opt.badge}
-                        </span>
-                      )}
-                      {isSelected && <Check className="w-3.5 h-3.5 text-[#2D8B5C]" />}
-                    </div>
-                  </button>
+                  <React.Fragment key={opt.value}>
+                    {showGroupHeader && (
+                      <div className="px-3 py-1.5 bg-[#FAF9F7] border-y border-[#E3DFD7] text-[10px] font-extrabold text-[#1E5C3D] uppercase tracking-wider sticky top-0 z-10">
+                        {opt.group}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      disabled={opt.disabled}
+                      onClick={() => {
+                        if (!opt.disabled) {
+                          onChange(opt.value);
+                          setIsOpen(false);
+                        }
+                      }}
+                      className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between transition-colors ${
+                        isSelected
+                          ? 'bg-[#2D8B5C]/10 text-[#2D8B5C] font-semibold'
+                          : 'text-[#161F1A] hover:bg-[#FAF9F7]'
+                      } ${opt.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                    >
+                      <div className="flex flex-col truncate pr-2">
+                        <span className="truncate">{opt.label}</span>
+                        {opt.subLabel && (
+                          <span className="text-[10px] text-gray-500 font-normal truncate">
+                            {opt.subLabel}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        {opt.badge && (
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                              opt.badgeColor || 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {opt.badge}
+                          </span>
+                        )}
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#2D8B5C]" />}
+                      </div>
+                    </button>
+                  </React.Fragment>
                 );
               })
             )}

@@ -13,7 +13,7 @@ interface TimetableGridProps {
   studentTimezone?: string;
   students?: Student[];
   tutors?: Tutor[];
-  onAddClass?: (slot: { day: DayOfWeek; time: string }) => void;
+  onAddClass?: (slot: { day: DayOfWeek; time: string; tutorId?: string }) => void;
   onEditClass?: (cls: TimetableClass) => void;
   onDeleteClass?: (classId: string) => void;
   onCancelClass?: (classId: string, newStatus: TimetableClass['status']) => void;
@@ -991,7 +991,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                     </>
                   ) : (
                     <div
-                      onClick={() => onAddClass && onAddClass({ day: effectiveMobileDay, time: slot })}
+                      onClick={() => onAddClass && onAddClass({ day: effectiveMobileDay, time: slot, tutorId: selectedTutorFilter !== 'all' ? selectedTutorFilter : undefined })}
                       className={`flex items-center justify-between py-2 px-3 rounded-lg border border-dashed transition-all ${
                         effectiveMobileDay === currentTeachingDay
                           ? 'border-[#2D8B5C]/30 bg-[#F0F7F3]'
@@ -1152,7 +1152,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                         onClick={() => {
                           if (totalCellClassesCount === 0) {
                             if (onAddClass) {
-                              onAddClass({ day, time: slot });
+                              onAddClass({ day, time: slot, tutorId: selectedTutorFilter !== 'all' ? selectedTutorFilter : undefined });
                             }
                           } else if (totalCellClassesCount === 1) {
                             setSelectedDetailClass(allCellClasses[0]);
@@ -1677,7 +1677,7 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const slotData = { day: selectedSlotDetails.day, time: selectedSlotDetails.slot };
+                    const slotData = { day: selectedSlotDetails.day, time: selectedSlotDetails.slot, tutorId: selectedTutorFilter !== 'all' ? selectedTutorFilter : undefined };
                     setSelectedSlotDetails(null);
                     onAddClass(slotData);
                   }}

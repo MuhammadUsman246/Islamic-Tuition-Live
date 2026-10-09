@@ -2396,6 +2396,18 @@ export async function addClass(classData: Omit<TimetableClass, 'id'>): Promise<s
   touchClassesRevision().catch(() => {});
   recalculateAndPersistSummaryMetrics().catch(() => {});
 
+  // 100% Automatic Two-Way Sync: Sync student's assignedTutorId when booking a slot
+  if (classData.studentId && classData.tutorId && classData.tutorId !== 'Unassigned' && classData.status !== 'Cancelled') {
+    const targetStudent = CACHE.students?.find(
+      s => s.studentId === classData.studentId || s.id === classData.studentId
+    );
+    if (targetStudent && targetStudent.assignedTutorId !== classData.tutorId) {
+      updateStudent(targetStudent.id, { assignedTutorId: classData.tutorId }).catch(err => {
+        console.warn("Could not auto-sync student assignedTutorId on addClass:", err);
+      });
+    }
+  }
+
   if (!isFirestoreQuotaExceeded()) {
     setDoc(docRef, sanitizeFirestoreObject(classData), { merge: true })
       .catch((err) => {
@@ -2432,6 +2444,21 @@ export async function updateClass(id: string, updates: Partial<TimetableClass>):
     saveCachedCollection('classes', CACHE.classes);
     touchClassesRevision().catch(() => {});
     recalculateAndPersistSummaryMetrics().catch(() => {});
+  }
+
+  // 100% Automatic Two-Way Sync: Sync student's assignedTutorId when updating a class slot
+  const effectiveStudentId = updates.studentId || previousClass?.studentId;
+  const effectiveTutorId = updates.tutorId || previousClass?.tutorId;
+  const effectiveStatus = updates.status || previousClass?.status;
+  if (effectiveStudentId && effectiveTutorId && effectiveTutorId !== 'Unassigned' && effectiveStatus !== 'Cancelled') {
+    const targetStudent = CACHE.students?.find(
+      s => s.studentId === effectiveStudentId || s.id === effectiveStudentId
+    );
+    if (targetStudent && targetStudent.assignedTutorId !== effectiveTutorId) {
+      updateStudent(targetStudent.id, { assignedTutorId: effectiveTutorId }).catch(err => {
+        console.warn("Could not auto-sync student assignedTutorId on updateClass:", err);
+      });
+    }
   }
 
   if (!isFirestoreQuotaExceeded()) {
