@@ -46,7 +46,12 @@ import {
   CheckCircle2,
   UserX,
   Radio,
-  Pencil
+  Pencil,
+  ChevronDown,
+  Repeat,
+  Wallet,
+  CreditCard,
+  TrendingUp
 } from 'lucide-react';
 import {
   Student,
@@ -92,6 +97,8 @@ import { MultiDayClassDeleteModal } from '../modals/MultiDayClassDeleteModal';
 import { StudentLeaveModal } from '../modals/StudentLeaveModal';
 import { ShiftTutorModal } from '../modals/ShiftTutorModal';
 import { StudentFolderModal } from '../modals/StudentFolderModal';
+import { AdminCommandPalette } from './AdminCommandPalette';
+import { QuickFinancialAndTrialAnalytics } from './QuickFinancialAndTrialAnalytics';
 import { AcademySecurityTab } from './AcademySecurityTab';
 import { ReferralRewardsDashboard } from './ReferralRewardsDashboard';
 import { ClassroomLab } from './ClassroomLab';
@@ -150,12 +157,14 @@ import {
   updateAcademySettings,
   subscribeToAcademySettings,
   shiftStudentTutor,
+  ShiftStudentTutorParams,
   setStudentLeave,
   deleteClassesBatch,
   subscribeToSummaryMetrics,
   updateFamilyGroupBatch,
   loadOlderLessonsArchive,
-  checkAndApplyReferralDiscountOnFirstPayment
+  checkAndApplyReferralDiscountOnFirstPayment,
+  notifyTrial5SessionsCompleted
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -197,6 +206,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isClassModalOpen, setIsClassModalOpen] = useState<boolean>(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: DayOfWeek; time: string } | undefined>();
   const [selectedClass, setSelectedClass] = useState<TimetableClass | null>(null);
+
+  // Global Command Palette (Cmd+K / Ctrl+K) & Quick Action speed-dial states
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
+  const [isQuickActionDropdownOpen, setIsQuickActionDropdownOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const [isLessonModalOpen, setIsLessonModalOpen] = useState<boolean>(false);
   const [selectedStudentForLesson, setSelectedStudentForLesson] = useState<string>('');
@@ -1021,6 +1045,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const day1TrialsList = trialStudentsList.filter(s => s.trialStatus === 'Day 1' || (s.trialSessionsCompleted || 0) <= 1);
   const followUpTrialsList = trialStudentsList.filter(s => s.trialStatus === 'Follow-up' || s.trialStatus === 'Interested' || s.trialStatus === 'Pending Call');
 
+  // Financial health calculations for Overview
+  const totalPaidPKR = salaries.filter(s => s.status === 'Paid').reduce((sum, s) => sum + (s.monthlySalary || 0), 0);
+  const totalPendingPKR = salaries.filter(s => s.status !== 'Paid').reduce((sum, s) => sum + (s.monthlySalary || 0), 0);
+  const totalBilledFees = totalFeesPaid + totalOverdueAmount + totalPendingAmount;
+  const collectionRate = totalBilledFees > 0 ? Math.round((totalFeesPaid / totalBilledFees) * 100) : 100;
+
   // Today's classes sorted chronologically
   const todayClassesList = classes
     .filter(c => c.dayOfWeek === currentTeachingDay)
@@ -1171,12 +1201,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await onRefreshData();
   };
 
-  const handleShiftStudentTutor = async (params: {
-    studentId: string;
-    oldTutorId: string;
-    newTutorId: string;
-    notes?: string;
-  }) => {
+  const handleShiftStudentTutor = async (params: ShiftStudentTutorParams) => {
     const res = await shiftStudentTutor(params);
     await onRefreshData();
     alert(res.message);
@@ -1608,56 +1633,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* Timetable Slot History (Undo & Redo Utility Bar) */}
-      <div id="admin_slot_history_toolbar" className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center space-x-2">
-          <Calendar className="w-4 h-4 text-[#2D8B5C]" />
-          <div>
-            <h4 className="text-xs font-bold text-slate-800">Timetable Scheduler Controls</h4>
-            <p className="text-[10px] text-slate-500">Easily reverse slot modifications in real-time</p>
+      {/* Timetable Slot History (Undo & Redo Utility Bar) - Shown on Master Timetable tab */}
+      {currentTab === 'timetable' && (
+        <div id="admin_slot_history_toolbar" className="bg-[#FAF9F7] border border-[#E3DFD7] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center space-x-2">
+            <Calendar className="w-4 h-4 text-[#2D8B5C]" />
+            <div>
+              <h4 className="text-xs font-bold text-slate-800">Timetable Scheduler Controls</h4>
+              <p className="text-[10px] text-slate-500">Easily reverse slot modifications in real-time</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            {/* Undo Button */}
+            <button
+              type="button"
+              onClick={handleUndoAction}
+              disabled={undoStack.length === 0}
+              className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                undoStack.length > 0
+                  ? 'bg-white text-slate-800 border-[#E3DFD7] hover:bg-slate-50 hover:shadow-xs'
+                  : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+              }`}
+              title={undoStack.length > 0 ? `Undo delete: ${undoStack[undoStack.length - 1].title}` : 'Nothing to undo'}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Undo Deletion ({undoStack.length})</span>
+            </button>
+
+            {/* Redo Button */}
+            <button
+              type="button"
+              onClick={handleRedoAction}
+              disabled={redoStack.length === 0}
+              className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                redoStack.length > 0
+                  ? 'bg-white text-slate-800 border-[#E3DFD7] hover:bg-slate-50 hover:shadow-xs'
+                  : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+              }`}
+              title={redoStack.length > 0 ? `Redo delete: ${redoStack[redoStack.length - 1].title}` : 'Nothing to redo'}
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>Redo Deletion ({redoStack.length})</span>
+            </button>
           </div>
         </div>
-        
-        <div className="flex items-center space-x-2">
-          {/* Undo Button */}
-          <button
-            type="button"
-            onClick={handleUndoAction}
-            disabled={undoStack.length === 0}
-            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-              undoStack.length > 0
-                ? 'bg-white text-slate-800 border-[#E3DFD7] hover:bg-slate-50 hover:shadow-xs'
-                : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-            }`}
-            title={undoStack.length > 0 ? `Undo delete: ${undoStack[undoStack.length - 1].title}` : 'Nothing to undo'}
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Undo Deletion ({undoStack.length})</span>
-          </button>
+      )}
 
-          {/* Redo Button */}
-          <button
-            type="button"
-            onClick={handleRedoAction}
-            disabled={redoStack.length === 0}
-            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-              redoStack.length > 0
-                ? 'bg-white text-slate-800 border-[#E3DFD7] hover:bg-slate-50 hover:shadow-xs'
-                : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-            }`}
-            title={redoStack.length > 0 ? `Redo delete: ${redoStack[redoStack.length - 1].title}` : 'Nothing to redo'}
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-            <span>Redo Deletion ({redoStack.length})</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Admin Student Quick Search (Accessible only to Admin) */}
-      <div id="admin_student_search_widget" className="bg-white border border-[#E3DFD7] rounded-xl p-3.5 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-2.5 flex-1 max-w-xl">
-            <div className="relative w-full">
+      {/* Admin Student Quick Search, Command Palette & Unified Speed-Dial Action Bar */}
+      <div id="admin_student_search_widget" className="bg-white border border-[#E3DFD7] rounded-xl p-3 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+          <div className="flex items-center space-x-2 flex-1 max-w-xl">
+            <div className="relative flex-1">
               <Search className="w-4 h-4 text-[#5A6B61] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 id="admin_student_search_input"
@@ -1678,14 +1705,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               )}
             </div>
+
+            {/* Command Palette Trigger Button */}
+            <button
+              type="button"
+              id="admin_command_palette_trigger"
+              onClick={() => setIsCommandPaletteOpen(true)}
+              className="flex items-center space-x-1.5 px-2.5 py-2 bg-[#FAF9F7] hover:bg-slate-100 border border-[#E3DFD7] rounded-lg text-xs font-semibold text-slate-700 transition-colors shrink-0 cursor-pointer"
+              title="Global Command Palette (Press Cmd+K or Ctrl+K)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#2D8B5C]" />
+              <span className="hidden sm:inline">Commands</span>
+              <kbd className="px-1.5 py-0.2 text-[10px] font-mono bg-white border border-[#E3DFD7] rounded text-slate-500 shadow-2xs">
+                ⌘K
+              </kbd>
+            </button>
           </div>
-          <div className="text-xs text-[#5A6B61] flex items-center gap-1.5 shrink-0">
-            <Users className="w-3.5 h-3.5 text-[#2D8B5C]" />
-            <span>
-              {adminStudentSearchQuery.trim()
-                ? `${matchedAdminStudents.length} matching student${matchedAdminStudents.length === 1 ? '' : 's'}`
-                : `${students.length} real student records`}
-            </span>
+
+          <div className="flex items-center justify-between md:justify-end gap-2.5 shrink-0">
+            <div className="text-xs text-[#5A6B61] flex items-center gap-1.5 shrink-0 hidden sm:flex">
+              <Users className="w-3.5 h-3.5 text-[#2D8B5C]" />
+              <span>
+                {adminStudentSearchQuery.trim()
+                  ? `${matchedAdminStudents.length} matching`
+                  : `${students.length} students`}
+              </span>
+            </div>
+
+            {/* Quick Action Speed-Dial Button & Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                id="admin_quick_action_dropdown_trigger"
+                onClick={() => setIsQuickActionDropdownOpen(prev => !prev)}
+                className="flex items-center space-x-1.5 px-3 py-2 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-lg shadow-2xs transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Quick Action</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${isQuickActionDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isQuickActionDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsQuickActionDropdownOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-[#E3DFD7] py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-[#EDEAE3]">
+                      Student & Classes
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setSelectedStudent(null);
+                        setIsStudentModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4 text-[#2D8B5C]" />
+                      <div>
+                        <p className="font-semibold">Register New Student</p>
+                        <p className="text-[10px] text-slate-400">Enrol with tutor & timetable</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setSelectedClass(null);
+                        setIsClassModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <Calendar className="w-4 h-4 text-blue-600" />
+                      <div>
+                        <p className="font-semibold">Schedule Class Slot</p>
+                        <p className="text-[10px] text-slate-400">Add 30-min weekly lesson</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setIsShiftTutorModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <Repeat className="w-4 h-4 text-purple-600" />
+                      <div>
+                        <p className="font-semibold">Shift Student to Tutor</p>
+                        <p className="text-[10px] text-slate-400">Transfer student & select time</p>
+                      </div>
+                    </button>
+
+                    <div className="px-3 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-t border-[#EDEAE3]">
+                      Billing & Reports
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setSelectedFee(null);
+                        setIsFeeModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <DollarSign className="w-4 h-4 text-emerald-600" />
+                      <div>
+                        <p className="font-semibold">Issue Tuition Invoice</p>
+                        <p className="text-[10px] text-slate-400">Bill student with receipt</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setIsLessonModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <BookOpen className="w-4 h-4 text-amber-600" />
+                      <div>
+                        <p className="font-semibold">Log Lesson Record</p>
+                        <p className="text-[10px] text-slate-400">Record ayah, surah & evaluation</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsQuickActionDropdownOpen(false);
+                        setWeeklyReportStudentId(students[0]?.studentId || '');
+                        setIsWeeklyReportModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-[#1E5C3D] flex items-center space-x-2 transition-colors cursor-pointer"
+                    >
+                      <FileText className="w-4 h-4 text-teal-600" />
+                      <div>
+                        <p className="font-semibold">Weekly Parent Report</p>
+                        <p className="text-[10px] text-slate-400">Share progress with parents</p>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2295,10 +2460,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
                 <button
-                  onClick={() => setCurrentTab('users')}
+                  onClick={() => setCurrentTab('students')}
                   className="text-xs font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors shrink-0 self-start sm:self-center cursor-pointer"
                 >
-                  Manage in Users Tab →
+                  Manage in Students Tab →
                 </button>
               </div>
 
@@ -2442,104 +2607,145 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          {/* KPI Cards Grid - Enhanced with Direct Navigations */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div
-              onClick={() => setCurrentTab('students')}
-              className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs hover:border-[#2D8B5C]/40 hover:shadow-sm transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#2D8B5C] transition-colors">Active Students</span>
-                <span className="p-2 rounded-lg bg-[#2D8B5C]/10 text-[#2D8B5C] group-hover:bg-[#2D8B5C] group-hover:text-white transition-all"><Users className="w-4 h-4" /></span>
-              </div>
-              <p className="text-2xl font-bold text-[#161F1A] mt-2">{activeStudentsCount}</p>
-              <p className="text-[11px] text-[#5A6B61] mt-1 flex items-center justify-between">
-                <span>{trialStudentsCount} in trial pipeline</span>
-                <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#2D8B5C] transition-colors" />
-              </p>
-            </div>
-
-            <div
-              onClick={() => setCurrentTab('trials')}
-              className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs hover:border-amber-400 hover:shadow-sm transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#8C5D08] transition-colors">Trials Pipeline</span>
-                <span className="p-2 rounded-lg bg-amber-100 text-[#8C5D08] group-hover:bg-[#E8A93E] group-hover:text-white transition-all"><Sparkles className="w-4 h-4" /></span>
-              </div>
-              <p className="text-2xl font-bold text-[#161F1A] mt-2">{trialStudentsCount}</p>
-              <p className="text-[11px] text-[#5A6B61] mt-1 flex items-center justify-between">
-                <span>{day1TrialsList.length} Day 1 • {followUpTrialsList.length} Follow-up</span>
-                <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#8C5D08] transition-colors" />
-              </p>
-            </div>
-
-            <div
-              onClick={() => setCurrentTab('fees')}
-              className={`p-5 rounded-xl border shadow-xs transition-all cursor-pointer group ${
-                overdueFeesList.length > 0
-                  ? 'bg-rose-50/30 border-rose-200 hover:border-rose-400'
-                  : 'bg-white border-[#E3DFD7] hover:border-emerald-400'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider group-hover:text-rose-700 transition-colors">Fees & Invoices</span>
-                <span className={`p-2 rounded-lg transition-all ${
-                  overdueFeesList.length > 0
-                    ? 'bg-rose-100 text-rose-700 group-hover:bg-rose-600 group-hover:text-white'
-                    : 'bg-emerald-50 text-emerald-700 group-hover:bg-[#2D8B5C] group-hover:text-white'
-                }`}>
-                  <DollarSign className="w-4 h-4" />
-                </span>
-              </div>
-              <div className="flex items-baseline space-x-2 mt-2">
-                <p className="text-2xl font-bold text-[#161F1A]">${totalFeesPaid}</p>
-                {overdueFeesList.length > 0 && (
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
-                    {overdueFeesList.length} Overdue
+          {/* Consolidated Executive KPI Summary Strip */}
+          <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#EDEAE3]">
+              {/* Metric 1: Active Students */}
+              <div
+                onClick={() => setCurrentTab('students')}
+                className="p-4 sm:p-5 hover:bg-emerald-50/40 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#2D8B5C] transition-colors flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                    <span>Active Students</span>
                   </span>
-                )}
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    Enrolled
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between mt-2.5">
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">{activeStudentsCount}</p>
+                  <div className="text-[11px] text-[#5A6B61] flex items-center gap-1 group-hover:text-[#2D8B5C]">
+                    <span>{trialStudentsCount} in trial</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
               </div>
-              <p className="text-[11px] text-[#5A6B61] mt-1 flex items-center justify-between">
-                <span>{pendingFeesList.length} pending collection</span>
-                <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#2D8B5C] transition-colors" />
-              </p>
-            </div>
 
-            <div
-              onClick={() => setCurrentTab('timetable')}
-              className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs hover:border-[#2D8B5C]/40 hover:shadow-sm transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#2D8B5C] transition-colors">
-                  Today's Live Classes
-                </span>
-                <span className="p-2 rounded-lg bg-[#2D8B5C]/10 text-[#2D8B5C] group-hover:bg-[#2D8B5C] group-hover:text-white transition-all"><Calendar className="w-4 h-4" /></span>
+              {/* Metric 2: Trials Pipeline */}
+              <div
+                onClick={() => setCurrentTab('trials')}
+                className={`p-4 sm:p-5 transition-all cursor-pointer group ${
+                  decisionPendingTrials.length > 0 ? 'bg-amber-50/20 hover:bg-amber-50/40' : 'hover:bg-amber-50/30'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#8C5D08] transition-colors flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#E8A93E]" />
+                    <span>Trials Pipeline</span>
+                  </span>
+                  {decisionPendingTrials.length > 0 ? (
+                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-500 text-white shadow-2xs animate-pulse">
+                      ⭐ {decisionPendingTrials.length} Ready to Enroll
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                      5-Session Track
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-baseline justify-between mt-2.5">
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">{trialStudentsCount}</p>
+                  <div className="text-[11px] text-[#5A6B61] flex items-center gap-1 group-hover:text-[#8C5D08]">
+                    <span>{day1TrialsList.length} Day 1 • {followUpTrialsList.length} Follow-up</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
               </div>
-              <p className="text-2xl font-bold text-[#161F1A] mt-2">{todayClassesList.length}</p>
-              <p className="text-[11px] text-[#5A6B61] mt-1 flex items-center justify-between">
-                <span>{currentTeachingDay} PKT Schedule</span>
-                <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#2D8B5C] transition-colors" />
-              </p>
+
+              {/* Metric 3: Tuition Fees & Invoices (High-Visibility Overdue Recognition) */}
+              <div
+                onClick={() => {
+                  if (overdueFeesList.length > 0) setOverviewFeeFilter('overdue');
+                  setCurrentTab('fees');
+                }}
+                className={`p-4 sm:p-5 transition-all cursor-pointer group ${
+                  overdueFeesList.length > 0 ? 'hover:bg-rose-50/50 bg-rose-50/25 border-l-2 border-rose-500' : 'hover:bg-emerald-50/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider group-hover:text-rose-700 transition-colors flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Tuition Fees</span>
+                  </span>
+                  {overdueFeesList.length > 0 ? (
+                    <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-rose-600 text-white shadow-xs animate-pulse">
+                      🚨 {overdueFeesList.length} Overdue (${totalOverdueAmount})
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      All Settled
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-baseline justify-between mt-2.5">
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">${totalFeesPaid}</p>
+                  <div className="text-[11px] flex items-center gap-1">
+                    {overdueFeesList.length > 0 ? (
+                      <span className="text-rose-700 font-bold">{overdueFeesList.length} past due (${totalOverdueAmount})</span>
+                    ) : (
+                      <span className="text-[#5A6B61]">{pendingFeesList.length} pending on schedule</span>
+                    )}
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Metric 4: Today's Live Schedule */}
+              <div
+                onClick={() => setCurrentTab('timetable')}
+                className="p-4 sm:p-5 hover:bg-emerald-50/40 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider group-hover:text-[#2D8B5C] transition-colors flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                    <span>Today's Classes</span>
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                    {currentTeachingDay} PKT
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between mt-2.5">
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">{todayClassesList.length}</p>
+                  <div className="text-[11px] text-[#5A6B61] flex items-center gap-1 group-hover:text-[#2D8B5C]">
+                    <span>Live matrix</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-
-
-          {/* Quick Actions Row */}
-          <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-bold text-[#161F1A]">Quick Academy Actions</h3>
-              <p className="text-xs text-[#5A6B61]">Fast shortcuts to schedule, register, or record reports</p>
+          {/* Quick Academy Actions Strip */}
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-[#E3DFD7] shadow-xs flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#2D8B5C]/10 flex items-center justify-center text-[#2D8B5C]">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-bold text-[#161F1A]">Quick Academy Actions</h3>
+                <p className="text-[11px] text-[#5A6B61]">Direct shortcuts for enrollment, scheduling and billing</p>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 id="quick_add_student_button"
                 onClick={() => {
                   setSelectedStudent(null);
                   setIsStudentModalOpen(true);
                 }}
-                className="px-3.5 py-2 rounded-lg bg-[#2D8B5C] text-white text-xs font-semibold hover:bg-[#1E5C3D] transition-colors flex items-center space-x-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-[#2D8B5C] text-white text-xs font-semibold hover:bg-[#1E5C3D] transition-colors flex items-center space-x-1.5 cursor-pointer shadow-2xs"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Register Student</span>
@@ -2551,19 +2757,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setSelectedClass(null);
                   setIsClassModalOpen(true);
                 }}
-                className="px-3.5 py-2 rounded-lg bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-gray-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-gray-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
               >
                 <Calendar className="w-3.5 h-3.5 text-[#2D8B5C]" />
                 <span>Schedule Class</span>
-              </button>
-
-              <button
-                id="quick_record_lesson_button"
-                onClick={() => setIsLessonModalOpen(true)}
-                className="px-3.5 py-2 rounded-lg bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-gray-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
-              >
-                <BookOpen className="w-3.5 h-3.5 text-[#E8A93E]" />
-                <span>Log Lesson</span>
               </button>
 
               <button
@@ -2572,28 +2769,111 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setSelectedFee(null);
                   setIsFeeModalOpen(true);
                 }}
-                className="px-3.5 py-2 rounded-lg bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-gray-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-gray-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
               >
                 <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Issue Invoice</span>
               </button>
 
               <button
-                id="quick_weekly_report_button"
-                onClick={() => {
-                  setWeeklyReportStudentId(students[0]?.studentId || '');
-                  setIsWeeklyReportModalOpen(true);
-                }}
-                className="px-3.5 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-xs font-bold hover:from-emerald-700 hover:to-teal-800 transition-colors flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                id="quick_more_actions_button"
+                onClick={() => setIsCommandPaletteOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-[#FAF9F7] border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold hover:bg-slate-100 transition-colors flex items-center space-x-1.5 cursor-pointer"
+                title="Open command palette for more actions"
               >
-                <FileText className="w-3.5 h-3.5" />
-                <span>Weekly Parent Report</span>
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                <span>All Actions (⌘K)</span>
               </button>
             </div>
           </div>
 
+          {/* Quick Financial Health & Trial Conversion Rate Analytics */}
+          <QuickFinancialAndTrialAnalytics
+            fees={fees}
+            students={students}
+            onNavigateToFees={() => setCurrentTab('fees')}
+            onNavigateToTrials={() => setCurrentTab('trials')}
+          />
+
+          {/* High-Priority Attention Spotlight for Overdue Fees & Decision-Ready Trials */}
+          {(overdueFeesList.length > 0 || decisionPendingTrials.length > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {/* Overdue Spotlight */}
+              {overdueFeesList.length > 0 && (
+                <div className="bg-gradient-to-r from-rose-500/10 via-rose-50/60 to-white border-2 border-rose-300/80 rounded-xl p-3.5 sm:p-4 shadow-xs flex items-center justify-between gap-3">
+                  <div className="flex items-start space-x-3 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <AlertCircle className="w-5 h-5 animate-pulse" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs sm:text-sm font-extrabold text-rose-900 tracking-tight">
+                          {overdueFeesList.length} Tuition Invoices Overdue
+                        </span>
+                        <span className="px-2 py-0.2 rounded-full text-[10px] font-extrabold bg-rose-600 text-white shadow-2xs">
+                          ${totalOverdueAmount}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-rose-800/90 mt-0.5 line-clamp-1">
+                        Immediate follow-up required. Settle in 1 click or send WhatsApp reminders.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOverviewFeeFilter('overdue');
+                      const el = document.getElementById('urgent_tuition_fee_section');
+                      if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer shadow-xs active:scale-95 flex items-center space-x-1"
+                  >
+                    <span>Filter Overdue</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Trials Ready for Enrollment Spotlight */}
+              {decisionPendingTrials.length > 0 && (
+                <div className="bg-gradient-to-r from-amber-500/10 via-amber-50/60 to-white border-2 border-amber-300/80 rounded-xl p-3.5 sm:p-4 shadow-xs flex items-center justify-between gap-3">
+                  <div className="flex items-start space-x-3 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs sm:text-sm font-extrabold text-amber-950 tracking-tight">
+                          {decisionPendingTrials.length} Trials Ready for Enrolment
+                        </span>
+                        <span className="px-2 py-0.2 rounded-full text-[10px] font-extrabold bg-amber-500 text-white shadow-2xs">
+                          5/5 Done
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-amber-900/90 mt-0.5 line-clamp-1">
+                        Completed free sessions. Ready for conversion into regular enrolled students.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOverviewTrialFilter('decision');
+                      const el = document.getElementById('prospective_trials_section');
+                      if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer shadow-xs active:scale-95 flex items-center space-x-1"
+                  >
+                    <span>View Trials</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* SECTION 1: URGENT FINANCIAL ACTION CENTER (OVERDUE & PENDING FEES) */}
-          <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
+          <div id="urgent_tuition_fee_section" className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-[#EDEAE3] bg-gradient-to-r from-rose-50/40 via-amber-50/30 to-white flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="flex items-center space-x-2">
@@ -2951,7 +3231,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           {/* SECTION 2: ACTIVE PROSPECTIVE TRIALS PIPELINE COMMAND CENTER */}
-          <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
+          <div id="prospective_trials_section" className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-[#EDEAE3] bg-gradient-to-r from-amber-50/40 via-emerald-50/20 to-white flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="flex items-center space-x-2">
@@ -3149,224 +3429,205 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             })()}
           </div>
 
-          {/* SECTION 3: TODAY'S LIVE CLASSES AGENDA (REPLACES MASSIVE TIMETABLE GRID) */}
+          {/* SECTION 3: ACADEMY FINANCIAL PULSE & HEALTH OVERVIEW (CALM & EXECUTIVE) */}
           <div className="bg-white rounded-xl border border-[#E3DFD7] shadow-xs overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-[#EDEAE3] bg-gradient-to-r from-emerald-50/50 via-[#FAF9F7] to-white flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <Calendar className="w-4 h-4 text-[#2D8B5C]" />
-                  <h3 className="text-sm font-bold text-[#161F1A]">
-                    Today's Live Classes & Teaching Agenda ({currentTeachingDay})
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#2D8B5C]/10 text-[#1E5C3D] border border-[#2D8B5C]/20">
-                    {todayClassesList.length} Sessions Today
-                  </span>
+            <div className="p-4 sm:p-5 border-b border-[#EDEAE3] bg-gradient-to-r from-emerald-50/30 via-slate-50/40 to-white flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-[#2D8B5C]/10 text-[#2D8B5C] flex items-center justify-center shrink-0">
+                  <Wallet className="w-5 h-5" />
                 </div>
-                <p className="text-xs text-[#5A6B61] mt-0.5">
-                  Real-time operational agenda calibrated in Asia/Karachi (PKT). Access live classes, student timezone conversions, and lesson reporting.
-                </p>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-sm font-bold text-[#161F1A]">
+                      Academy Financial Health &amp; Realization Pulse
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      Real-time Overview
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#5A6B61] mt-0.5">
+                    Calm executive summary of tuition realization, scheduled receivables, and faculty payroll commitments.
+                  </p>
+                </div>
               </div>
 
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedSlot({ day: currentTeachingDay, time: '05:00' });
-                    setSelectedClass(null);
-                    setIsClassModalOpen(true);
-                  }}
-                  className="px-3 py-1.5 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1 transition-colors cursor-pointer shadow-2xs"
+                  onClick={() => setCurrentTab('fees')}
+                  className="px-3 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] hover:bg-gray-100 text-[#161F1A] text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Schedule Class</span>
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Tuition Ledger</span>
                 </button>
-
                 <button
                   type="button"
-                  onClick={() => setCurrentTab('timetable')}
-                  className="px-3.5 py-1.5 bg-white border border-[#D5D0C6] text-[#161F1A] text-xs font-semibold rounded-lg hover:bg-gray-50 flex items-center space-x-1 transition-colors cursor-pointer"
+                  onClick={() => setCurrentTab('salaries')}
+                  className="px-3 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] hover:bg-gray-100 text-[#161F1A] text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
                 >
-                  <span>Open 7-Day Master Timetable</span>
-                  <ArrowRight className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                  <Briefcase className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Faculty Payroll</span>
                 </button>
               </div>
             </div>
 
-            {/* Today's Classes List */}
-            {todayClassesList.length === 0 ? (
-              <div className="p-8 text-center bg-white space-y-2">
-                <Calendar className="w-8 h-8 text-gray-300 mx-auto" />
-                <h4 className="text-xs font-bold text-[#161F1A]">No Classes Scheduled For Today ({currentTeachingDay})</h4>
-                <p className="text-xs text-[#5A6B61] max-w-sm mx-auto">
-                  There are no operational slots booked for today. You can review the full 7-day schedule or schedule a new class.
-                </p>
+            {/* Financial Health 4-Pillar Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#EDEAE3] bg-white">
+              {/* Pillar 1: Tuition Realization */}
+              <div
+                onClick={() => setCurrentTab('fees')}
+                className="p-5 hover:bg-emerald-50/20 transition-all cursor-pointer group space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Realized Tuition</span>
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    {collectionRate}% Realized
+                  </span>
+                </div>
+                <div>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">
+                    ${totalFeesPaid.toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-[#5A6B61] mt-0.5">
+                    out of ${totalBilledFees.toLocaleString()} total invoiced
+                  </p>
+                </div>
+                {/* Visual Progress Bar */}
+                <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-[#2D8B5C] rounded-full transition-all"
+                    style={{ width: `${Math.min(100, collectionRate)}%` }}
+                  />
+                </div>
               </div>
-            ) : (
-              <div className="divide-y divide-[#EDEAE3] max-h-96 overflow-y-auto">
-                {todayClassesList.map(cls => {
-                  const matchingStudent = students.find(s => s.studentId === cls.studentId);
-                  const isTrial = matchingStudent?.status === 'Trial' || cls.status === 'Trial';
-                  const studentTime = matchingStudent?.timezone
-                    ? convertPKTToStudentTime(currentTeachingDay, cls.startTimePKT, matchingStudent.timezone)
-                    : null;
 
-                  return (
-                    <div
-                      key={cls.id}
-                      className="p-3.5 sm:px-5 hover:bg-[#FAF9F7] transition-colors flex flex-wrap items-center justify-between gap-3 text-xs"
-                    >
-                      {/* Left: Time & Student */}
-                      <div className="flex items-center space-x-3 min-w-[220px]">
-                        <div className="w-18 shrink-0 text-center py-1.5 px-2 rounded-lg bg-[#FAF9F7] border border-[#E3DFD7]">
-                          <span className="font-mono font-bold text-xs text-[#161F1A] block">{cls.startTimePKT}</span>
-                          <span className="text-[9px] text-[#5A6B61] font-mono">PKT</span>
-                        </div>
-
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-sm text-[#161F1A]">{cls.studentName}</span>
-                            <span className="font-mono text-[10px] text-[#5A6B61]">({cls.studentId})</span>
-                            {isTrial && (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                Trial
-                              </span>
-                            )}
-                            {matchingStudent?.isOnLeave && (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-0.5" title={`On leave until ${matchingStudent.leaveEndDate || 'specified date'}`}>
-                                <Palmtree className="w-2.5 h-2.5" /> On Leave
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-[#5A6B61] mt-0.5 flex items-center gap-2">
-                            <span>Course: {matchingStudent?.courseType || 'Quran'}</span>
-                            {studentTime && (
-                              <>
-                                <span>•</span>
-                                <span className="text-[#2D8B5C] font-mono">
-                                  Student Time: {studentTime.localTime} ({getTimezoneShortCode(matchingStudent?.timezone || '')})
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Middle: Tutor Tag & Status */}
-                      <div className="flex items-center space-x-2">
-                        <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-50 border border-emerald-200 text-emerald-900">
-                          {cls.tutorId}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          cls.status === 'Cancelled' ? 'bg-rose-100 text-rose-800' :
-                          cls.status === 'Completed' ? 'bg-blue-100 text-blue-800' :
-                          cls.status === 'Student on Leave' ? 'bg-indigo-100 text-indigo-800' :
-                          'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          {cls.status}
-                        </span>
-                      </div>
-
-                      {/* Right: Quick Operational Actions */}
-                      <div className="flex items-center space-x-2">
-                        {/* Zoom Live Meeting Button */}
-                        <a
-                          href={tutors.find(t => t.tutorId === cls.tutorId)?.zoomLink || 'https://zoom.us'}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
-                          title={`Join ${cls.tutorId} Classroom (${tutors.find(t => t.tutorId === cls.tutorId)?.zoomLink || 'https://zoom.us'})`}
-                        >
-                          <Video className="w-3.5 h-3.5" />
-                          <span>Join Classroom</span>
-                        </a>
-
-                        {/* Log Lesson Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedStudentForLesson(cls.studentId);
-                            setIsLessonModalOpen(true);
-                          }}
-                          className="px-2.5 py-1 bg-white border border-[#D5D0C6] hover:bg-gray-50 text-[#161F1A] rounded-md text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
-                          title="Log Lesson Recitation & Progress"
-                        >
-                          <BookOpen className="w-3 h-3 text-[#E8A93E]" />
-                          <span>Log Lesson</span>
-                        </button>
-
-                        {/* Edit Class */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedClass(cls);
-                            setIsClassModalOpen(true);
-                          }}
-                          className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors cursor-pointer"
-                          title="Edit Class Details"
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+              {/* Pillar 2: Scheduled Receivables & Overdue */}
+              <div
+                onClick={() => {
+                  setOverviewFeeFilter('overdue');
+                  setCurrentTab('fees');
+                }}
+                className={`p-5 transition-all cursor-pointer group space-y-2.5 ${
+                  overdueFeesList.length > 0 ? 'hover:bg-rose-50/30 bg-rose-50/10' : 'hover:bg-emerald-50/20'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Uncollected Tuition</span>
+                  </span>
+                  {overdueFeesList.length > 0 ? (
+                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-600 text-white shadow-2xs">
+                      ${totalOverdueAmount} Overdue
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800">
+                      On Track
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <p className={`text-2xl sm:text-3xl font-extrabold ${overdueFeesList.length > 0 ? 'text-rose-900' : 'text-[#161F1A]'}`}>
+                    ${(totalOverdueAmount + totalPendingAmount).toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-[#5A6B61] mt-0.5">
+                    {overdueFeesList.length > 0 ? (
+                      <span className="text-rose-700 font-semibold">{overdueFeesList.length} past due</span>
+                    ) : (
+                      <span>$0 past due</span>
+                    )} • {pendingFeesList.length} on schedule
+                  </p>
+                </div>
+                <div className="flex items-center text-[11px] text-[#2D8B5C] font-semibold pt-0.5">
+                  <span>Manage collection ledger</span>
+                  <ChevronRight className="w-3.5 h-3.5 ml-0.5 group-hover:translate-x-0.5 transition-transform" />
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Recent Lessons & Staff Attendance Snapshot */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Lessons */}
-            <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">Recent Lesson Reports</h4>
+              {/* Pillar 3: Faculty Payroll Obligations (PKR) */}
+              <div
+                onClick={() => setCurrentTab('salaries')}
+                className="p-5 hover:bg-blue-50/20 transition-all cursor-pointer group space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1.5">
+                    <Briefcase className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Faculty Payroll</span>
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200">
+                    PKR Base
+                  </span>
+                </div>
+                <div>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">
+                    ₨{totalPaidPKR.toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-[#5A6B61] mt-0.5">
+                    ₨{totalPendingPKR.toLocaleString()} pending disbursement
+                  </p>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-[#5A6B61]">
+                  <span>{salaries.length} faculty compensation logs</span>
+                  <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </div>
+
+              {/* Pillar 4: Student Roster Stability */}
+              <div
+                onClick={() => setCurrentTab('students')}
+                className="p-5 hover:bg-emerald-50/20 transition-all cursor-pointer group space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#5A6B61] uppercase tracking-wider flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                    <span>Roster Stability</span>
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    Healthy
+                  </span>
+                </div>
+                <div>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-[#161F1A]">
+                    {activeStudentsCount}
+                  </p>
+                  <p className="text-[11px] text-[#5A6B61] mt-0.5">
+                    active regular learners currently enrolled
+                  </p>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-[#5A6B61]">
+                  <span>{trialStudentsCount} prospective in trial</span>
+                  <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Calm Assurance Strip */}
+            <div className="px-5 py-3 bg-[#FAF9F7] border-t border-[#EDEAE3] flex flex-wrap items-center justify-between gap-3 text-xs text-[#5A6B61]">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="w-4 h-4 text-[#2D8B5C] shrink-0" />
+                <span>
+                  All invoices, collection receipts and faculty compensations synchronize directly with Firestore.
+                </span>
+              </div>
+              <div className="flex items-center space-x-3 text-[11px]">
                 <button
-                  onClick={() => setCurrentTab('lessons')}
-                  className="text-xs text-[#2D8B5C] font-semibold hover:underline"
+                  type="button"
+                  onClick={() => setCurrentTab('fees')}
+                  className="font-semibold text-[#2D8B5C] hover:underline cursor-pointer"
                 >
-                  View All ({lessons.length})
+                  View Invoices Ledger →
                 </button>
-              </div>
-              <div className="space-y-2.5">
-                {lessons.slice(0, 4).map((l) => (
-                  <div key={l.id} className="p-3 rounded-lg border border-[#EAE6DE] bg-[#FAF9F7] text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[#161F1A]">{l.studentName} ({l.studentId})</span>
-                      <span className="font-medium text-[#2D8B5C]">{l.tutorId}</span>
-                    </div>
-                    <p className="text-[11px] text-[#5A6B61] mt-0.5">{l.lessonCovered}</p>
-                    <div className="flex items-center justify-between mt-2 pt-1 border-t border-[#E3DFD7] text-[10px] text-[#5A6B61]">
-                      <span>{l.date}</span>
-                      <span className="font-semibold text-emerald-700">{l.performance}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Tutor Punctuality Snapshot */}
-            <div className="bg-white p-5 rounded-xl border border-[#E3DFD7] shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">Tutor Login & Punctuality</h4>
-                <span className="text-[11px] text-[#5A6B61]">Recorded automatically</span>
-              </div>
-              <div className="space-y-2.5">
-                {tutorAttendance.map((ta) => (
-                  <div key={ta.id} className="p-3 rounded-lg border border-[#EAE6DE] flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-bold text-[#161F1A]">{ta.tutorId} - {ta.tutorName}</span>
-                      <p className="text-[11px] text-[#5A6B61]">{ta.notes}</p>
-                    </div>
-                    <div className="text-right">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        ta.status === 'On Time' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {ta.status} {ta.lateDurationMinutes > 0 ? `(${ta.lateDurationMinutes}m late)` : ''}
-                      </span>
-                      <p className="text-[10px] text-[#5A6B61] mt-0.5 font-mono">{ta.loginTime} PKT</p>
-                    </div>
-                  </div>
-                ))}
+                <span>•</span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab('salaries')}
+                  className="font-semibold text-[#2D8B5C] hover:underline cursor-pointer"
+                >
+                  View Faculty Payroll →
+                </button>
               </div>
             </div>
           </div>
@@ -5097,6 +5358,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               trialSessionsCompleted: next,
                               trialStatus: next >= 5 ? 'Decision Pending' : 'Follow-up'
                             });
+                            if (next >= 5 && completed < 5) {
+                              notifyTrial5SessionsCompleted({
+                                ...st,
+                                trialSessionsCompleted: next
+                              });
+                            }
                             await onRefreshData();
                           }}
                           className="px-2.5 py-1 text-xs font-medium text-[#161F1A] bg-[#FAF9F7] border border-[#D5D0C6] rounded-md hover:bg-gray-100 cursor-pointer"
@@ -7154,6 +7421,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         initialStudent={selectedStudent}
       />
 
+      <AdminCommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onNavigateTab={setCurrentTab}
+        students={students}
+        tutors={tutors}
+        onOpenStudentFile={openStudent360}
+        onRegisterStudent={() => {
+          setSelectedStudent(null);
+          setIsStudentModalOpen(true);
+        }}
+        onScheduleClass={() => {
+          setSelectedClass(null);
+          setIsClassModalOpen(true);
+        }}
+        onLogLesson={() => setIsLessonModalOpen(true)}
+        onIssueInvoice={() => {
+          setSelectedFee(null);
+          setIsFeeModalOpen(true);
+        }}
+        onWeeklyReport={() => {
+          setWeeklyReportStudentId(students[0]?.studentId || '');
+          setIsWeeklyReportModalOpen(true);
+        }}
+        onShiftStudent={() => setIsShiftTutorModalOpen(true)}
+      />
+
       <BulkImportModal
         isOpen={isBulkImportModalOpen}
         onClose={() => setIsBulkImportModalOpen(false)}
@@ -7402,6 +7696,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         student={studentForShift}
         tutors={tutors}
         classes={classes}
+        students={students}
         onConfirmShift={handleShiftStudentTutor}
       />
 

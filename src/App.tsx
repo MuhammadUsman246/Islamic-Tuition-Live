@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthPortal } from './components/auth/AuthPortal';
 import { Sidebar } from './components/layout/Sidebar';
@@ -60,6 +60,7 @@ import {
   requestDesktopNotificationPermission
 } from './utils/chatMediaUtils';
 import { InAppMessageToast } from './components/chat/InAppMessageToast';
+import { TrialConversionToast, TrialCompletedNotificationData } from './components/common/TrialConversionToast';
 import { LiveCallModal } from './components/chat/LiveCallModal';
 import { AdminLogoutAuthModal } from './components/modals/AdminLogoutAuthModal';
 import {
@@ -75,7 +76,8 @@ import {
   DollarSign,
   ShieldCheck,
   CheckSquare,
-  User
+  User,
+  Sparkles
 } from 'lucide-react';
 
 const MainPortal: React.FC = () => {
@@ -115,7 +117,10 @@ const MainPortal: React.FC = () => {
     setCurrentTab(getDefaultTab(role));
   }, [role]);
   const [activeChatThreadId, setActiveChatThreadId] = useState<string | undefined>(undefined);
+  const [activeChatMessageId, setActiveChatMessageId] = useState<string | undefined>(undefined);
   const [incomingMessageToast, setIncomingMessageToast] = useState<{ message: ChatMessage; channelName: string } | null>(null);
+  const [trialConversionToast, setTrialConversionToast] = useState<TrialCompletedNotificationData | null>(null);
+  const alertedTrialStudentIdsRef = useRef<Set<string>>(new Set());
   const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
   const [unreadMessagesTotal, setUnreadMessagesTotal] = useState<number>(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
@@ -220,6 +225,23 @@ const MainPortal: React.FC = () => {
     return () => unsub();
   }, [currentUser, currentUserId, role]);
 
+  // Global listener for Trial Student 5/5 Session Completion Push Toast
+  useEffect(() => {
+    const handleTrialCompleted = (e: Event) => {
+      const customEvt = e as CustomEvent<TrialCompletedNotificationData>;
+      if (customEvt.detail && customEvt.detail.studentId) {
+        if (alertedTrialStudentIdsRef.current.has(customEvt.detail.studentId)) return;
+        alertedTrialStudentIdsRef.current.add(customEvt.detail.studentId);
+        setTrialConversionToast(customEvt.detail);
+      }
+    };
+
+    window.addEventListener('it_trial_completed_5_sessions', handleTrialCompleted);
+    return () => {
+      window.removeEventListener('it_trial_completed_5_sessions', handleTrialCompleted);
+    };
+  }, []);
+
   // Switch default tab when role changes
   useEffect(() => {
     setCurrentTab(getDefaultTab(role));
@@ -255,9 +277,9 @@ const MainPortal: React.FC = () => {
         return [
           { id: 'overview', label: 'Overview', icon: GraduationCap },
           { id: 'timetable', label: 'Timetable', icon: Calendar },
-          { id: 'students', label: 'Students', icon: Users },
+          { id: 'messages', label: 'Messages', icon: MessageSquare },
           { id: 'fees', label: 'Fees', icon: DollarSign },
-          { id: 'messages', label: 'Chat', icon: MessageSquare },
+          { id: 'trials', label: 'Trials', icon: Sparkles },
         ];
       case 'tutor':
         return [
@@ -721,11 +743,24 @@ const MainPortal: React.FC = () => {
             <InAppMessageToast
               message={incomingMessageToast.message}
               channelName={incomingMessageToast.channelName}
-              onOpenChat={(threadId) => {
+              onOpenChat={(threadId, messageId) => {
                 setActiveChatThreadId(threadId);
+                setActiveChatMessageId(messageId);
                 setCurrentTab('messages');
               }}
               onDismiss={() => setIncomingMessageToast(null)}
+            />
+          )}
+
+          {/* Trial 5/5 Completed Push Toast Notification */}
+          {trialConversionToast && (
+            <TrialConversionToast
+              data={trialConversionToast}
+              onReviewTrials={() => {
+                setCurrentTab('trials');
+                setTrialConversionToast(null);
+              }}
+              onDismiss={() => setTrialConversionToast(null)}
             />
           )}
 
@@ -735,6 +770,7 @@ const MainPortal: React.FC = () => {
               <div className={role === 'student' ? 'student-portal-root' : ''}>
                 <ChatView
                   initialThreadId={activeChatThreadId}
+                  initialMessageId={activeChatMessageId}
                   students={students}
                   tutors={tutors}
                 />

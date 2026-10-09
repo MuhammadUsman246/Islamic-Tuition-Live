@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import {
   Send,
   MessageSquare,
@@ -34,9 +34,10 @@ import {
   GraduationCap,
   BookOpen,
   Pencil,
-  Ban
+  Ban,
+  Smile
 } from 'lucide-react';
-import { ChatMessage, UserRole, Student, Tutor, ChatAttachment, ActiveCallSession, CallType } from '../../types';
+import { ChatMessage, ChatReaction, UserRole, Student, Tutor, ChatAttachment, ActiveCallSession, CallType } from '../../types';
 import {
   subscribeToMessages,
   sendMessage,
@@ -51,7 +52,8 @@ import {
   subscribeToIncomingCalls,
   editChatMessage,
   deleteChatMessage,
-  canonicalizeChatThreadId
+  canonicalizeChatThreadId,
+  toggleChatMessageReaction
 } from '../../services/dataService';
 import { useAuth } from '../../context/AuthContext';
 import { AudioPlayer } from './AudioPlayer';
@@ -80,13 +82,21 @@ export interface ChannelDef {
   avatarText: string;
 }
 
+export const WHATSAPP_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '🔥'] as const;
+
 interface ChatViewProps {
   initialThreadId?: string;
+  initialMessageId?: string;
   students?: Student[];
   tutors?: Tutor[];
 }
 
-export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: propStudents, tutors: propTutors }) => {
+export const ChatView: React.FC<ChatViewProps> = ({
+  initialThreadId,
+  initialMessageId,
+  students: propStudents,
+  tutors: propTutors
+}) => {
   const { userProfile, activeRole, adminViewingRole, adminViewingTargetId } = useAuth();
   const role: UserRole = activeRole || userProfile?.role || 'admin';
 
@@ -217,6 +227,17 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
   // Scroll to bottom helper
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // WhatsApp Reactions state
+  const [activeReactionPickerMsgId, setActiveReactionPickerMsgId] = useState<string | null>(null);
+  const [activeReactionDetailMsg, setActiveReactionDetailMsg] = useState<ChatMessage | null>(null);
+  const [reactionDetailFilter, setReactionDetailFilter] = useState<string>('all');
+
+  // Direct Land & Highlight for specific new message links
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const targetMessageIdRef = useRef<string | undefined>(initialMessageId);
+  const initialLandedThreadRef = useRef<string | null>(null);
+  const prevMessagesCountRef = useRef<number>(0);
 
   // Subscribe to live unread counts
   useEffect(() => {
@@ -510,10 +531,86 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
     return () => unsub();
   }, [activeThreadId, messageLimit]);
 
-  // Auto-scroll on new message
+  // Keep targetMessageIdRef updated when activeThreadId or initialMessageId changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+    if (initialMessageId) {
+      targetMessageIdRef.current = initialMessageId;
+    }
+    initialLandedThreadRef.current = null;
+    setActiveReactionPickerMsgId(null);
+  }, [activeThreadId, initialMessageId]);
+
+  // Direct land on new message without starting from old messages and scrolling down
+  useLayoutEffect(() => {
+    if (!scrollContainerRef.current || messages.length === 0) return;
+
+    const isNewThreadLoad = initialLandedThreadRef.current !== activeThreadId;
+    const targetMsgId = targetMessageIdRef.current;
+
+    if (isNewThreadLoad || targetMsgId) {
+      if (targetMsgId) {
+        const targetElement = document.getElementById(`chat-msg-${targetMsgId}`);
+        if (targetElement) {
+          // Directly land centered on the specific message with NO smooth scroll
+          targetElement.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+          setHighlightedMessageId(targetMsgId);
+          setTimeout(() => setHighlightedMessageId(null), 2500);
+          targetMessageIdRef.current = undefined;
+          initialLandedThreadRef.current = activeThreadId;
+          prevMessagesCountRef.current = messages.length;
+          return;
+        }
+      }
+
+      // Land directly at the newest message instantly without scrolling through old messages
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      initialLandedThreadRef.current = activeThreadId;
+      prevMessagesCountRef.current = messages.length;
+      return;
+    }
+
+    // Only if user was ALREADY viewing this chat and a new message arrives:
+    if (messages.length > prevMessagesCountRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 160;
+      if (isNearBottom) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      }
+    }
+    prevMessagesCountRef.current = messages.length;
+  }, [messages, activeThreadId]);
+
+  // Frame fallback in case target DOM element took a frame to paint
+  useEffect(() => {
+    if (targetMessageIdRef.current) {
+      const targetElement = document.getElementById(`chat-msg-${targetMessageIdRef.current}`);
+      if (targetElement) {
+        targetElement.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+        setHighlightedMessageId(targetMessageIdRef.current);
+        setTimeout(() => setHighlightedMessageId(null), 2500);
+        targetMessageIdRef.current = undefined;
+      }
+    }
+  }, [messages]);
+
+  // Handle WhatsApp-style emoji reaction toggle for all users
+  const handleToggleReaction = async (message: ChatMessage, emoji: string) => {
+    setActiveReactionPickerMsgId(null);
+    try {
+      await toggleChatMessageReaction(
+        activeThreadId,
+        message.id,
+        {
+          userId: currentUserId,
+          userName: effectiveDisplayName,
+          userRole: role
+        },
+        emoji
+      );
+    } catch (err) {
+      console.warn('Error toggling reaction:', err);
+    }
+  };
 
   // Scroll listener to show/hide "Scroll to Bottom" button
   const handleScroll = () => {
@@ -1688,6 +1785,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
           <div
             ref={scrollContainerRef}
             onScroll={handleScroll}
+            onClick={() => {
+              if (activeReactionPickerMsgId) setActiveReactionPickerMsgId(null);
+            }}
             className="flex-1 p-3 sm:p-5 overflow-y-auto space-y-4 z-10 relative"
           >
             {displayedMessages.length === 0 ? (
@@ -1756,10 +1856,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                       ? deliveredToList.length > 1 || m.delivered
                       : (m.delivered || deliveredToList.some(id => id !== m.senderId));
 
+                    const isTargetHighlighted = highlightedMessageId === m.id;
+
                     return (
                       <div
                         key={m.id}
-                        className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative`}
+                        id={`chat-msg-${m.id}`}
+                        className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative transition-all duration-300 ${
+                          isTargetHighlighted ? 'ring-2 ring-[#00A884] rounded-2xl p-1 bg-emerald-50/60 shadow-md' : ''
+                        }`}
                       >
                         {/* Message Bubble Container */}
                         <div
@@ -1769,8 +1874,51 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                               : 'bg-[#FFFFFF] text-[#111B21] rounded-tl-xs'
                           }`}
                         >
+                          {/* WhatsApp Floating Reaction Bar (Quick Emoji Picker) */}
+                          {activeReactionPickerMsgId === m.id && (
+                            <div
+                              className={`absolute -top-11 ${isMe ? 'right-0' : 'left-0'} z-30 bg-white shadow-xl rounded-full px-2 py-1 border border-gray-200/90 flex items-center space-x-1 animate-in fade-in zoom-in-95 duration-150 select-none`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {WHATSAPP_REACTIONS.map((emoji) => {
+                                const myReaction = m.reactions?.[currentUserId]?.emoji;
+                                const isSelected = myReaction === emoji;
+                                return (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    onClick={() => handleToggleReaction(m, emoji)}
+                                    className={`w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-full text-base sm:text-lg transition-transform hover:scale-130 active:scale-95 cursor-pointer ${
+                                      isSelected ? 'bg-emerald-100 ring-2 ring-[#00A884]' : 'hover:bg-gray-100'
+                                    }`}
+                                    title={isSelected ? `Remove ${emoji}` : `React ${emoji}`}
+                                  >
+                                    <span>{emoji}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
                           {/* Quick Action Toolbar on Hover */}
                           <div className={`absolute top-1.5 ${isMe ? 'left-2 -translate-x-full pr-1.5' : 'right-2 translate-x-full pl-1.5'} hidden group-hover:flex items-center space-x-1 z-20`}>
+                            {/* React with Emoji (WhatsApp Style - Available for ALL Users) */}
+                            {!m.deletedForEveryone && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveReactionPickerMsgId(prev => prev === m.id ? null : m.id);
+                                }}
+                                className={`p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-gray-600 hover:text-black cursor-pointer transition-colors ${
+                                  activeReactionPickerMsgId === m.id ? 'bg-emerald-50 text-[#00A884] border-[#00A884]/40' : ''
+                                }`}
+                                title="React to message (WhatsApp style)"
+                              >
+                                <Smile className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
                             {m.text && !m.deletedForEveryone && (
                               <button
                                 type="button"
@@ -1942,6 +2090,21 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                           <div className="flex items-center justify-end space-x-1 mt-1 text-[10px] text-[#667781] select-none">
                             <span className="font-mono tabular-nums">{formattedTime}</span>
 
+                            {/* Mobile Quick Reaction Smile Trigger */}
+                            {!m.deletedForEveryone && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveReactionPickerMsgId(prev => prev === m.id ? null : m.id);
+                                }}
+                                className="sm:hidden p-0.5 text-gray-400 hover:text-[#00A884] cursor-pointer ml-0.5"
+                                title="React with emoji"
+                              >
+                                <Smile className="w-3 h-3" />
+                              </button>
+                            )}
+
                             {isMe && (
                               <div
                                 onClick={() => setSelectedMessageInfo(m)}
@@ -1958,6 +2121,51 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                               </div>
                             )}
                           </div>
+
+                          {/* WhatsApp Reaction Pill Badge on Message Bubble */}
+                          {(() => {
+                            const reactionsMap = m.reactions || {};
+                            const entries: ChatReaction[] = Object.values(reactionsMap);
+                            if (entries.length === 0) return null;
+
+                            const emojiCounts: { emoji: string; count: number }[] = [];
+                            entries.forEach(r => {
+                              const found = emojiCounts.find(ec => ec.emoji === r.emoji);
+                              if (found) found.count++;
+                              else emojiCounts.push({ emoji: r.emoji, count: 1 });
+                            });
+                            emojiCounts.sort((a, b) => b.count - a.count);
+
+                            const myReaction = reactionsMap[currentUserId]?.emoji;
+
+                            return (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveReactionDetailMsg(m);
+                                  setReactionDetailFilter('all');
+                                }}
+                                className={`absolute -bottom-2.5 ${isMe ? 'right-2' : 'left-2'} z-10 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full shadow-2xs border text-[11px] font-medium transition-all hover:scale-105 active:scale-95 cursor-pointer select-none ${
+                                  myReaction
+                                    ? 'bg-emerald-50/95 border-[#00A884]/40 text-[#00A884]'
+                                    : 'bg-white/95 border-gray-200 text-gray-700 hover:bg-gray-50'
+                                }`}
+                                title="View reactions (Click to see who reacted)"
+                              >
+                                <span className="flex items-center -space-x-1">
+                                  {emojiCounts.slice(0, 3).map(ec => (
+                                    <span key={ec.emoji} className="text-xs leading-none">{ec.emoji}</span>
+                                  ))}
+                                </span>
+                                {entries.length > 1 && (
+                                  <span className="text-[10px] font-semibold tabular-nums ml-0.5 text-gray-600">
+                                    {entries.length}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })()}
                         </div>
                       </div>
                     );
@@ -2574,6 +2782,146 @@ export const ChatView: React.FC<ChatViewProps> = ({ initialThreadId, students: p
                 Save Changes
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* WHATSAPP REACTION DETAIL BREAKDOWN MODAL                 */}
+      {/* ======================================================== */}
+      {activeReactionDetailMsg && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-2xs p-4 animate-in fade-in duration-150"
+          onClick={() => setActiveReactionDetailMsg(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-sm w-full p-4 shadow-2xl border border-gray-200 space-y-3 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+              <div className="flex items-center space-x-2">
+                <span className="text-base">✨</span>
+                <h3 className="text-sm font-bold text-gray-900">Message Reactions</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveReactionDetailMsg(null)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter Tabs & Reactors List */}
+            {(() => {
+              const reactionsMap = activeReactionDetailMsg.reactions || {};
+              const entries: ChatReaction[] = Object.values(reactionsMap);
+              const emojiCounts: { emoji: string; count: number }[] = [];
+              entries.forEach(r => {
+                const found = emojiCounts.find(ec => ec.emoji === r.emoji);
+                if (found) found.count++;
+                else emojiCounts.push({ emoji: r.emoji, count: 1 });
+              });
+
+              const filteredEntries = reactionDetailFilter === 'all'
+                ? entries
+                : entries.filter(r => r.emoji === reactionDetailFilter);
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 no-scrollbar border-b border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setReactionDetailFilter('all')}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                        reactionDetailFilter === 'all'
+                          ? 'bg-[#00A884] text-white shadow-2xs'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      All {entries.length}
+                    </button>
+                    {emojiCounts.map(ec => (
+                      <button
+                        key={ec.emoji}
+                        type="button"
+                        onClick={() => setReactionDetailFilter(ec.emoji)}
+                        className={`px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors flex items-center space-x-1 ${
+                          reactionDetailFilter === ec.emoji
+                            ? 'bg-emerald-100 text-[#00A884] ring-1 ring-[#00A884]'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        <span>{ec.emoji}</span>
+                        <span className="text-[11px] font-semibold">{ec.count}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Reactors List */}
+                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 space-y-1">
+                    {filteredEntries.map(r => {
+                      const isMe = r.userId === currentUserId;
+                      const roleColor =
+                        r.userRole === 'admin'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : r.userRole === 'supervisor'
+                          ? 'bg-purple-100 text-purple-800'
+                          : r.userRole === 'tutor'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-amber-100 text-amber-800';
+
+                      return (
+                        <div
+                          key={r.userId}
+                          className="flex items-center justify-between py-2 px-1 hover:bg-gray-50 rounded-lg transition-colors"
+                        >
+                          <div className="flex items-center space-x-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#1E5C3D] to-[#2D8B5C] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
+                              {r.userName ? r.userName.slice(0, 2).toUpperCase() : 'U'}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center space-x-1.5">
+                                <p className="text-xs font-semibold text-gray-900 truncate">
+                                  {isMe ? `${r.userName} (You)` : r.userName}
+                                </p>
+                                {r.userRole && (
+                                  <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase ${roleColor}`}>
+                                    {r.userRole}
+                                  </span>
+                                )}
+                              </div>
+                              {isMe && (
+                                <p className="text-[10px] text-gray-400">
+                                  Click your reaction to remove
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isMe) {
+                                handleToggleReaction(activeReactionDetailMsg, r.emoji);
+                                setActiveReactionDetailMsg(null);
+                              }
+                            }}
+                            className={`flex items-center space-x-1 px-2 py-1 rounded-full text-base transition-all ${
+                              isMe ? 'hover:bg-rose-50 hover:ring-1 hover:ring-rose-300 cursor-pointer' : 'cursor-default'
+                            }`}
+                            title={isMe ? 'Click to remove reaction' : ''}
+                          >
+                            <span>{r.emoji}</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

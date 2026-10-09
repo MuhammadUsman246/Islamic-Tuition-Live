@@ -3,7 +3,7 @@ import { X, UserPlus, CheckCircle, Key, Shield, CreditCard, Share2, Calendar } f
 import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency } from '../../types';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
-import { registerUserAccount, addReferral, getNextSequentialStudentId } from '../../services/dataService';
+import { registerUserAccount, addReferral, getNextSequentialStudentId, notifyTrial5SessionsCompleted } from '../../services/dataService';
 import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
 interface StudentModalProps {
@@ -156,6 +156,19 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         },
         initialStudent?.id
       );
+
+      // Dispatch Trial 5/5 completed push toast if newly reaching 5 sessions
+      if (status === 'Trial' && trialSessionsCompleted >= 5 && (initialStudent?.trialSessionsCompleted || 0) < 5) {
+        notifyTrial5SessionsCompleted({
+          studentId,
+          name: name.trim(),
+          assignedTutorId,
+          courseType,
+          parentName: parentName.trim(),
+          parentPhone,
+          trialSessionsCompleted
+        });
+      }
 
       // Record or sync referral in referrals collection if a referrer is specified
       if (referralSource !== 'None' && (referredByName.trim() || referredByStudentId.trim())) {

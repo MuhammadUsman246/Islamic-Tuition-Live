@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Calendar,
   Users,
@@ -22,7 +22,8 @@ import {
   Radio,
   Eye,
   Lock,
-  X
+  X,
+  ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, Tutor, Student } from '../../types';
@@ -42,6 +43,9 @@ interface NavItem {
   id: string;
   label: string;
   icon: React.ElementType;
+  sectionHeader?: string;
+  badge?: string | number;
+  badgeType?: 'live' | 'counter';
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onClose, unreadCount: passedUnreadCount, tutors: passedTutors = [], students: passedStudents = [] }) => {
@@ -74,24 +78,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
     switch (role) {
       case 'admin':
         return [
-          { id: 'overview', label: 'Academy Overview', icon: GraduationCap },
-          { id: 'admin_observe', label: 'Observe Live Classes', icon: Eye },
+          // 1. Core / Daily Operations (Top priority order per user requirements)
+          { id: 'overview', label: 'Academy Overview', icon: GraduationCap, sectionHeader: 'Daily Operations' },
           { id: 'timetable', label: 'Master Timetable', icon: Calendar },
-          { id: 'students', label: 'Students', icon: Users },
-          { id: 'tutors', label: 'Tutors & Zoom Links', icon: Video },
-          { id: 'lessons', label: 'Lesson History', icon: BookOpen },
-          { id: 'attendance', label: 'Attendance', icon: CheckSquare },
-          { id: 'trials', label: 'Trial Classes (5-Session)', icon: Sparkles },
+          { id: 'messages', label: 'Internal Messages', icon: MessageSquare },
+          { id: 'students', label: 'Student Directory', icon: Users },
           { id: 'fees', label: 'Student Fees & Invoices', icon: DollarSign },
-          { id: 'salaries', label: 'Tutor Salaries (PKR)', icon: Briefcase },
+          { id: 'trials', label: 'Trial Classes (5-Session)', icon: Sparkles },
+          { id: 'admin_observe', label: 'Observe Live Classes', icon: Eye, badgeType: 'live' },
           { id: 'referrals', label: 'Referral Rewards', icon: Share2 },
-          // Admin Navigation & Security
+
+          // 2. Academic & Faculty Management
+          { id: 'tutors', label: 'Tutors & Classrooms', icon: Video, sectionHeader: 'Academic Management' },
+          { id: 'lessons', label: 'Lesson History & Reports', icon: BookOpen },
+          { id: 'attendance', label: 'Attendance & Records', icon: CheckSquare },
+          { id: 'salaries', label: 'Tutor Salaries (PKR)', icon: Briefcase },
+
+          // 3. Communications & Academy Tools
+          { id: 'announcements', label: 'Announcements', icon: Bell, sectionHeader: 'Academy Tools & Media' },
           { id: 'classroom_lab', label: 'Classroom Lab (LiveKit)', icon: Radio },
           { id: 'chat_safety', label: 'Classroom Chat Safety', icon: Lock },
           { id: 'lesson_dictionary', label: 'Lesson Dictionary & Spellcheck', icon: BookOpen },
-          { id: 'security', label: 'Academy Security', icon: ShieldCheck },
-          { id: 'announcements', label: 'Announcements', icon: Bell },
-          { id: 'messages', label: 'Internal Messages', icon: MessageSquare },
+
+          // 4. System & Governance
+          { id: 'security', label: 'Academy Security', icon: ShieldCheck, sectionHeader: 'System & Governance' },
           { id: 'trash', label: 'Recently Deleted & Trash', icon: Trash2 },
           { id: 'settings', label: 'Academy Settings', icon: Settings }
         ];
@@ -147,6 +157,61 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
 
   const navItems = getNavItems();
 
+  interface SectionGroup {
+    title: string;
+    items: NavItem[];
+  }
+
+  const sectionGroups = useMemo<SectionGroup[]>(() => {
+    const groups: SectionGroup[] = [];
+    let currentGroup: SectionGroup = { title: '', items: [] };
+
+    for (const item of navItems) {
+      if (item.sectionHeader) {
+        if (currentGroup.items.length > 0 || currentGroup.title) {
+          groups.push(currentGroup);
+        }
+        currentGroup = { title: item.sectionHeader, items: [item] };
+      } else {
+        currentGroup.items.push(item);
+      }
+    }
+
+    if (currentGroup.items.length > 0) {
+      groups.push(currentGroup);
+    }
+
+    return groups;
+  }, [navItems]);
+
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    'Daily Operations': false,
+    'Academic Management': false,
+    'Academy Tools & Media': true,
+    'System & Governance': true,
+  });
+
+  // Automatically expand a section if the active tab is located inside it
+  useEffect(() => {
+    for (const group of sectionGroups) {
+      if (group.title && group.items.some(item => item.id === currentTab)) {
+        setCollapsedSections(prev => {
+          if (prev[group.title] === true) {
+            return { ...prev, [group.title]: false };
+          }
+          return prev;
+        });
+      }
+    }
+  }, [currentTab, sectionGroups]);
+
+  const toggleSection = (sectionTitle: string) => {
+    setCollapsedSections(prev => ({
+      ...prev,
+      [sectionTitle]: !prev[sectionTitle]
+    }));
+  };
+
   return (
     <aside
       id="portal_sidebar"
@@ -192,43 +257,101 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
         </span>
       </div>
 
-      {/* Navigation Options & Settings header */}
-      <div className="px-4 pt-3 pb-1 flex items-center justify-between text-[11px] font-semibold text-[#8ba295] uppercase tracking-wider">
-        <span>Options & Settings</span>
-      </div>
+      {/* Navigation Links with Collapsible Accordion Sections */}
+      <nav className="flex-1 overflow-y-auto py-2 px-3 space-y-1.5 scrollbar-thin scrollbar-thumb-emerald-950">
+        {sectionGroups.map((group, groupIdx) => {
+          const isCollapsible = Boolean(group.title);
+          const isCollapsed = isCollapsible && Boolean(collapsedSections[group.title]);
+          const hasActiveItem = group.items.some(i => i.id === currentTab);
+          const sectionUnread = group.items.some(i => i.id === 'messages') ? unreadCount : 0;
+          const sectionHasLive = group.items.some(i => i.id === 'admin_observe');
 
-      {/* Navigation Links */}
-      <nav className="flex-1 overflow-y-auto py-1 px-3 space-y-1">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentTab === item.id;
-          const isMessages = item.id === 'messages';
           return (
-            <button
-              key={item.id}
-              id={`nav_item_${item.id}`}
-              onClick={() => {
-                setCurrentTab(item.id);
-                if (onClose && typeof window !== 'undefined' && window.innerWidth < 1024) {
-                  onClose();
-                }
-              }}
-              className={`w-full min-h-[44px] flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors text-left cursor-pointer ${
-                isActive
-                  ? 'bg-[#2D8B5C] text-white shadow-sm font-semibold'
-                  : 'text-[#c2d1c9] hover:bg-[#233a2e] hover:text-white'
-              }`}
-            >
-              <div className="flex items-center space-x-3 min-w-0">
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-[#8ba295]'}`} />
-                <span className="truncate">{item.label}</span>
-              </div>
-              {isMessages && unreadCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#25D366] text-white shrink-0 shadow-xs">
-                  {unreadCount}
-                </span>
+            <div key={group.title || `group_${groupIdx}`} className="space-y-1">
+              {isCollapsible ? (
+                <button
+                  type="button"
+                  onClick={() => toggleSection(group.title)}
+                  className="w-full pt-3 pb-1.5 px-2 flex items-center justify-between text-[11px] font-bold text-[#8ba295] hover:text-white uppercase tracking-wider border-t border-[#263e32]/80 mt-2.5 first:mt-0 first:border-t-0 first:pt-1 group transition-colors cursor-pointer rounded-sm"
+                >
+                  <div className="flex items-center space-x-2 min-w-0">
+                    <span className="truncate group-hover:text-emerald-300 transition-colors">
+                      {group.title}
+                    </span>
+                    <span className="text-[10px] font-semibold text-[#788e81] group-hover:text-[#a0b5aa] px-1.5 py-0.2 rounded-full bg-[#14231b] border border-[#263e32]">
+                      {group.items.length}
+                    </span>
+                    {/* Collapsed indicators */}
+                    {isCollapsed && hasActiveItem && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Active tab inside" />
+                    )}
+                    {isCollapsed && sectionUnread > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-[#25D366] text-white">
+                        {sectionUnread}
+                      </span>
+                    )}
+                    {isCollapsed && sectionHasLive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" title="Live class observing" />
+                    )}
+                  </div>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-[#8ba295] group-hover:text-white transition-transform duration-200 shrink-0 ${
+                      isCollapsed ? '-rotate-90' : 'rotate-0'
+                    }`}
+                  />
+                </button>
+              ) : null}
+
+              {/* Items in section */}
+              {(!isCollapsible || !isCollapsed) && (
+                <div className="space-y-1 transition-all duration-200">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = currentTab === item.id;
+                    const isMessages = item.id === 'messages';
+                    const isObserve = item.id === 'admin_observe';
+
+                    return (
+                      <button
+                        key={item.id}
+                        id={`nav_item_${item.id}`}
+                        onClick={() => {
+                          setCurrentTab(item.id);
+                          if (onClose && typeof window !== 'undefined' && window.innerWidth < 1024) {
+                            onClose();
+                          }
+                        }}
+                        className={`w-full min-h-[42px] flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all text-left cursor-pointer group ${
+                          isActive
+                            ? 'bg-[#2D8B5C] text-white shadow-sm font-semibold ring-1 ring-white/10'
+                            : 'text-[#c2d1c9] hover:bg-[#233a2e] hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <Icon className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-105 ${isActive ? 'text-white' : 'text-[#8ba295]'}`} />
+                          <span className="truncate">{item.label}</span>
+                        </div>
+
+                        <div className="flex items-center space-x-1.5 shrink-0 ml-2">
+                          {isMessages && unreadCount > 0 && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#25D366] text-white shadow-xs">
+                              {unreadCount}
+                            </span>
+                          )}
+
+                          {isObserve && item.badgeType === 'live' && (
+                            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                              <span>LIVE</span>
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
-            </button>
+            </div>
           );
         })}
       </nav>

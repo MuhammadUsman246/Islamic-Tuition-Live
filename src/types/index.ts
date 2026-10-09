@@ -435,6 +435,14 @@ export interface ChatAttachment {
   mediaExpired?: boolean;
 }
 
+export interface ChatReaction {
+  emoji: string;
+  userId: string;
+  userName: string;
+  userRole?: UserRole;
+  timestamp?: string;
+}
+
 export interface ChatMessage {
   id: string;
   threadId: string;
@@ -460,6 +468,7 @@ export interface ChatMessage {
   editedAt?: string;
   deletedForEveryone?: boolean;
   deletedBy?: string;
+  reactions?: Record<string, ChatReaction>; // userId -> ChatReaction (WhatsApp-style emoji reactions)
 }
 
 export interface ChatThread {

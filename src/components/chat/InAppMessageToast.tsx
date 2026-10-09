@@ -5,7 +5,7 @@ import { ChatMessage } from '../../types';
 interface InAppMessageToastProps {
   message: ChatMessage | null;
   channelName?: string;
-  onOpenChat: (threadId: string) => void;
+  onOpenChat: (threadId: string, messageId?: string) => void;
   onDismiss: () => void;
 }
 
@@ -129,7 +129,7 @@ export const InAppMessageToast: React.FC<InAppMessageToastProps> = ({
           <button
             type="button"
             onClick={() => {
-              onOpenChat(message.threadId);
+              onOpenChat(message.threadId, message.id);
               onDismiss();
             }}
             className="px-3 py-1 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-lg text-xs font-semibold flex items-center space-x-1 shadow-xs cursor-pointer transition-all active:scale-95"

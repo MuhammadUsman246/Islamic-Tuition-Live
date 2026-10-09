@@ -1376,11 +1376,28 @@ export const TimetableGrid: React.FC<TimetableGridProps> = ({
           <span className="font-bold text-[#161F1A]">Faculty Tutors:</span>
           {uniqueTutors.map(tId => {
             const theme = getSlotColorTheme({ tutorId: tId });
+            const isActiveTutor = selectedTutorFilter === tId;
             return (
-              <span key={tId} className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md border text-[10.5px] ${theme.bg} ${theme.border}`}>
+              <button
+                key={tId}
+                type="button"
+                onClick={() => {
+                  const nextFilter = isActiveTutor ? 'all' : tId;
+                  setSelectedTutorFilter(nextFilter);
+                  if (onTutorFilterChange) onTutorFilterChange(nextFilter);
+                  const container = document.getElementById('master_timetable_container');
+                  if (container) {
+                    container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }
+                }}
+                className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md border text-[10.5px] transition-all cursor-pointer hover:shadow-2xs active:scale-95 ${theme.bg} ${theme.border} ${
+                  isActiveTutor ? 'ring-2 ring-[#2D8B5C] shadow-xs scale-[1.02]' : ''
+                }`}
+                title={isActiveTutor ? `Currently filtered to ${tId} (click to show all faculty)` : `Click to view ${tId} specific schedule`}
+              >
                 <span className={`w-2 h-2 rounded-full ${theme.dot}`}></span>
                 <span className={`font-bold ${theme.text}`}>{role === 'student' || role === 'parent' ? getTutorDisplayId(tId, tutors) : tId}</span>
-              </span>
+              </button>
             );
           })}
         </div>

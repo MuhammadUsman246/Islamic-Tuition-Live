@@ -14,6 +14,7 @@ import {
   onSnapshot,
   writeBatch,
   getCountFromServer,
+  deleteField,
   Query,
   DocumentReference
 } from 'firebase/firestore';
@@ -50,6 +51,8 @@ import {
   Student,
   Tutor,
   TimetableClass,
+  DayOfWeek,
+  ClassDuration,
   Lesson,
   AttendanceRecord,
   TutorAttendanceRecord,
@@ -58,6 +61,7 @@ import {
   Referral,
   StudentReferralLead,
   Announcement,
+  ChatReaction,
   ChatMessage,
   AcademySettings,
   UserRole,
@@ -1314,13 +1318,25 @@ export async function updateFamilyGroupBatch(params: {
   recalculateAndPersistSummaryMetrics().catch(() => {});
 }
 
-export async function shiftStudentTutor(params: {
+export interface ShiftStudentTutorScheduleUpdate {
+  changeTime: boolean;
+  newStartTimePKT?: string;
+  selectedDays?: DayOfWeek[];
+  durationMinutes?: ClassDuration;
+}
+
+export interface ShiftStudentTutorParams {
   studentId: string;
   oldTutorId: string;
   newTutorId: string;
   notes?: string;
-}): Promise<{ success: boolean; classesCount: number; message: string }> {
-  const { studentId, oldTutorId, newTutorId, notes } = params;
+  scheduleUpdate?: ShiftStudentTutorScheduleUpdate;
+}
+
+export async function shiftStudentTutor(
+  params: ShiftStudentTutorParams
+): Promise<{ success: boolean; classesCount: number; message: string }> {
+  const { studentId, oldTutorId, newTutorId, notes, scheduleUpdate } = params;
 
   // 1. Locate student
   const allStudents = await getStudents();
@@ -1329,7 +1345,15 @@ export async function shiftStudentTutor(params: {
     throw new Error(`Student with ID ${studentId} not found.`);
   }
 
-  const shiftAudit = `[Tutor Shift: ${new Date().toLocaleDateString('en-US')}] Transferred from ${oldTutorId} to ${newTutorId}.${notes ? ` Note: ${notes}` : ''}`;
+  let timeAuditNote = '';
+  if (scheduleUpdate?.changeTime && scheduleUpdate.newStartTimePKT) {
+    const daysStr = scheduleUpdate.selectedDays && scheduleUpdate.selectedDays.length > 0
+      ? scheduleUpdate.selectedDays.join(', ')
+      : 'scheduled days';
+    timeAuditNote = ` New Time: ${scheduleUpdate.newStartTimePKT} PKT (${daysStr}).`;
+  }
+
+  const shiftAudit = `[Tutor Shift: ${new Date().toLocaleDateString('en-US')}] Transferred from ${oldTutorId} to ${newTutorId}.${timeAuditNote}${notes ? ` Note: ${notes}` : ''}`;
   const updatedNotes = student.privateAdminNotes
     ? `${student.privateAdminNotes}\n${shiftAudit}`
     : shiftAudit;
@@ -1349,10 +1373,102 @@ export async function shiftStudentTutor(params: {
 
   const allClasses = await getClasses();
   const studentClasses = allClasses.filter(c => c.studentId === studentId);
-  const classesCount = studentClasses.length;
 
+  let updatedClasses: TimetableClass[] = [];
+  let createdClasses: TimetableClass[] = [];
+  let removedClassIds: string[] = [];
+
+  if (scheduleUpdate?.changeTime && scheduleUpdate.newStartTimePKT) {
+    const newTime = scheduleUpdate.newStartTimePKT;
+    const newDuration = scheduleUpdate.durationMinutes || 30;
+    const targetDays: DayOfWeek[] = scheduleUpdate.selectedDays && scheduleUpdate.selectedDays.length > 0
+      ? scheduleUpdate.selectedDays
+      : (studentClasses.length > 0 ? Array.from(new Set(studentClasses.map(c => c.dayOfWeek))) : ['Monday', 'Wednesday', 'Friday']);
+
+    if (studentClasses.length > 0) {
+      const remainingExisting = [...studentClasses];
+
+      targetDays.forEach(day => {
+        const exactMatchIdx = remainingExisting.findIndex(c => c.dayOfWeek === day);
+        if (exactMatchIdx !== -1) {
+          const existingCls = remainingExisting.splice(exactMatchIdx, 1)[0];
+          updatedClasses.push({
+            ...existingCls,
+            tutorId: newTutorId,
+            dayOfWeek: day,
+            startTimePKT: newTime,
+            durationMinutes: newDuration,
+            status: existingCls.status === 'Cancelled' ? 'Scheduled' : existingCls.status,
+            isWeekend: day === 'Saturday' || day === 'Sunday'
+          });
+        } else if (remainingExisting.length > 0) {
+          const existingCls = remainingExisting.shift()!;
+          updatedClasses.push({
+            ...existingCls,
+            tutorId: newTutorId,
+            dayOfWeek: day,
+            startTimePKT: newTime,
+            durationMinutes: newDuration,
+            status: existingCls.status === 'Cancelled' ? 'Scheduled' : existingCls.status,
+            isWeekend: day === 'Saturday' || day === 'Sunday'
+          });
+        } else {
+          const newDocRef = doc(collection(db, CLASSES_COL));
+          createdClasses.push({
+            id: newDocRef.id,
+            tutorId: newTutorId,
+            studentId: student.studentId,
+            studentName: student.name,
+            dayOfWeek: day,
+            startTimePKT: newTime,
+            durationMinutes: newDuration,
+            status: 'Scheduled',
+            isRecurring: true,
+            isWeekend: day === 'Saturday' || day === 'Sunday'
+          });
+        }
+      });
+
+      // Remove any leftover existing classes whose days were unselected
+      remainingExisting.forEach(c => {
+        removedClassIds.push(c.id);
+      });
+    } else {
+      // Student had no existing classes scheduled, provision on targetDays
+      targetDays.forEach(day => {
+        const newDocRef = doc(collection(db, CLASSES_COL));
+        createdClasses.push({
+          id: newDocRef.id,
+          tutorId: newTutorId,
+          studentId: student.studentId,
+          studentName: student.name,
+          dayOfWeek: day,
+          startTimePKT: newTime,
+          durationMinutes: newDuration,
+          status: 'Scheduled',
+          isRecurring: true,
+          isWeekend: day === 'Saturday' || day === 'Sunday'
+        });
+      });
+    }
+  } else {
+    // Retain existing timetable class times, just update tutorId
+    updatedClasses = studentClasses.map(c => ({
+      ...c,
+      tutorId: newTutorId
+    }));
+  }
+
+  // Sync CACHE.classes
   if (CACHE.classes) {
-    CACHE.classes = CACHE.classes.map(c => c.studentId === studentId ? { ...c, tutorId: newTutorId } : c);
+    const updatedMap = new Map(updatedClasses.map(c => [c.id, c]));
+    const removedSet = new Set(removedClassIds);
+    let nextClasses = CACHE.classes
+      .filter(c => !removedSet.has(c.id))
+      .map(c => updatedMap.get(c.id) || c);
+
+    nextClasses = [...nextClasses, ...createdClasses];
+    CACHE.classes = nextClasses;
     saveCachedCollection('classes', CACHE.classes);
   }
 
@@ -1388,11 +1504,32 @@ export async function shiftStudentTutor(params: {
       const studentRef = doc(db, STUDENTS_COL, student.id);
       batch.update(studentRef, sanitizeFirestoreObject(studentUpdates));
 
-      // Classes docs
-      for (const cls of studentClasses) {
+      // Updated classes docs
+      for (const cls of updatedClasses) {
         if (!cls.id.startsWith('temp') && !cls.id.startsWith('seed') && !cls.id.startsWith('local')) {
           const classRef = doc(db, CLASSES_COL, cls.id);
-          batch.update(classRef, sanitizeFirestoreObject({ tutorId: newTutorId }));
+          batch.update(classRef, sanitizeFirestoreObject({
+            tutorId: newTutorId,
+            startTimePKT: cls.startTimePKT,
+            dayOfWeek: cls.dayOfWeek,
+            durationMinutes: cls.durationMinutes,
+            isWeekend: cls.isWeekend,
+            status: cls.status
+          }));
+        }
+      }
+
+      // Created classes docs
+      for (const cls of createdClasses) {
+        const classRef = doc(db, CLASSES_COL, cls.id);
+        batch.set(classRef, sanitizeFirestoreObject(cls));
+      }
+
+      // Removed classes docs
+      for (const rId of removedClassIds) {
+        if (!rId.startsWith('temp') && !rId.startsWith('seed') && !rId.startsWith('local')) {
+          const classRef = doc(db, CLASSES_COL, rId);
+          batch.delete(classRef);
         }
       }
 
@@ -1424,10 +1561,14 @@ export async function shiftStudentTutor(params: {
 
   recalculateAndPersistSummaryMetrics().catch(() => {});
 
+  const totalFinalClasses = updatedClasses.length + createdClasses.length;
+
   return {
     success: true,
-    classesCount,
-    message: `Successfully shifted ${student.name} from ${oldTutorId} to ${newTutorId}. ${classesCount} scheduled weekly classes updated in 1 atomic transaction.`
+    classesCount: totalFinalClasses,
+    message: `Successfully shifted ${student.name} from ${oldTutorId} to ${newTutorId}${
+      scheduleUpdate?.changeTime ? ` with new time ${scheduleUpdate.newStartTimePKT} PKT` : ''
+    }. ${totalFinalClasses} scheduled weekly classes synchronized in 1 atomic transaction.`
   };
 }
 
@@ -2699,6 +2840,21 @@ export async function addLesson(lessonData: Omit<Lesson, 'id'>): Promise<string>
           } : s);
           saveCachedCollection('students', CACHE.students);
         }
+        if (nextCompleted >= 5 && (student.trialSessionsCompleted || 0) < 5) {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('it_trial_completed_5_sessions', {
+              detail: {
+                studentId: student.studentId,
+                studentName: student.name,
+                tutorId: student.assignedTutorId || lessonData.tutorId,
+                courseType: student.courseType,
+                parentName: student.parentName,
+                parentPhone: student.parentPhone,
+                trialSessionsCompleted: nextCompleted
+              }
+            }));
+          }
+        }
         if (!isFirestoreQuotaExceeded() && !student.id.startsWith('local')) {
           await updateDoc(doc(db, STUDENTS_COL, student.id), {
             trialSessionsCompleted: nextCompleted,
@@ -2712,6 +2868,33 @@ export async function addLesson(lessonData: Omit<Lesson, 'id'>): Promise<string>
   })();
 
   return docId;
+}
+
+/**
+ * Dispatch instant push toast notification across the app when a trial student completes 5/5 sessions
+ */
+export function notifyTrial5SessionsCompleted(student: {
+  studentId: string;
+  name: string;
+  assignedTutorId?: string;
+  courseType?: string;
+  parentName?: string;
+  parentPhone?: string;
+  trialSessionsCompleted?: number;
+}): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('it_trial_completed_5_sessions', {
+      detail: {
+        studentId: student.studentId,
+        studentName: student.name,
+        tutorId: student.assignedTutorId,
+        courseType: student.courseType,
+        parentName: student.parentName,
+        parentPhone: student.parentPhone,
+        trialSessionsCompleted: student.trialSessionsCompleted || 5
+      }
+    }));
+  }
 }
 
 export async function updateLesson(id: string, updates: Partial<Lesson>): Promise<void> {
@@ -4053,6 +4236,90 @@ export async function deleteChatMessage(messageId: string, deletedBy: string, ca
     console.warn('Error deleting chat message:', err);
     throw err;
   }
+}
+
+/**
+ * Toggle or update an emoji reaction on a chat message (WhatsApp style)
+ * Every user (Admin, Supervisor, Tutor, Student, Parent) can react to any message.
+ * Tapping the same emoji toggles it off. Tapping a different emoji changes the reaction.
+ */
+export async function toggleChatMessageReaction(
+  threadId: string,
+  messageId: string,
+  user: { userId: string; userName: string; userRole?: UserRole },
+  emoji: string
+): Promise<Record<string, ChatReaction>> {
+  const canonicalThreadId = canonicalizeChatThreadId(threadId) || threadId;
+  const currentCached = getCachedMessages(canonicalThreadId);
+  const targetIndex = currentCached.findIndex(m => m.id === messageId);
+
+  let existingReactionEmoji: string | undefined = undefined;
+  let updatedReactions: Record<string, ChatReaction> = {};
+
+  if (targetIndex >= 0) {
+    const msg = currentCached[targetIndex];
+    const prevReactions = msg.reactions || {};
+    existingReactionEmoji = prevReactions[user.userId]?.emoji;
+
+    updatedReactions = { ...prevReactions };
+    if (existingReactionEmoji === emoji) {
+      // Toggle off if clicking same emoji
+      delete updatedReactions[user.userId];
+    } else {
+      // Set new / replacement emoji
+      updatedReactions[user.userId] = {
+        emoji,
+        userId: user.userId,
+        userName: user.userName,
+        userRole: user.userRole,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const updatedMsg: ChatMessage = {
+      ...msg,
+      reactions: updatedReactions
+    };
+    const updatedList = [...currentCached];
+    updatedList[targetIndex] = updatedMsg;
+    saveCachedMessages(canonicalThreadId, updatedList);
+    if (canonicalThreadId !== threadId) {
+      saveCachedMessages(threadId, updatedList);
+    }
+
+    // Trigger local update event for instant 0ms reactive UI feedback across components
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('it_chat_messages_updated', {
+          detail: { threadId: canonicalThreadId, messages: updatedList }
+        })
+      );
+    }
+  }
+
+  // Persist to Firestore document
+  try {
+    const docRef = doc(db, MESSAGES_COL, messageId);
+    if (existingReactionEmoji === emoji) {
+      await updateDoc(docRef, {
+        [`reactions.${user.userId}`]: deleteField()
+      });
+    } else {
+      await updateDoc(docRef, {
+        [`reactions.${user.userId}`]: {
+          emoji,
+          userId: user.userId,
+          userName: user.userName,
+          userRole: user.userRole || 'student',
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Could not sync chat reaction to Firestore (local cache active):', err);
+  }
+
+  return updatedReactions;
 }
 
 /**
