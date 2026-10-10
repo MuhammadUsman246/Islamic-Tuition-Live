@@ -1830,8 +1830,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         });
 
-        if (!activeTokenData.token) {
-          console.warn('[Classroom] No active token yet. Student remains in Waiting Lounge.');
+        if (!activeTokenData.token || activeTokenData.inWaitingRoom) {
+          console.warn('[Classroom] No active token yet, or student in Waiting Lounge. Student remains in Waiting Lounge.');
           return;
         }
 
