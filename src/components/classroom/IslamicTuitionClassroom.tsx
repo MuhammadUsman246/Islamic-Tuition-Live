@@ -356,10 +356,17 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
     let bc: BroadcastChannel | null = null;
     try {
       if (typeof BroadcastChannel !== 'undefined') {
+        const currentIdentity = tokenData.participantIdentity || participantName;
         bc = new BroadcastChannel('islamic_tuition_single_instance');
         bc.onmessage = (e) => {
-          if (e.data?.type === 'CLASSROOM_OPENED' && e.data?.role === userRole && e.data?.roomName === roomName && e.data?.tabId !== instanceTabIdRef.current) {
-            // Newer tab opened same classroom for same role - cleanly disconnect background duplicate
+          if (
+            e.data?.type === 'CLASSROOM_OPENED' &&
+            e.data?.role === userRole &&
+            e.data?.roomName === roomName &&
+            e.data?.identity === currentIdentity &&
+            e.data?.tabId !== instanceTabIdRef.current
+          ) {
+            // Newer tab opened same classroom for same role & identity - cleanly disconnect background duplicate
             if (roomRef.current) {
               try { roomRef.current.disconnect(); } catch {}
             }
@@ -369,14 +376,20 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
             }
           }
         };
-        bc.postMessage({ type: 'CLASSROOM_OPENED', role: userRole, roomName, tabId: instanceTabIdRef.current });
+        bc.postMessage({
+          type: 'CLASSROOM_OPENED',
+          role: userRole,
+          roomName,
+          identity: currentIdentity,
+          tabId: instanceTabIdRef.current
+        });
       }
     } catch {}
 
     return () => {
       if (bc) bc.close();
     };
-  }, [userRole, roomName]);
+  }, [userRole, roomName, tokenData.participantIdentity, participantName]);
 
   const instanceTabIdRef = useRef<string>(`tab_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
 
@@ -856,11 +869,19 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
       });
       setStudentQueuePosition(earlierWaiters + 1);
 
-      // Auto-enter classroom immediately as soon as the previous student leaves and classroom is empty!
+      if (otherActiveStudents.length > 0 && studentWaitingReasonRef.current !== 'NEXT_STUDENT_QUEUE') {
+        setStudentWaitingReason('NEXT_STUDENT_QUEUE');
+        studentWaitingReasonRef.current = 'NEXT_STUDENT_QUEUE';
+      } else if (otherActiveStudents.length === 0 && activeTutors.length === 0 && studentWaitingReasonRef.current !== 'TUTOR_NOT_PRESENT') {
+        setStudentWaitingReason('TUTOR_NOT_PRESENT');
+        studentWaitingReasonRef.current = 'TUTOR_NOT_PRESENT';
+      }
+
+      // Auto-enter classroom immediately as soon as the previous student leaves and tutor is present!
       if (
         otherActiveStudents.length === 0 &&
         earlierWaiters === 0 &&
-        (studentWaitingReasonRef.current === 'NEXT_STUDENT_QUEUE' || activeTutors.length > 0)
+        activeTutors.length > 0
       ) {
         setTimeout(() => {
           if (isStudentInWaitingLoungeRef.current && roomRef.current) {
@@ -1343,8 +1364,9 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
 
         room.on(RoomEvent.Disconnected, () => {
           if (isCancelled) return;
-          // If a student or tutor is disconnected by the server (e.g. Admin removed tutor or Tutor/Admin ended class), exit cleanly
-          if (!isAdminOrSupervisor) {
+          if (isStudentInWaitingLoungeRef.current) return;
+          // If a student or tutor is disconnected by the server after entering the active classroom, exit cleanly
+          if (!isAdminOrSupervisor && hasEnteredActiveClassroomRef.current) {
             isCancelled = true;
             onLeave();
           }
@@ -1452,11 +1474,35 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
               return;
             }
 
+            if (activeTutorsInRoom.length === 0 && !isAdmittedExplicitlyRef.current) {
+              console.warn('[Classroom Wait-for-Host Guard] Tutor has not opened the classroom yet. Holding in Waiting Lounge with live signaling.');
+              isStudentInWaitingLoungeRef.current = true;
+              hasEnteredActiveClassroomRef.current = false;
+              setIsStudentInWaitingLounge(true);
+              setStudentWaitingReason('TUTOR_NOT_PRESENT');
+              studentWaitingReasonRef.current = 'TUTOR_NOT_PRESENT';
+
+              const wId = studentWaitingId || `wait_lk_${room.localParticipant.identity}`;
+              if (!studentWaitingId) setStudentWaitingId(wId);
+
+              room.localParticipant.setMetadata(JSON.stringify({
+                role: userRole,
+                status: 'WAITING',
+                joinedAt: waitingLoungeJoinedAtRef.current,
+                waitingId: wId
+              })).catch(() => {});
+
+              broadcastWaitingLoungePresence();
+              setConnectionStatus(ConnectionState.Connected);
+              syncParticipantsState(room);
+              return;
+            }
+
             // If student was initially marked inWaitingRoom, check if the room is actually empty now!
             if (isStudentInWaitingLoungeRef.current) {
               if (
                 existingOtherActiveStudents.length === 0 &&
-                (studentWaitingReasonRef.current === 'NEXT_STUDENT_QUEUE' || activeTutorsInRoom.length > 0)
+                activeTutorsInRoom.length > 0
               ) {
                 isStudentInWaitingLoungeRef.current = false;
                 hasEnteredActiveClassroomRef.current = true;
@@ -1835,8 +1881,8 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
           }
         });
 
-        if (!activeTokenData.token || activeTokenData.inWaitingRoom) {
-          console.warn('[Classroom] No active token yet, or student in Waiting Lounge. Student remains in Waiting Lounge.');
+        if (!activeTokenData.token) {
+          console.warn('[Classroom] No active token yet. Student remains in Waiting Lounge.');
           return;
         }
 

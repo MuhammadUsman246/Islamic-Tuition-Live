@@ -57,11 +57,9 @@ function getLiveKitCredentials(customUrl?: string) {
   let apiSecret = (process.env.LIVEKIT_API_SECRET || '').trim();
   let serverUrl = (customUrl || process.env.LIVEKIT_URL || process.env.VITE_LIVEKIT_URL || '').trim();
 
-  // Default fallback to active LiveKit Cloud credentials if unpopulated or masked in environment
-  if (!apiKey || isMaskedValue(apiKey)) {
+  // Default fallback to active LiveKit Cloud credentials if either key or secret is unpopulated or masked in environment
+  if (!apiKey || !apiSecret || isMaskedValue(apiKey) || isMaskedValue(apiSecret)) {
     apiKey = 'APIqXQyD6qsE8Z9';
-  }
-  if (!apiSecret || isMaskedValue(apiSecret)) {
     apiSecret = 'Wwq0zrfUtQ0enffrNpafIPAVkOwgELxxs6WRwhWtO9xE';
   }
   if (!serverUrl) {

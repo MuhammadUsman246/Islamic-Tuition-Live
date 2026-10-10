@@ -403,15 +403,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     console.log('handleJoinLiveKitTestClass triggered', { targetStudentId, overrideRoomCode });
     try {
       setIsJoiningLiveKit(true);
-      const studentId = targetStudentId || student?.studentId || 'stu';
+      const studentId = targetStudentId || student?.studentId || currentStudentId || userProfile?.studentId || 'stu';
       const activeTutorId = overrideRoomCode || resolvedTutorDisplayId || student?.assignedTutorId || 'Tutor 1';
+      const participantDisplayName =
+        (!adminViewingRole && userProfile?.preferredName) ||
+        student?.name ||
+        userProfile?.displayName ||
+        'Student';
       console.log('Resolving room name', { activeTutorId, studentId });
       const roomName = getCanonicalRoomName(activeTutorId, studentId, overrideRoomCode || customRoomCode);
       console.log('Room name resolved:', roomName);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
         identity: `student_${studentId}`,
-        participantName: 'Student',
+        participantName: participantDisplayName,
         role: 'student',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
@@ -450,7 +455,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   return (
     <div className="student-portal-root p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden break-words">
-      {/* LiveKit Classroom Modal for Allowed Test Students */}
+      {/* LiveKit Classroom Modal for Students */}
       {isLiveKitModalOpen && liveKitTokenData && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 p-0 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
           <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
@@ -458,9 +463,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               roomName={liveKitTokenData.roomName}
               tokenData={liveKitTokenData}
               userRole="student"
-              participantName={student?.name || userProfile?.displayName || 'Student'}
+              participantName={(!adminViewingRole && userProfile?.preferredName) || student?.name || userProfile?.displayName || 'Student'}
               settings={classroomSettings}
-              onLeave={() => setIsLiveKitModalOpen(false)}
+              onLeave={() => {
+                setIsLiveKitModalOpen(false);
+                setLiveKitTokenData(null);
+              }}
             />
           </div>
         </div>
@@ -1875,25 +1883,6 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           }
         }}
       />
-
-      {/* LiveKit Classroom Modal for Student */}
-      {isLiveKitModalOpen && liveKitTokenData && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 p-2 sm:p-4 md:p-6 flex flex-col justify-center animate-in fade-in duration-200">
-          <div className="w-full h-full max-w-7xl mx-auto flex flex-col">
-            <IslamicTuitionClassroom
-              roomName={liveKitTokenData.roomName}
-              tokenData={liveKitTokenData}
-              userRole="student"
-              participantName={student?.name || userProfile?.displayName || 'Student'}
-              settings={classroomSettings}
-              onLeave={() => {
-                setIsLiveKitModalOpen(false);
-                setLiveKitTokenData(null);
-              }}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };
