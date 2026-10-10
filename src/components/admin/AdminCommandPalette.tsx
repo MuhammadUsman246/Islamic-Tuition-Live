@@ -235,21 +235,24 @@ export const AdminCommandPalette: React.FC<AdminCommandPaletteProps> = ({
         }
       }));
 
-    // 3. Students matching (show top 8 when typing, or first 4 when empty)
+    // 3. Students & Family Tree matching (show top 10 when typing, or first 3 when empty)
     const filteredStudents = q
       ? students.filter(
           s =>
             s.name.toLowerCase().includes(q) ||
             s.studentId.toLowerCase().includes(q) ||
+            (s.familyGroupId && s.familyGroupId.toLowerCase().includes(q)) ||
+            (s.familyGroupName && s.familyGroupName.toLowerCase().includes(q)) ||
+            (s.parentName && s.parentName.toLowerCase().includes(q)) ||
             (s.courseType && s.courseType.toLowerCase().includes(q)) ||
             (s.assignedTutorId && s.assignedTutorId.toLowerCase().includes(q))
-        ).slice(0, 8)
+        ).slice(0, 10)
       : students.slice(0, 3);
 
     const matchedStudents: PaletteAction[] = filteredStudents.map(st => ({
       id: `student_${st.id}`,
-      title: `${st.name} (${st.studentId})`,
-      subtitle: `Course: ${st.courseType || 'Quran'} • Tutor: ${st.assignedTutorId || 'None'} • Status: ${st.status}`,
+      title: `${st.name} (${st.studentId})${st.familyGroupId ? ` • ${st.familyGroupId}` : ''}`,
+      subtitle: `${st.familyGroupName ? `Family: ${st.familyGroupName} • ` : ''}Course: ${st.courseType || 'Quran'} • Tutor: ${st.assignedTutorId || 'None'} • Status: ${st.status}`,
       category: 'Students',
       icon: Users,
       iconBg: st.status === 'Trial' ? 'bg-amber-100' : 'bg-emerald-100',

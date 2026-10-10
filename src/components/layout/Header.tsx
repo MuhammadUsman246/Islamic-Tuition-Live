@@ -295,30 +295,101 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
 
-        {/* Dual Parent / Student Role Switcher (Only visible for dual-role users) */}
+        {/* Dual Parent / Student Role Switcher (Only visible for Dual-Mode Parent + Student users) */}
         {(() => {
           const cleanUserEmail = userProfile?.email?.trim().toLowerCase() || '';
-          const matchingStudentObj = cleanUserEmail
+
+          // Case A: Admin is previewing a specific student or parent family
+          if (isRealAdmin && (adminViewingRole === 'parent' || adminViewingRole === 'student') && adminViewingTargetId) {
+            const targetStu = students.find(
+              s => s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId || s.id === adminViewingTargetId
+            );
+            if (!targetStu) return null;
+
+            const familyMembers = students.filter(s => {
+              if (s.studentId === targetStu.studentId) return true;
+              if (targetStu.familyGroupId && s.familyGroupId === targetStu.familyGroupId) return true;
+              if (targetStu.parentEmail && s.parentEmail?.toLowerCase().trim() === targetStu.parentEmail.toLowerCase().trim()) return true;
+              return false;
+            });
+
+            const adultParentStudent = familyMembers.find(s => s.studentType === 'adult');
+            const firstChildStudent = familyMembers.find(s => s.studentType !== 'adult');
+
+            // Only show Dual-Mode toggle if this family has BOTH an Adult Parent-Student AND at least one Child Student
+            if (!adultParentStudent || !firstChildStudent) return null;
+
+            return (
+              <div className="flex items-center bg-[#FAF9F7] p-0.5 sm:p-1 rounded-lg border border-[#D5D0C6] shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setAdminViewingRole('parent', firstChildStudent.studentId)}
+                  className={`min-h-[44px] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    activeRole === 'parent'
+                      ? 'bg-[#2D8B5C] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A]'
+                  }`}
+                  title="View Parent Guardian Portal (manage linked children, tuition, family)"
+                >
+                  Parent Mode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminViewingRole('student', adultParentStudent.studentId)}
+                  className={`min-h-[44px] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    activeRole === 'student'
+                      ? 'bg-[#2D8B5C] text-white shadow-xs'
+                      : 'text-[#5A6B61] hover:text-[#161F1A]'
+                  }`}
+                  title="View Student Learning Portal (parent's personal Quran lessons)"
+                >
+                  Student Mode
+                </button>
+              </div>
+            );
+          }
+
+          if (isRealAdmin) return null;
+
+          // Case B: Direct login as Dual-Mode Parent + Student
+          const matchingOwnAdultStudent =
+            (userProfile?.alsoEnrollAsStudent && userProfile?.studentId
+              ? students.find(s => s.studentId === userProfile.studentId)
+              : null) ||
+            (cleanUserEmail
+              ? students.find(
+                  s =>
+                    s.email &&
+                    s.email.trim().toLowerCase() === cleanUserEmail &&
+                    (s.studentType === 'adult' || Boolean(userProfile?.alsoEnrollAsStudent))
+                )
+              : null);
+
+          // Child students must never see the Dual-Mode toggle
+          const anyDirectStudent = cleanUserEmail
             ? students.find(s => s.email && s.email.trim().toLowerCase() === cleanUserEmail)
             : null;
-          const isUserRegisteredAsStudent = Boolean(matchingStudentObj || userProfile?.role === 'student');
-          const matchingStudentId = matchingStudentObj?.studentId || userProfile?.studentId || null;
+          if (anyDirectStudent && anyDirectStudent.studentType === 'child' && !userProfile?.alsoEnrollAsStudent) {
+            return null;
+          }
 
-          const hasChildren = Boolean(
-            (userProfile?.linkedStudentIds && userProfile.linkedStudentIds.length > 0) ||
-            (userProfile?.role === 'parent') ||
-            students.some(s =>
-              (s.parentEmail && s.parentEmail.trim().toLowerCase() === cleanUserEmail && s.studentId !== matchingStudentId) ||
-              (userProfile?.uid && s.parentId === userProfile.uid && s.studentId !== matchingStudentId) ||
-              (userProfile?.familyGroupId && s.familyGroupId === userProfile.familyGroupId && s.studentId !== matchingStudentId)
-            )
+          const isDualEnrolledAsStudent = Boolean(matchingOwnAdultStudent || userProfile?.alsoEnrollAsStudent);
+          const matchingStudentId = matchingOwnAdultStudent?.studentId || userProfile?.studentId || null;
+
+          const hasLinkedChildStudents = Boolean(
+            (userProfile?.linkedStudentIds &&
+              userProfile.linkedStudentIds.some(id => id !== matchingStudentId)) ||
+              students.some(
+                s =>
+                  s.studentId !== matchingStudentId &&
+                  s.studentType !== 'adult' &&
+                  ((cleanUserEmail && s.parentEmail && s.parentEmail.trim().toLowerCase() === cleanUserEmail) ||
+                    (userProfile?.uid && s.parentId === userProfile.uid) ||
+                    (userProfile?.familyGroupId && s.familyGroupId === userProfile.familyGroupId))
+              )
           );
 
-          const hasDualProfiles = Boolean(
-            !isRealAdmin &&
-            isUserRegisteredAsStudent &&
-            hasChildren
-          );
+          const hasDualProfiles = Boolean(isDualEnrolledAsStudent && hasLinkedChildStudents);
 
           if (!hasDualProfiles) return null;
 

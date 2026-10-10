@@ -164,6 +164,7 @@ import {
   deleteClassesBatch,
   subscribeToSummaryMetrics,
   updateFamilyGroupBatch,
+  getNextSequentialFamilyId,
   loadOlderLessonsArchive,
   checkAndApplyReferralDiscountOnFirstPayment,
   notifyTrial5SessionsCompleted,
@@ -558,12 +559,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [adminFullEditLesson, setAdminFullEditLesson] = useState<Lesson | null>(null);
   const [isAdminFullEditModalOpen, setIsAdminFullEditModalOpen] = useState<boolean>(false);
 
-  // Real student records search for Admin (matches name or student ID)
+  // Real student records & family tree search for Admin (matches name, Student ID, Family ID FAM-1001+, Family Name, or Parent)
   const matchedAdminStudents = adminStudentSearchQuery.trim()
-    ? students.filter(s =>
-        s.name.toLowerCase().includes(adminStudentSearchQuery.trim().toLowerCase()) ||
-        s.studentId.toLowerCase().includes(adminStudentSearchQuery.trim().toLowerCase())
-      )
+    ? students.filter(s => {
+        const q = adminStudentSearchQuery.trim().toLowerCase();
+        return (
+          s.name.toLowerCase().includes(q) ||
+          s.studentId.toLowerCase().includes(q) ||
+          (s.familyGroupId && s.familyGroupId.toLowerCase().includes(q)) ||
+          (s.familyGroupName && s.familyGroupName.toLowerCase().includes(q)) ||
+          (s.parentName && s.parentName.toLowerCase().includes(q)) ||
+          (s.parentEmail && s.parentEmail.toLowerCase().includes(q))
+        );
+      })
     : [];
 
   // User registration modal state
@@ -870,8 +878,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await onRefreshData();
   };
 
-  const handleSaveFamilyGroup = async (groupName: string, selectedStudentIds: string[]) => {
-    const groupId = 'fam_' + groupName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const handleSaveFamilyGroup = async (groupName: string, selectedStudentIds: string[], customGroupId?: string) => {
+    const existingMemberWithFamId = students.find(
+      s =>
+        (selectedStudentIds.includes(s.studentId) || s.familyGroupName === groupName) &&
+        s.familyGroupId &&
+        /^FAM-\d+$/i.test(s.familyGroupId)
+    );
+    const groupId =
+      (customGroupId && customGroupId.trim()) ||
+      existingMemberWithFamId?.familyGroupId ||
+      getNextSequentialFamilyId(students);
+
     const removedStudentIds = students
       .filter(s => (s.familyGroupId === groupId || s.familyGroupName === groupName) && !selectedStudentIds.includes(s.studentId))
       .map(s => s.studentId);
@@ -1735,7 +1753,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="text"
                 value={adminStudentSearchQuery}
                 onChange={(e) => setAdminStudentSearchQuery(e.target.value)}
-                placeholder="Search students by name or Student ID (e.g. STU-101)..."
+                placeholder="Search by Student Name, Student ID (STU-101), Family ID (FAM-1001), or Parent..."
                 className="w-full pl-9 pr-8 py-2 bg-[#FAF9F7] border border-[#E3DFD7] rounded-lg text-xs text-[#161F1A] placeholder-[#5A6B61] focus:outline-none focus:ring-1 focus:ring-[#2D8B5C] focus:border-[#2D8B5C] transition-all"
               />
               {adminStudentSearchQuery && (
@@ -1903,7 +1921,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="mt-3 pt-3 border-t border-[#EAE6DE]">
             {matchedAdminStudents.length === 0 ? (
               <p className="py-3 text-center text-xs text-[#5A6B61]">
-                No student found matching "<span className="font-semibold text-[#161F1A]">{adminStudentSearchQuery}</span>" by name or Student ID.
+                No student or family found matching "<span className="font-semibold text-[#161F1A]">{adminStudentSearchQuery}</span>" by Name, Student ID, or Family ID.
               </p>
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
@@ -1934,6 +1952,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div>
                         <div className="font-semibold text-[#161F1A] flex items-center gap-2 flex-wrap">
                           <span>{st.name}</span>
+                          {st.studentType === 'adult' ? (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                              Adult Student
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              Child
+                            </span>
+                          )}
+                          {(st.familyGroupId || st.familyGroupName) && (
+                            <button
+                              type="button"
+                              onClick={() => setAdminStudentSearchQuery(st.familyGroupId || st.familyGroupName || '')}
+                              className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100 cursor-pointer flex items-center gap-1"
+                              title="Click to filter full Family Tree by Family ID"
+                            >
+                              <Users className="w-2.5 h-2.5 text-purple-600" />
+                              <span>{st.familyGroupId ? `${st.familyGroupId}${st.familyGroupName ? ` (${st.familyGroupName})` : ''}` : st.familyGroupName}</span>
+                            </button>
+                          )}
                           {st.age !== undefined && (
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
                               Age: {st.age}
@@ -4503,7 +4541,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   const matchSearch = !query ||
                     s.name.toLowerCase().includes(query) ||
                     s.studentId.toLowerCase().includes(query) ||
+                    (s.familyGroupId && s.familyGroupId.toLowerCase().includes(query)) ||
+                    (s.familyGroupName && s.familyGroupName.toLowerCase().includes(query)) ||
                     (s.parentName && s.parentName.toLowerCase().includes(query)) ||
+                    (s.parentEmail && s.parentEmail.toLowerCase().includes(query)) ||
                     (s.assignedTutorId && s.assignedTutorId.toLowerCase().includes(query)) ||
                     (s.courseType && s.courseType.toLowerCase().includes(query));
 
@@ -4627,7 +4668,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             type="text"
                             value={studentSearch}
                             onChange={(e) => setStudentSearch(e.target.value)}
-                            placeholder="Search by student, ID, tutor, or parent..."
+                            placeholder="Search student, STU-ID, FAM-1001, tutor, or parent..."
                             className="w-full pl-8 pr-16 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-[#2D8B5C]"
                           />
                           <span className="absolute right-2.5 top-2 text-[10px] font-semibold text-[#5A6B61] pointer-events-none">
@@ -4699,10 +4740,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                               </span>
                                             )}
                                             {(st.familyGroupName || st.familyGroupId) && (
-                                              <span className="text-[9px] font-semibold text-purple-800 bg-purple-50 border border-purple-200 px-1.5 py-0.2 rounded flex items-center gap-1 shrink-0" title={`Family Group: ${st.familyGroupName || st.familyGroupId}`}>
+                                              <button
+                                                type="button"
+                                                onClick={() => setStudentSearch(st.familyGroupId || st.familyGroupName || '')}
+                                                className="text-[9px] font-semibold text-purple-800 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.2 rounded flex items-center gap-1 shrink-0 cursor-pointer transition-colors"
+                                                title={`Click to filter Family Tree: ${st.familyGroupId ? `${st.familyGroupId} • ` : ''}${st.familyGroupName || ''}`}
+                                              >
                                                 <Users className="w-2.5 h-2.5 text-purple-600" />
-                                                <span>{st.familyGroupName || st.familyGroupId}</span>
-                                              </span>
+                                                <span className="font-mono font-bold">{st.familyGroupId || 'FAM'}</span>
+                                                {st.familyGroupName && <span>• {st.familyGroupName}</span>}
+                                              </button>
                                             )}
                                           </div>
                                           <div className="text-[11px] text-[#5A6B61] flex items-center gap-1.5 mt-0.5 flex-wrap">

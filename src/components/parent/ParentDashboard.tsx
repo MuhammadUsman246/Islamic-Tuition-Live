@@ -97,12 +97,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const parentEmailNorm = userProfile?.email?.toLowerCase().trim() || '';
   const parentUid = userProfile?.uid || '';
 
-  // Determine if this parent is ALSO registered as an enrolled student in the academy
-  const selfStudentProfile = useMemo(() => {
-    if (!parentEmailNorm) return null;
-    return students.find(s => s.email && s.email.toLowerCase().trim() === parentEmailNorm) || null;
-  }, [students, parentEmailNorm]);
-
   const getMonday = (dateStr: string) => {
     try {
       const d = new Date(dateStr);
@@ -118,10 +112,22 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   // STRICT PRIVACY: Only include students legitimately linked to this parent account (and self if enrolled)
   const myChildren = useMemo(() => {
-    // If admin is inspecting with a specific target child ID
+    // If admin is inspecting with a specific target child/family member ID, include the entire family group
     if (adminViewingRole && adminViewingTargetId) {
-      const targetMatches = students.filter(s => s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId);
-      if (targetMatches.length > 0) return targetMatches;
+      const primaryTarget = students.find(
+        s => s.studentId === adminViewingTargetId || s.parentId === adminViewingTargetId || s.id === adminViewingTargetId
+      );
+      if (primaryTarget) {
+        const targetFamilyId = primaryTarget.familyGroupId;
+        const targetParentEmail = primaryTarget.parentEmail?.toLowerCase().trim();
+        const familyMatches = students.filter(s => {
+          if (s.studentId === primaryTarget.studentId) return true;
+          if (targetFamilyId && s.familyGroupId === targetFamilyId) return true;
+          if (targetParentEmail && s.parentEmail?.toLowerCase().trim() === targetParentEmail) return true;
+          return false;
+        });
+        if (familyMatches.length > 0) return familyMatches;
+      }
     }
 
     const explicitLinked = new Set(
@@ -171,6 +177,38 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
     return [];
   }, [students, linkedStudentIds, userProfile, adminViewingRole, adminViewingTargetId, parentEmailNorm, parentUid]);
+
+  // Determine if this parent is ALSO registered as an enrolled student in the academy (Dual-Mode Only)
+  const selfStudentProfile = useMemo(() => {
+    // 1. If Admin is viewing a family in Parent Mode, check if this family has an Adult Student record for the parent
+    if (adminViewingRole === 'parent' && myChildren.length > 0) {
+      const adultParentInFamily = myChildren.find(
+        s =>
+          s.studentType === 'adult' &&
+          myChildren.some(other => other.studentId !== s.studentId && other.studentType !== 'adult')
+      );
+      if (adultParentInFamily) return adultParentInFamily;
+    }
+
+    // 2. Check explicit dual-mode studentId on userProfile
+    if (userProfile?.alsoEnrollAsStudent && userProfile?.studentId) {
+      const byStuId = students.find(s => s.studentId === userProfile.studentId);
+      if (byStuId) return byStuId;
+    }
+
+    // 3. Check if parentEmailNorm matches an enrolled student's own email (and they also have at least one child student)
+    if (parentEmailNorm) {
+      const ownAdultRecord = students.find(
+        s =>
+          s.email &&
+          s.email.toLowerCase().trim() === parentEmailNorm &&
+          (s.studentType === 'adult' || Boolean(userProfile?.alsoEnrollAsStudent))
+      );
+      if (ownAdultRecord) return ownAdultRecord;
+    }
+
+    return null;
+  }, [students, myChildren, userProfile, parentEmailNorm, adminViewingRole]);
 
   const [selectedChildId, setSelectedChildId] = useState<string>(
     myChildren[0]?.studentId || ''

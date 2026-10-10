@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { X, UserPlus, CheckCircle, Key, CreditCard, Share2, Calendar, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, UserPlus, CheckCircle, Key, CreditCard, Share2, Calendar, ArrowRight, Plus, Trash2, Users, GraduationCap } from 'lucide-react';
 import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency } from '../../types';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
-import { registerUserAccount, addReferral, getNextSequentialStudentId, notifyTrial5SessionsCompleted } from '../../services/dataService';
+import { registerUserAccount, addReferral, getNextSequentialStudentId, getNextSequentialFamilyId, notifyTrial5SessionsCompleted } from '../../services/dataService';
 import { generateStudentEmail, generateParentEmail } from '../../utils/studentEmail';
 
 interface StudentModalProps {
@@ -14,6 +14,15 @@ interface StudentModalProps {
   tutors: Tutor[];
   students?: Student[];
   initialStudent?: Student | null;
+}
+
+interface AdditionalChildItem {
+  studentId: string;
+  name: string;
+  age: number | '';
+  courseType: CourseType;
+  email: string;
+  password: string;
 }
 
 export const StudentModal: React.FC<StudentModalProps> = ({
@@ -27,7 +36,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
 }) => {
   const [studentId, setStudentId] = useState<string>(() => getNextSequentialStudentId(students));
   const [studentType, setStudentType] = useState<'child' | 'adult'>('child');
-  const [familyGroupId, setFamilyGroupId] = useState<string>('');
+  const [familyGroupId, setFamilyGroupId] = useState<string>(() => getNextSequentialFamilyId(students));
   const [familyGroupName, setFamilyGroupName] = useState<string>('');
   const [name, setName] = useState<string>('');
   const [age, setAge] = useState<number | ''>('');
@@ -37,6 +46,9 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [parentName, setParentName] = useState<string>('');
   const [parentEmail, setParentEmail] = useState<string>('');
   const [parentPhone, setParentPhone] = useState<string>('');
+  const [enrollParentAsStudent, setEnrollParentAsStudent] = useState<boolean>(false);
+  const [parentCourseType, setParentCourseType] = useState<CourseType>('Quran Reading / Nazra');
+  const [additionalChildren, setAdditionalChildren] = useState<AdditionalChildItem[]>([]);
   const [assignedTutorId, setAssignedTutorId] = useState<string>('Unassigned');
   const [status, setStatus] = useState<StudentStatus>('Trial');
   const [courseType, setCourseType] = useState<CourseType>('Quran Reading / Nazra');
@@ -60,11 +72,43 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [parentPassword, setParentPassword] = useState<string>('parent123');
   const [saving, setSaving] = useState<boolean>(false);
 
+  // Existing families list for quick linking if adding a child to an existing family
+  const existingFamilies = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; parentName: string; parentEmail: string; count: number }>();
+    students.forEach(s => {
+      if (s.familyGroupId) {
+        const existing = map.get(s.familyGroupId);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          map.set(s.familyGroupId, {
+            id: s.familyGroupId,
+            name: s.familyGroupName || (s.parentName ? `${s.parentName} Family` : s.familyGroupId),
+            parentName: s.parentName || '',
+            parentEmail: s.parentEmail || '',
+            count: 1
+          });
+        }
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  }, [students]);
+
+  // Compute the preview Student ID that will be assigned to the Parent when Dual Mode is checked
+  const previewParentStudentId = useMemo(() => {
+    const temp: Student[] = [
+      ...students,
+      { studentId } as Student,
+      ...additionalChildren.map(c => ({ studentId: c.studentId } as Student))
+    ];
+    return getNextSequentialStudentId(temp);
+  }, [students, studentId, additionalChildren]);
+
   useEffect(() => {
     if (initialStudent) {
       setStudentId(initialStudent.studentId);
       setStudentType(initialStudent.studentType || (initialStudent.age && initialStudent.age >= 18 ? 'adult' : 'child'));
-      setFamilyGroupId(initialStudent.familyGroupId || '');
+      setFamilyGroupId(initialStudent.familyGroupId || getNextSequentialFamilyId(students));
       setFamilyGroupName(initialStudent.familyGroupName || '');
       setName(initialStudent.name);
       setAge(initialStudent.age !== undefined ? initialStudent.age : '');
@@ -74,6 +118,8 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setParentName(initialStudent.parentName || '');
       setParentEmail(initialStudent.parentEmail || '');
       setParentPhone(initialStudent.parentPhone || '');
+      setEnrollParentAsStudent(false);
+      setAdditionalChildren([]);
       setAssignedTutorId(initialStudent.assignedTutorId);
       setStatus(initialStudent.status);
       setCourseType(initialStudent.courseType);
@@ -94,7 +140,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
     } else {
       setStudentId(getNextSequentialStudentId(students));
       setStudentType('child');
-      setFamilyGroupId('');
+      setFamilyGroupId(getNextSequentialFamilyId(students));
       setFamilyGroupName('');
       setName('');
       setAge('');
@@ -104,6 +150,9 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setParentName('');
       setParentEmail('');
       setParentPhone('');
+      setEnrollParentAsStudent(false);
+      setParentCourseType('Quran Reading / Nazra');
+      setAdditionalChildren([]);
       setAssignedTutorId('Unassigned');
       setStatus('Trial');
       setCourseType('Quran Reading / Nazra');
@@ -126,6 +175,34 @@ export const StudentModal: React.FC<StudentModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleAddAnotherChild = () => {
+    const temp: Student[] = [
+      ...students,
+      { studentId } as Student,
+      ...additionalChildren.map(c => ({ studentId: c.studentId } as Student))
+    ];
+    const nextStuId = getNextSequentialStudentId(temp);
+    setAdditionalChildren(prev => [
+      ...prev,
+      {
+        studentId: nextStuId,
+        name: '',
+        age: '',
+        courseType: courseType || 'Quran Reading / Nazra',
+        email: '',
+        password: studentPassword || 'quran123'
+      }
+    ]);
+  };
+
+  const handleRemoveAdditionalChild = (idx: number) => {
+    setAdditionalChildren(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateAdditionalChild = (idx: number, updates: Partial<AdditionalChildItem>) => {
+    setAdditionalChildren(prev => prev.map((item, i) => (i === idx ? { ...item, ...updates } : item)));
+  };
+
   const saveStudentRecord = async (redirectToTimetable: boolean) => {
     if (!name.trim()) {
       alert('Please enter the student full name.');
@@ -135,20 +212,34 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       alert('Please enter the parent / guardian name for child students.');
       return;
     }
+    for (let i = 0; i < additionalChildren.length; i++) {
+      if (!additionalChildren[i].name.trim()) {
+        alert(`Please enter the full name for Child #${i + 2} or remove the empty child row.`);
+        return;
+      }
+    }
+
     setSaving(true);
     const finalStudentEmail = email.trim() || generateStudentEmail(name, studentId);
     const finalParentEmail = parentEmail.trim() || generateParentEmail(parentName, studentId);
     const effectiveTutorId = initialStudent ? (initialStudent.assignedTutorId || 'Unassigned') : 'Unassigned';
+    const effectiveFamilyId = studentType === 'adult'
+      ? (familyGroupId.trim() || undefined)
+      : (familyGroupId.trim() || getNextSequentialFamilyId(students));
+    const effectiveFamilyName = studentType === 'adult'
+      ? (familyGroupName.trim() || undefined)
+      : (familyGroupName.trim() || `${parentName.trim()} Family`);
 
     try {
+      // 1. Save Primary Student Record
       await onSave(
         {
           studentId,
           name: name.trim(),
           age: age === '' ? undefined : Number(age),
           studentType,
-          familyGroupId: familyGroupId.trim() || undefined,
-          familyGroupName: familyGroupName.trim() || undefined,
+          familyGroupId: effectiveFamilyId,
+          familyGroupName: effectiveFamilyName,
           joiningDate,
           trialStartDate: initialStudent?.trialStartDate || joiningDate,
           email: finalStudentEmail,
@@ -179,6 +270,110 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         },
         initialStudent?.id
       );
+
+      const allFamilyChildIds: string[] = [studentId];
+      const tempStudentPool: Student[] = [...students, { studentId, familyGroupId: effectiveFamilyId } as Student];
+
+      // 2. Save Any Additional Children Added via "+ Add Another Child"
+      if (!initialStudent && studentType === 'child' && additionalChildren.length > 0) {
+        for (const child of additionalChildren) {
+          const cleanChildName = child.name.trim();
+          if (!cleanChildName) continue;
+          const childStuId = child.studentId.trim() || getNextSequentialStudentId(tempStudentPool);
+          tempStudentPool.push({ studentId: childStuId, familyGroupId: effectiveFamilyId } as Student);
+          allFamilyChildIds.push(childStuId);
+          const childFinalEmail = child.email.trim() || generateStudentEmail(cleanChildName, childStuId);
+
+          await onSave({
+            studentId: childStuId,
+            name: cleanChildName,
+            age: child.age === '' ? undefined : Number(child.age),
+            studentType: 'child',
+            familyGroupId: effectiveFamilyId,
+            familyGroupName: effectiveFamilyName,
+            joiningDate,
+            trialStartDate: joiningDate,
+            email: childFinalEmail,
+            phone,
+            parentName: parentName.trim(),
+            parentEmail: finalParentEmail,
+            parentPhone,
+            assignedTutorId: effectiveTutorId,
+            status,
+            isOnLeave: status === 'On Leave',
+            courseType: child.courseType || courseType,
+            country,
+            timezone,
+            monthlyFee: monthlyFee === '' ? undefined : Number(monthlyFee),
+            feeCurrency: feeCurrency || 'USD',
+            trialSessionsCompleted: 0,
+            trialSessionsTotal: 5,
+            trialStatus: status === 'Trial' ? 'In Progress' : 'Converted',
+            showFeeToStudent,
+            notes,
+            privateAdminNotes,
+            createdAt: new Date().toISOString()
+          });
+
+          if (createStudentUser) {
+            await registerUserAccount({
+              email: childFinalEmail,
+              password: child.password.trim() || studentPassword.trim() || 'quran123',
+              displayName: cleanChildName,
+              role: 'student',
+              studentType: 'child',
+              status: 'active',
+              studentId: childStuId,
+              familyGroupId: effectiveFamilyId,
+              familyGroupName: effectiveFamilyName,
+              parentName: parentName.trim(),
+              parentEmail: finalParentEmail,
+              phone,
+              country,
+              timezone,
+              courseType: child.courseType || courseType
+            });
+          }
+        }
+      }
+
+      // 3. If "Enroll Parent as Student Too (Dual Mode)" is checked, create Student Record for Parent
+      let parentOwnStudentId: string | undefined = undefined;
+      if (!initialStudent && studentType === 'child' && enrollParentAsStudent) {
+        parentOwnStudentId = getNextSequentialStudentId(tempStudentPool);
+        tempStudentPool.push({ studentId: parentOwnStudentId, familyGroupId: effectiveFamilyId } as Student);
+        allFamilyChildIds.push(parentOwnStudentId);
+
+        await onSave({
+          studentId: parentOwnStudentId,
+          name: parentName.trim(),
+          studentType: 'adult',
+          familyGroupId: effectiveFamilyId,
+          familyGroupName: effectiveFamilyName,
+          joiningDate,
+          trialStartDate: joiningDate,
+          email: finalParentEmail,
+          phone: parentPhone || phone,
+          parentName: '',
+          parentEmail: finalParentEmail,
+          parentPhone: parentPhone || phone,
+          assignedTutorId: effectiveTutorId,
+          status,
+          isOnLeave: status === 'On Leave',
+          courseType: parentCourseType || courseType,
+          country,
+          timezone,
+          monthlyFee: monthlyFee === '' ? undefined : Number(monthlyFee),
+          feeCurrency: feeCurrency || 'USD',
+          trialSessionsCompleted: 0,
+          trialSessionsTotal: 5,
+          trialStatus: status === 'Trial' ? 'In Progress' : 'Converted',
+          showFeeToStudent: true,
+          notes: notes ? `${notes} (Dual-Role Parent & Student)` : 'Enrolled as Parent & Student (Dual Mode)',
+          privateAdminNotes,
+          createdAt: new Date().toISOString()
+        });
+      }
 
       // Dispatch Trial 5/5 completed push toast if newly reaching 5 sessions
       if (status === 'Trial' && trialSessionsCompleted >= 5 && (initialStudent?.trialSessionsCompleted || 0) < 5) {
@@ -215,20 +410,35 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           password: studentPassword.trim() || 'quran123',
           displayName: name.trim(),
           role: 'student',
+          studentType,
           status: 'active',
-          studentId: studentId
+          studentId: studentId,
+          familyGroupId: effectiveFamilyId,
+          familyGroupName: effectiveFamilyName,
+          parentName: studentType === 'adult' ? '' : parentName.trim(),
+          parentEmail: studentType === 'adult' ? '' : finalParentEmail,
+          phone,
+          country,
+          timezone,
+          courseType
         });
       }
 
       // Register real parent login account (Item 12)
-      if (createParentUser) {
+      if (studentType === 'child' && (createParentUser || enrollParentAsStudent)) {
         await registerUserAccount({
           email: finalParentEmail,
           password: parentPassword.trim() || 'parent123',
           displayName: parentName.trim() || `${name.trim()}'s Parent`,
           role: 'parent',
           status: 'active',
-          studentId: studentId
+          ...(parentOwnStudentId ? { studentId: parentOwnStudentId, courseType: parentCourseType || courseType } : {}),
+          linkedStudentIds: allFamilyChildIds,
+          familyGroupId: effectiveFamilyId,
+          familyGroupName: effectiveFamilyName,
+          phone: parentPhone || phone,
+          country,
+          timezone
         });
       }
 
@@ -418,18 +628,83 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             </div>
           ) : (
             <>
-              {/* Parent Details for Child Students */}
+              {/* Parent Details for Child Students + Dual Mode Checkbox */}
               <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-3">
-                <span className="text-xs font-bold text-[#1E5C3D] uppercase tracking-wider block">
-                  Parent / Guardian Information
-                </span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-[#1E5C3D] uppercase tracking-wider block">
+                    Parent / Guardian Information
+                  </span>
+                  {!initialStudent && (
+                    <label className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 cursor-pointer hover:bg-emerald-100/70 transition-colors">
+                      <input
+                        id="enroll_parent_as_student_checkbox"
+                        type="checkbox"
+                        checked={enrollParentAsStudent}
+                        onChange={(e) => {
+                          setEnrollParentAsStudent(e.target.checked);
+                          if (e.target.checked) {
+                            setCreateParentUser(true);
+                          }
+                        }}
+                        className="rounded text-[#2D8B5C] focus:ring-[#2D8B5C] w-4 h-4 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1">
+                        <GraduationCap className="w-3.5 h-3.5 text-[#2D8B5C]" />
+                        <span>Enroll Parent as Student Too (Dual Mode)</span>
+                      </span>
+                    </label>
+                  )}
+                </div>
+
+                {!initialStudent && enrollParentAsStudent && (
+                  <div className="p-3 bg-emerald-50/90 border border-emerald-300 rounded-xl space-y-2 text-xs text-emerald-950">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-bold flex items-center gap-1.5 text-[#1E5C3D]">
+                        <GraduationCap className="w-4 h-4 text-[#2D8B5C]" />
+                        <span>Parent Dual-Role Enrollment Active (Parent + Student)</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-white border border-emerald-300 font-mono font-bold text-[11px] text-[#1E5C3D]">
+                        Parent Student ID: {previewParentStudentId}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-emerald-800 leading-relaxed">
+                      This parent will be enrolled as a student learner (<strong>{previewParentStudentId}</strong>) alongside their parent account under Family ID <strong>{familyGroupId || getNextSequentialFamilyId(students)}</strong>. They can log in with their normal parent email and use the <strong>Parent Mode / Student Mode</strong> toggle in their dashboard.
+                    </p>
+                    <div className="pt-1 max-w-xs">
+                      <label className="block text-[11px] font-semibold text-[#1E5C3D] mb-1">
+                        Parent's Own Course / Curriculum
+                      </label>
+                      <select
+                        value={parentCourseType}
+                        onChange={(e) => setParentCourseType(e.target.value as CourseType)}
+                        className="w-full border border-emerald-300 rounded-md px-2.5 py-1.5 text-xs bg-white font-medium"
+                      >
+                        <option value="Noorani Qaida">Noorani Qaida</option>
+                        <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                        <option value="Hifz">Hifz</option>
+                        <option value="Tajweed">Tajweed</option>
+                        <option value="Salah / Daily Prayers">Salah / Daily Prayers</option>
+                        <option value="Duas">Duas</option>
+                        <option value="Ahadith">Ahadith</option>
+                        <option value="Islamic Studies">Islamic Studies</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Name *</label>
                     <input
                       type="text"
                       value={parentName}
-                      onChange={(e) => setParentName(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setParentName(val);
+                        if (!familyGroupName.trim() || familyGroupName.endsWith(' Family')) {
+                          setFamilyGroupName(val.trim() ? `${val.trim()} Family` : '');
+                        }
+                      }}
                       placeholder="e.g. Farooq Ahmed"
                       className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
                       required={studentType === 'child'}
@@ -458,26 +733,35 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                 </div>
               </div>
 
-              {/* Family ID & Sibling Grouping */}
-              <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
+              {/* Family ID & Sibling Grouping (Sequential FAM-1001, FAM-1002, etc.) */}
+              <div className="p-3.5 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1.5">
                     <span>👨‍👩‍👧</span>
-                    <span>Family ID & Sibling Grouping</span>
+                    <span>Family ID & Sibling Grouping (Auto-Sequential)</span>
                   </label>
-                  <span className="text-[10px] text-gray-500 bg-white px-2 py-0.5 rounded border border-gray-200">
-                    Multi-child unified session
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setFamilyGroupId(getNextSequentialFamilyId(students))}
+                      className="text-[10px] font-bold text-[#1E5C3D] bg-white hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 cursor-pointer transition-colors"
+                      title="Auto-fetch next sequential Family ID (FAM-1001, FAM-1002, ...)"
+                    >
+                      ⚡ Auto-Fetch Next ({getNextSequentialFamilyId(students)})
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Family Group ID</label>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">
+                      Sequential Family ID (e.g. FAM-1001, FAM-1002)
+                    </label>
                     <input
                       type="text"
                       value={familyGroupId}
-                      onChange={(e) => setFamilyGroupId(e.target.value)}
-                      placeholder="e.g. FAM-001 or FAM-ALFARSI"
-                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white font-mono uppercase"
+                      onChange={(e) => setFamilyGroupId(e.target.value.toUpperCase())}
+                      placeholder="FAM-1001"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2.5 py-1.5 text-xs bg-white font-mono font-bold text-[#1E5C3D] uppercase"
                     />
                   </div>
                   <div>
@@ -486,12 +770,167 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                       type="text"
                       value={familyGroupName}
                       onChange={(e) => setFamilyGroupName(e.target.value)}
-                      placeholder="e.g. Ahmed Family"
-                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                      placeholder={parentName.trim() ? `${parentName.trim()} Family` : 'e.g. Ahmed Family'}
+                      className="w-full border border-[#D5D0C6] rounded-md px-2.5 py-1.5 text-xs bg-white"
                     />
                   </div>
                 </div>
+                {existingFamilies.length > 0 && (
+                  <div className="pt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span className="text-[#5A6B61] font-medium">Or link to existing Family Tree:</span>
+                    <select
+                      value={existingFamilies.some(f => f.id === familyGroupId) ? familyGroupId : ''}
+                      onChange={(e) => {
+                        const selId = e.target.value;
+                        if (!selId) {
+                          setFamilyGroupId(getNextSequentialFamilyId(students));
+                          return;
+                        }
+                        const found = existingFamilies.find(f => f.id === selId);
+                        if (found) {
+                          setFamilyGroupId(found.id);
+                          setFamilyGroupName(found.name);
+                          if (found.parentName && !parentName.trim()) setParentName(found.parentName);
+                          if (found.parentEmail && !parentEmail.trim()) setParentEmail(found.parentEmail);
+                        }
+                      }}
+                      className="border border-emerald-300 rounded-md px-2 py-1 text-[11px] bg-white text-[#161F1A] font-medium"
+                    >
+                      <option value="">-- New Sequential Family ({getNextSequentialFamilyId(students)}) --</option>
+                      {existingFamilies.map(f => (
+                        <option key={f.id} value={f.id}>
+                          {f.id} — {f.name} ({f.count} member{f.count > 1 ? 's' : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
+
+              {/* Multi-Child / Sibling Batch Enrollment ("+ Add Another Child") */}
+              {!initialStudent && (
+                <div className="p-3.5 bg-[#FAF9F7] border border-[#D5D0C6] rounded-xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="text-xs font-bold text-[#161F1A] flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-[#2D8B5C]" />
+                        <span>Multiple Children Enrollment ({1 + additionalChildren.length} Child{additionalChildren.length > 0 ? 'ren' : ''})</span>
+                      </span>
+                      <p className="text-[11px] text-[#5A6B61]">
+                        Add multiple siblings in one submission — all children automatically share Family ID <strong className="font-mono text-[#1E5C3D]">{familyGroupId || getNextSequentialFamilyId(students)}</strong>
+                      </p>
+                    </div>
+                    <button
+                      id="add_another_child_button"
+                      type="button"
+                      onClick={handleAddAnotherChild}
+                      className="px-3 py-1.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add Another Child</span>
+                    </button>
+                  </div>
+
+                  {additionalChildren.length > 0 && (
+                    <div className="space-y-2.5 pt-1">
+                      {additionalChildren.map((child, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 bg-white rounded-xl border border-emerald-200 space-y-2.5 shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-[#1E5C3D] text-white text-[10px] font-mono flex items-center justify-center">
+                                {idx + 2}
+                              </span>
+                              <span>Child #{idx + 2} Profile</span>
+                              <span className="font-mono text-[10px] bg-emerald-50 text-[#1E5C3D] px-2 py-0.2 rounded border border-emerald-200">
+                                {child.studentId} • {familyGroupId || getNextSequentialFamilyId(students)}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveAdditionalChild(idx)}
+                              className="text-rose-600 hover:text-rose-800 p-1 rounded hover:bg-rose-50 cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+                              title="Remove this child"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove</span>
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-[#5A6B61] mb-0.5">Student ID</label>
+                              <input
+                                type="text"
+                                value={child.studentId}
+                                onChange={(e) => handleUpdateAdditionalChild(idx, { studentId: e.target.value })}
+                                className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs font-mono font-bold bg-[#FAF9F7]"
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="block text-[10px] font-semibold text-[#5A6B61] mb-0.5">Child Full Name *</label>
+                              <input
+                                type="text"
+                                value={child.name}
+                                onChange={(e) => handleUpdateAdditionalChild(idx, { name: e.target.value })}
+                                placeholder="e.g. Maryam Al-Farooqi"
+                                className="w-full border border-[#D5D0C6] rounded-md px-2.5 py-1.5 text-xs bg-white"
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-[#5A6B61] mb-0.5">Age (Years)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={child.age}
+                                onChange={(e) => handleUpdateAdditionalChild(idx, { age: e.target.value === '' ? '' : Number(e.target.value) })}
+                                placeholder="e.g. 8"
+                                className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-[#5A6B61] mb-0.5">Course Type</label>
+                              <select
+                                value={child.courseType}
+                                onChange={(e) => handleUpdateAdditionalChild(idx, { courseType: e.target.value as CourseType })}
+                                className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                              >
+                                <option value="Noorani Qaida">Noorani Qaida</option>
+                                <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                                <option value="Hifz">Hifz</option>
+                                <option value="Tajweed">Tajweed</option>
+                                <option value="Salah / Daily Prayers">Salah / Daily Prayers</option>
+                                <option value="Duas">Duas</option>
+                                <option value="Ahadith">Ahadith</option>
+                                <option value="Islamic Studies">Islamic Studies</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-[#5A6B61] mb-0.5">
+                                Login Handle (Auto-generated if blank)
+                              </label>
+                              <input
+                                type="email"
+                                value={child.email}
+                                onChange={(e) => handleUpdateAdditionalChild(idx, { email: e.target.value })}
+                                placeholder={generateStudentEmail(child.name || 'child', child.studentId)}
+                                className="w-full border border-[#D5D0C6] rounded-md px-2.5 py-1.5 text-xs bg-white"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 

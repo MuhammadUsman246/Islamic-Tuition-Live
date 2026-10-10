@@ -128,15 +128,35 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     const cleanStudentId = userProfile?.studentId?.trim();
     const cleanCurrentId = currentStudentId?.trim();
 
-    return students.find(s => {
-      const sEmail = s.email?.toLowerCase().trim();
-      const sParentEmail = s.parentEmail?.toLowerCase().trim();
+    // 1. Explicit studentId on userProfile (for Dual-Mode Parent's own student ID or direct student login)
+    if (cleanStudentId) {
+      const byProfileStuId = students.find(s => s.studentId === cleanStudentId || s.id === cleanStudentId);
+      if (byProfileStuId) return byProfileStuId;
+    }
 
-      if (cleanCurrentId && (s.studentId === cleanCurrentId || s.id === cleanCurrentId)) return true;
-      if (cleanStudentId && (s.studentId === cleanStudentId || s.id === cleanStudentId)) return true;
-      if (cleanUserEmail && (sEmail === cleanUserEmail || sParentEmail === cleanUserEmail)) return true;
-      return false;
-    }) || null;
+    // 2. Direct email match (prioritizing adult/self student record over child's parentEmail)
+    if (cleanUserEmail) {
+      const byOwnEmailAdult = students.find(
+        s => s.email?.toLowerCase().trim() === cleanUserEmail && s.studentType === 'adult'
+      );
+      if (byOwnEmailAdult) return byOwnEmailAdult;
+
+      const byOwnEmail = students.find(s => s.email?.toLowerCase().trim() === cleanUserEmail);
+      if (byOwnEmail) return byOwnEmail;
+    }
+
+    // 3. Fallback to currentStudentId prop or parentEmail match
+    if (cleanCurrentId) {
+      const byCurrentId = students.find(s => s.studentId === cleanCurrentId || s.id === cleanCurrentId);
+      if (byCurrentId) return byCurrentId;
+    }
+
+    if (cleanUserEmail) {
+      const byParentEmail = students.find(s => s.parentEmail?.toLowerCase().trim() === cleanUserEmail);
+      if (byParentEmail) return byParentEmail;
+    }
+
+    return null;
   }, [students, currentStudentId, userProfile, adminViewingRole, adminViewingTargetId]);
 
   const [fetchedStudent, setFetchedStudent] = useState<Student | null>(null);
@@ -203,18 +223,33 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     return false;
   };
 
-  // Determine if this student is ALSO a parent of enrolled children in the academy
+  // Determine if this student is ALSO a parent of enrolled children in the academy (Dual-Mode Only)
   const hasParentChildren = useMemo(() => {
-    if (actualRole === 'parent' || userProfile?.role === 'parent') return true;
-    const myEmailNorm = userProfile?.email?.toLowerCase().trim();
+    // Child students never have a Parent Mode switch
+    if (matchedStudent && matchedStudent.studentType === 'child') return false;
+
+    const isDualParentStudent = Boolean(
+      userProfile?.alsoEnrollAsStudent ||
+      matchedStudent?.studentType === 'adult' ||
+      actualRole === 'parent' ||
+      userProfile?.role === 'parent'
+    );
+    if (!isDualParentStudent) return false;
+
+    const myEmailNorm = (matchedStudent?.email || userProfile?.email || '').toLowerCase().trim();
+    const myFamilyGroupId = matchedStudent?.familyGroupId || userProfile?.familyGroupId;
     const myUid = userProfile?.uid;
-    if (!myEmailNorm && !myUid) return false;
-    return (
-      (userProfile?.linkedStudentIds && userProfile.linkedStudentIds.length > 0) ||
-      students.some(s =>
-        (s.parentEmail && s.parentEmail.toLowerCase().trim() === myEmailNorm && s.studentId !== matchedStudent?.studentId) ||
-        (myUid && s.parentId === myUid && s.studentId !== matchedStudent?.studentId) ||
-        (userProfile?.familyGroupId && s.familyGroupId === userProfile.familyGroupId && s.studentId !== matchedStudent?.studentId)
+
+    return Boolean(
+      (userProfile?.linkedStudentIds &&
+        userProfile.linkedStudentIds.some(id => id !== matchedStudent?.studentId)) ||
+      students.some(
+        s =>
+          s.studentId !== matchedStudent?.studentId &&
+          s.studentType !== 'adult' &&
+          ((myEmailNorm && s.parentEmail && s.parentEmail.toLowerCase().trim() === myEmailNorm) ||
+            (myUid && s.parentId === myUid) ||
+            (myFamilyGroupId && s.familyGroupId === myFamilyGroupId))
       )
     );
   }, [actualRole, userProfile, students, matchedStudent]);
@@ -528,7 +563,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             {hasParentChildren && (
               <button
                 type="button"
-                onClick={() => setAdminViewingRole('parent', null)}
+                onClick={() => setAdminViewingRole(actualRole === 'parent' ? null : 'parent', matchedStudent?.studentId || null)}
                 className="student-touch-target min-h-[44px] px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition-colors flex items-center justify-center space-x-1.5 border border-white/20 shadow-xs cursor-pointer"
                 title="Switch to Parent Portal to check children's progress & combined family tuition"
               >

@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
-import { X, Users, Plus, Check, Trash2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Users, Plus, Check, Trash2, Search } from 'lucide-react';
 import { Student } from '../../types';
+import { getNextSequentialFamilyId } from '../../services/dataService';
 
 interface FamilyGroupModalProps {
   isOpen: boolean;
   onClose: () => void;
   students: Student[];
-  onSaveFamilyGroup: (groupName: string, selectedStudentIds: string[]) => Promise<void>;
+  onSaveFamilyGroup: (groupName: string, selectedStudentIds: string[], customGroupId?: string) => Promise<void>;
   onRemoveFromFamily: (studentId: string) => Promise<void>;
 }
 
@@ -17,24 +18,48 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
   onSaveFamilyGroup,
   onRemoveFromFamily
 }) => {
+  const [familyGroupId, setFamilyGroupId] = useState('');
   const [familyGroupName, setFamilyGroupName] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [familySearchQuery, setFamilySearchQuery] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setFamilyGroupId(getNextSequentialFamilyId(students));
+    }
+  }, [isOpen, students]);
 
   if (!isOpen) return null;
 
   // Group existing students by family
-  const familyMap: { [key: string]: { name: string; students: Student[] } } = {};
+  const familyMap: { [key: string]: { id: string; name: string; students: Student[] } } = {};
   students.forEach(st => {
     if (st.familyGroupName || st.familyGroupId) {
       const key = st.familyGroupId || st.familyGroupName || 'Unknown';
+      const id = st.familyGroupId || key;
       const name = st.familyGroupName || 'Family Group';
       if (!familyMap[key]) {
-        familyMap[key] = { name, students: [] };
+        familyMap[key] = { id, name, students: [] };
       }
       familyMap[key].students.push(st);
     }
+  });
+
+  const filteredFamilies = Object.entries(familyMap).filter(([key, group]) => {
+    const q = familySearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    if (key.toLowerCase().includes(q) || group.id.toLowerCase().includes(q) || group.name.toLowerCase().includes(q)) {
+      return true;
+    }
+    return group.students.some(
+      st =>
+        st.name.toLowerCase().includes(q) ||
+        st.studentId.toLowerCase().includes(q) ||
+        (st.parentName && st.parentName.toLowerCase().includes(q)) ||
+        (st.parentEmail && st.parentEmail.toLowerCase().includes(q))
+    );
   });
 
   const handleToggleStudent = (studentId: string) => {
@@ -48,30 +73,29 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
   const handleCreateOrUpdateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!familyGroupName.trim()) {
-      alert('Please enter a Family Group name (e.g., "The Al-Farsi Family").');
+      setFeedbackMsg('Please enter a Family Group name (e.g., "The Al-Farsi Family").');
       return;
     }
-    if (selectedStudentIds.length < 2) {
-      if (!confirm('You have selected fewer than 2 children for this family group. Do you want to proceed?')) {
-        return;
-      }
-    }
+
+    const cleanFamId = familyGroupId.trim() || getNextSequentialFamilyId(students);
 
     setIsSaving(true);
     try {
-      await onSaveFamilyGroup(familyGroupName.trim(), selectedStudentIds);
-      setFeedbackMsg(`Successfully grouped ${selectedStudentIds.length} students under "${familyGroupName.trim()}".`);
+      await onSaveFamilyGroup(familyGroupName.trim(), selectedStudentIds, cleanFamId);
+      setFeedbackMsg(`Successfully grouped ${selectedStudentIds.length} member(s) under ${cleanFamId} ("${familyGroupName.trim()}").`);
       setFamilyGroupName('');
       setSelectedStudentIds([]);
-      setTimeout(() => setFeedbackMsg(null), 3000);
+      setFamilyGroupId(getNextSequentialFamilyId(students));
+      setTimeout(() => setFeedbackMsg(null), 4000);
     } catch (err: any) {
-      alert('Failed to save family group: ' + err.message);
+      setFeedbackMsg('Failed to save family group: ' + err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleSelectGroupForEditing = (name: string, members: Student[]) => {
+  const handleSelectGroupForEditing = (id: string, name: string, members: Student[]) => {
+    setFamilyGroupId(/^FAM-\d+$/i.test(id) ? id : getNextSequentialFamilyId(students));
     setFamilyGroupName(name);
     setSelectedStudentIds(members.map(m => m.studentId));
   };
@@ -86,15 +110,15 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
               <Users className="w-5 h-5 text-[#E8A93E]" />
             </span>
             <div>
-              <h3 className="font-bold text-base">Family Fee & Sibling Grouping</h3>
+              <h3 className="font-bold text-base">Family Tree &amp; Sequential Family ID Manager</h3>
               <p className="text-xs text-[#b8dbca]">
-                Group multiple children under a single Family Group (e.g., "The Al-Farsi Family")
+                Auto-assign sequential Family IDs (FAM-1001, FAM-1002...) &amp; manage linked children + Dual-Mode Parents
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -108,41 +132,71 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
             </div>
           )}
 
-          {/* Existing Family Groups */}
+          {/* Existing Family Groups + Search Bar */}
           <div>
-            <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider mb-2">
-              Existing Academy Family Groups ({Object.keys(familyMap).length})
-            </h4>
-            {Object.keys(familyMap).length === 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
+                Academy Family Trees ({filteredFamilies.length} of {Object.keys(familyMap).length})
+              </h4>
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-[#5A6B61] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={familySearchQuery}
+                  onChange={e => setFamilySearchQuery(e.target.value)}
+                  placeholder="Search FAM-1001, family, or student..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-[#2D8B5C]"
+                />
+              </div>
+            </div>
+            {filteredFamilies.length === 0 ? (
               <p className="text-xs text-[#5A6B61] bg-[#FAF9F7] p-3 rounded-lg border border-[#E3DFD7]">
-                No students grouped into families yet. Use the form below to create your first family group (e.g., "The Al-Farsi Family").
+                {Object.keys(familyMap).length === 0
+                  ? 'No students grouped into families yet. Use the form below to create your first family group (starting at FAM-1001).'
+                  : `No family trees match "${familySearchQuery}".`}
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {Object.entries(familyMap).map(([key, group]) => (
+                {filteredFamilies.map(([key, group]) => (
                   <div
                     key={key}
                     className="p-3.5 rounded-xl border border-[#D5D0C6] bg-[#FAF9F7] flex flex-col justify-between hover:border-[#2D8B5C] transition-colors"
                   >
                     <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1.5">
-                          <Users className="w-3.5 h-3.5 text-[#2D8B5C]" />
-                          {group.name}
-                        </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-[10px] font-bold bg-purple-100 text-purple-900 border border-purple-200 px-1.5 py-0.5 rounded">
+                            {group.id}
+                          </span>
+                          <span className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1">
+                            {group.name}
+                          </span>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => handleSelectGroupForEditing(group.name, group.students)}
-                          className="text-[11px] font-semibold text-[#2D8B5C] hover:underline"
+                          onClick={() => handleSelectGroupForEditing(group.id, group.name, group.students)}
+                          className="text-[11px] font-semibold text-[#2D8B5C] hover:underline cursor-pointer shrink-0"
                         >
-                          Edit Group
+                          Edit Tree
                         </button>
                       </div>
                       <div className="mt-2 space-y-1">
                         {group.students.map(st => (
                           <div key={st.studentId} className="flex items-center justify-between text-xs text-[#161F1A] bg-white px-2 py-1 rounded border border-[#EAE6DE]">
-                            <span>{st.name} <span className="font-mono text-[10px] text-[#5A6B61]">({st.studentId})</span></span>
-                            <div className="flex items-center space-x-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="truncate font-medium">{st.name}</span>
+                              <span className="font-mono text-[10px] text-[#5A6B61] shrink-0">({st.studentId})</span>
+                              {st.studentType === 'adult' ? (
+                                <span className="text-[9px] font-bold bg-sky-100 text-sky-800 px-1 rounded shrink-0">
+                                  Parent/Student
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-bold bg-emerald-50 text-emerald-800 px-1 rounded shrink-0">
+                                  Child
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-1.5 shrink-0">
                               {st.monthlyFee && (
                                 <span className="text-[10px] font-bold text-emerald-700">
                                   ${st.monthlyFee}
@@ -152,7 +206,7 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
                                 type="button"
                                 title="Remove from family group"
                                 onClick={() => onRemoveFromFamily(st.studentId)}
-                                className="text-rose-500 hover:text-rose-700 p-0.5"
+                                className="text-rose-500 hover:text-rose-700 p-0.5 cursor-pointer"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -171,21 +225,45 @@ export const FamilyGroupModal: React.FC<FamilyGroupModalProps> = ({
           <form onSubmit={handleCreateOrUpdateGroup} className="bg-white p-4 rounded-xl border border-[#D5D0C6] space-y-4">
             <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider flex items-center gap-1.5">
               <Plus className="w-4 h-4 text-[#2D8B5C]" />
-              Create or Update Sibling Family Group
+              Create or Update Sibling Family Tree
             </h4>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">
-                Family Group Name
-              </label>
-              <input
-                type="text"
-                value={familyGroupName}
-                onChange={e => setFamilyGroupName(e.target.value)}
-                placeholder='e.g., "The Al-Farsi Family" or "The Khan Family"'
-                className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs font-medium focus:ring-1 focus:ring-[#2D8B5C] focus:border-[#2D8B5C]"
-                required
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-[#161F1A]">
+                    Sequential Family ID
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setFamilyGroupId(getNextSequentialFamilyId(students))}
+                    className="text-[10px] font-bold text-[#2D8B5C] hover:underline cursor-pointer"
+                  >
+                    Next Auto ID
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={familyGroupId}
+                  onChange={e => setFamilyGroupId(e.target.value)}
+                  placeholder="FAM-1001"
+                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs font-mono font-bold text-[#1E5C3D] bg-[#FAF9F7]"
+                  required
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-[#161F1A] mb-1">
+                  Family Group Name
+                </label>
+                <input
+                  type="text"
+                  value={familyGroupName}
+                  onChange={e => setFamilyGroupName(e.target.value)}
+                  placeholder='e.g., "The Al-Farsi Family" or "The Khan Family"'
+                  className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs font-medium focus:ring-1 focus:ring-[#2D8B5C] focus:border-[#2D8B5C]"
+                  required
+                />
+              </div>
             </div>
 
             <div>

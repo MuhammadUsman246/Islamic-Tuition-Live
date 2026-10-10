@@ -5064,6 +5064,9 @@ export interface RegisterUserParams {
   status?: UserAccountStatus;
   tutorId?: string;
   studentId?: string;
+  studentType?: 'adult' | 'child';
+  familyGroupId?: string;
+  familyGroupName?: string;
   linkedStudentIds?: string[];
   courseType?: CourseType;
   country?: string;
@@ -5572,6 +5575,11 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
   const rawAssignedTutor = params.tutorId || params.profileData?.assignedTutorId || localExistingStudent?.assignedTutorId || '';
   const resolvedTutorId = rawAssignedTutor ? normalizeTutorId(rawAssignedTutor) : '';
 
+  const resolvedLinkedIds = params.linkedStudentIds || params.profileData?.linkedStudentIds;
+  const resolvedFamilyGroupId = params.familyGroupId || params.profileData?.familyGroupId || localExistingStudent?.familyGroupId;
+  const resolvedFamilyGroupName = params.familyGroupName || params.profileData?.familyGroupName || localExistingStudent?.familyGroupName;
+  const resolvedStudentId = params.studentId || params.profileData?.studentId;
+
   // 2. Persist role-specific profile in Firestore users collection (NO PASSWORDS)
   const userProfileDoc: UserProfile = {
     uid: createdUid,
@@ -5584,8 +5592,25 @@ export async function registerFirebaseUserWithProfile(params: RegisterUserParams
     country: params.country || 'USA',
     timezone: params.timezone || 'America/New_York',
     ...(resolvedTutorId ? { tutorId: resolvedTutorId } : {}),
-    ...(params.studentId ? { studentId: params.studentId } : {})
+    ...(resolvedStudentId ? { studentId: resolvedStudentId } : {}),
+    ...(params.studentType ? { studentType: params.studentType } : {}),
+    ...(params.courseType ? { courseType: params.courseType } : {}),
+    ...(params.parentName ? { parentName: params.parentName } : {}),
+    ...(params.parentEmail ? { parentEmail: params.parentEmail.toLowerCase().trim() } : {}),
+    ...(resolvedLinkedIds && resolvedLinkedIds.length > 0 ? { linkedStudentIds: resolvedLinkedIds } : {}),
+    ...(resolvedFamilyGroupId ? { familyGroupId: resolvedFamilyGroupId } : {}),
+    ...(resolvedFamilyGroupName ? { familyGroupName: resolvedFamilyGroupName } : {})
   };
+
+  if (CACHE.systemUsers) {
+    const existingIdx = CACHE.systemUsers.findIndex(u => u.email.toLowerCase() === cleanEmail || u.uid === createdUid);
+    if (existingIdx >= 0) {
+      CACHE.systemUsers[existingIdx] = { ...CACHE.systemUsers[existingIdx], ...userProfileDoc };
+    } else {
+      CACHE.systemUsers.push(userProfileDoc);
+    }
+    saveCachedCollection('systemUsers', CACHE.systemUsers);
+  }
 
   try {
     await setDoc(doc(db, USERS_COL, createdUid), sanitizeFirestoreObject(userProfileDoc), { merge: true });

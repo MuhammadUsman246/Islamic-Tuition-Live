@@ -144,19 +144,22 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         const familyGroupId = getNextSequentialFamilyId(students);
         const familyGroupName = `${name.trim()}'s Family`;
         let linkedStudentIds: string[] = [];
+        let tempStuCache = [...students];
+        let parentOwnStuId: string | undefined;
 
         // 1. If parent is enrolled as student too (Dual Mode)
         if (enrollParentAsStudent) {
-          const parentStuId = getNextSequentialStudentId(students);
+          parentOwnStuId = getNextSequentialStudentId(tempStuCache);
+          tempStuCache.push({ id: 'temp_' + parentOwnStuId, studentId: parentOwnStuId, name: name.trim(), status: 'Active' } as any);
           await addStudent({
-            studentId: parentStuId,
+            studentId: parentOwnStuId,
             name: name.trim(),
             studentType: 'adult',
             email: email.trim().toLowerCase(),
             phone: phone.trim(),
-            parentName: '',
-            parentEmail: '',
-            parentPhone: '',
+            parentName: name.trim(),
+            parentEmail: email.trim().toLowerCase(),
+            parentPhone: phone.trim(),
             parentId: '',
             familyGroupId,
             familyGroupName,
@@ -170,12 +173,11 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
             trialStatus: 'Converted',
             createdAt: new Date().toISOString()
           });
-          linkedStudentIds.push(parentStuId);
+          linkedStudentIds.push(parentOwnStuId);
         }
 
         // 2. Process children list
         const validChildren = childrenList.filter(c => c.name.trim());
-        let tempStuCache = [...students];
         for (const child of validChildren) {
           const childStuId = getNextSequentialStudentId(tempStuCache);
           tempStuCache.push({ id: 'temp_' + childStuId, studentId: childStuId, name: child.name.trim(), status: 'Active' } as any);
@@ -209,10 +211,31 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
             trialStatus: 'Converted',
             createdAt: new Date().toISOString()
           });
+
+          await registerFirebaseUserWithProfile({
+            email: childEmail,
+            password: child.loginPassword || 'quran123',
+            displayName: child.name.trim(),
+            role: 'student',
+            phone: phone.trim(),
+            country,
+            timezone,
+            profileData: {
+              studentId: childStuId,
+              studentType: 'child',
+              familyGroupId,
+              familyGroupName,
+              parentName: name.trim(),
+              parentEmail: email.trim().toLowerCase()
+            }
+          });
         }
 
         profileData = {
           parentName: name.trim(),
+          studentId: parentOwnStuId,
+          studentType: enrollParentAsStudent ? 'adult' : undefined,
+          alsoEnrollAsStudent: enrollParentAsStudent,
           familyGroupId,
           familyGroupName,
           linkedStudentIds,
