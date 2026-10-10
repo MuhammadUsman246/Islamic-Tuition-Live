@@ -6,6 +6,7 @@ interface TutorAttendanceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (record: Omit<TutorAttendanceRecord, 'id'>, id?: string) => Promise<void>;
+  onDelete?: (id: string) => Promise<void>;
   tutors: Tutor[];
   initialRecord?: TutorAttendanceRecord | null;
   markedByRole: 'Admin' | 'Supervisor';
@@ -15,6 +16,7 @@ export const TutorAttendanceModal: React.FC<TutorAttendanceModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onDelete,
   tutors,
   initialRecord,
   markedByRole
@@ -209,21 +211,43 @@ export const TutorAttendanceModal: React.FC<TutorAttendanceModalProps> = ({
           </div>
 
           {/* Actions */}
-          <div className="pt-3 border-t border-[#EAE6DE] flex items-center justify-end space-x-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-[#5A6B61] hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-5 py-2 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
-            >
-              {saving ? 'Saving...' : initialRecord ? 'Update Record' : 'Save Attendance'}
-            </button>
+          <div className="pt-3 border-t border-[#EAE6DE] flex items-center justify-between">
+            {initialRecord && onDelete ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (confirm(`Are you sure you want to delete this shift attendance log for ${initialRecord.tutorName} on ${initialRecord.date}?`)) {
+                    setSaving(true);
+                    try {
+                      await onDelete(initialRecord.id);
+                      onClose();
+                    } finally {
+                      setSaving(false);
+                    }
+                  }
+                }}
+                className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+              >
+                Delete / Reset Log
+              </button>
+            ) : <div />}
+
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold text-[#5A6B61] hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="px-5 py-2 text-xs font-bold text-white bg-[#2D8B5C] hover:bg-[#1E5C3D] rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {saving ? 'Saving...' : initialRecord ? 'Update Record' : 'Save Attendance'}
+              </button>
+            </div>
           </div>
         </form>
       </div>

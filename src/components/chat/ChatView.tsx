@@ -82,7 +82,7 @@ export interface ChannelDef {
   avatarText: string;
 }
 
-export const WHATSAPP_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '🔥'] as const;
+export const CHAT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '🔥'] as const;
 
 interface ChatViewProps {
   initialThreadId?: string;
@@ -208,7 +208,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Real-time unread messages count per channel
   const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
 
-  // WhatsApp Filter Pills: 'all' | 'unread' | 'tutors' | 'students' | 'staff' | 'direct'
+  // Channel Filter Pills: 'all' | 'unread' | 'tutors' | 'students' | 'staff' | 'direct'
   const [filterTab, setFilterTab] = useState<'all' | 'unread' | 'tutors' | 'students' | 'staff' | 'direct'>('all');
 
   // Active Live Call Session Modal State
@@ -228,7 +228,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // WhatsApp Reactions state
+  // Message Reactions state
   const [activeReactionPickerMsgId, setActiveReactionPickerMsgId] = useState<string | null>(null);
   const [activeReactionDetailMsg, setActiveReactionDetailMsg] = useState<ChatMessage | null>(null);
   const [reactionDetailFilter, setReactionDetailFilter] = useState<string>('all');
@@ -593,7 +593,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }, [messages]);
 
-  // Handle WhatsApp-style emoji reaction toggle for all users
+  // Handle emoji reaction toggle for all users
   const handleToggleReaction = async (message: ChatMessage, emoji: string) => {
     setActiveReactionPickerMsgId(null);
     try {
@@ -678,7 +678,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     ));
   }, [messages, inChatSearchQuery]);
 
-  // Group messages by date for WhatsApp date bubbles
+  // Group messages by date
   const groupedMessages = useMemo(() => {
     const groups: { dateLabel: string; items: ChatMessage[] }[] = [];
     displayedMessages.forEach((msg) => {
@@ -701,7 +701,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // ==========================================
-  // VOICE NOTE RECORDING FLOW (CRYSTAL CLEAR WHATSAPP QUALITY AUDIO)
+  // VOICE NOTE RECORDING FLOW (CRYSTAL CLEAR HIGH-FIDELITY SPEECH)
   // ==========================================
   const startRecording = async () => {
     setMicPermissionError(null);
@@ -716,7 +716,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       mediaStreamRef.current = rawStream;
       audioChunksRef.current = [];
 
-      // 2. Select optimal speech container (Opus 48kHz / 64kbps speech profile matching WhatsApp)
+      // 2. Select optimal speech container (Opus 48kHz / 64kbps speech profile)
       const mimeType = getSupportedAudioMimeType();
       const recorderOptions: MediaRecorderOptions = {
         audioBitsPerSecond: 64000
@@ -989,11 +989,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // ==========================================
-  // MESSAGE EDIT & DELETE ACTIONS (STRICTLY ADMIN ONLY)
+  // MESSAGE EDIT & DELETE ACTIONS (AUTHOR OR ADMIN)
   // ==========================================
   const handleStartEditMessage = (msg: ChatMessage) => {
-    if (role !== 'admin') {
-      alert('Security policy: Only Academy Administrators are authorized to edit messages.');
+    const isOwner = msg.senderId === currentUserId;
+    if (role !== 'admin' && !isOwner) {
+      alert('You are only authorized to edit your own messages.');
       return;
     }
     setEditingMessage(msg);
@@ -1001,15 +1002,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const handleSaveEditMessage = async () => {
-    if (role !== 'admin') {
-      alert('Security policy: Only Academy Administrators are authorized to edit messages.');
+    if (!editingMessage || !editingText.trim()) return;
+    const isOwner = editingMessage.senderId === currentUserId;
+    if (role !== 'admin' && !isOwner) {
+      alert('You are only authorized to edit your own messages.');
       return;
     }
-    if (!editingMessage || !editingText.trim()) return;
     const newText = editingText.trim();
     const targetId = editingMessage.id;
     try {
-      await editChatMessage(targetId, newText, role);
+      await editChatMessage(targetId, newText, role, currentUserId);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === targetId
@@ -1025,8 +1027,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const handleDeleteMessage = async (msgId: string) => {
-    if (role !== 'admin') {
-      alert('Security policy: Only Academy Administrators are authorized to delete messages.');
+    const targetMsg = messages.find((m) => m.id === msgId);
+    const isOwner = targetMsg?.senderId === currentUserId;
+    if (role !== 'admin' && !isOwner) {
+      alert('You are only authorized to delete your own messages.');
       return;
     }
     const isConfirm = window.confirm('Are you sure you want to delete this message for everyone in the conversation?');
@@ -1161,7 +1165,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div id="academy_whatsapp_chat" className="max-w-7xl mx-auto space-y-3 font-sans">
+    <div id="academy_chat" className="max-w-7xl mx-auto space-y-3 font-sans">
       {/* Hidden File Inputs for real browser file picking */}
       <input
         type="file"
@@ -1178,10 +1182,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         className="hidden"
       />
 
-      {/* Main WhatsApp-Style Two-Column Container */}
+      {/* Main Two-Column Container */}
       <div className="bg-[#FFFFFF] rounded-2xl border border-[#E9EDEF] shadow-md flex flex-col md:flex-row h-[650px] sm:h-[740px] overflow-hidden">
         {/* ======================================================== */}
-        {/* LEFT COLUMN: WhatsApp Chats Sidebar                      */}
+        {/* LEFT COLUMN: Chats Sidebar                               */}
         {/* ======================================================== */}
         <div className={`w-full md:w-[360px] lg:w-[400px] border-r border-[#E9EDEF] bg-[#FFFFFF] flex-col shrink-0 ${mobileChatView === 'channels' ? 'flex h-full' : 'hidden md:flex'}`}>
           {/* Sidebar Top Header */}
@@ -1267,7 +1271,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           </div>
 
-          {/* WhatsApp Filter Pills */}
+          {/* Category Filter Pills */}
           <div className="px-3 py-2 flex items-center space-x-1.5 border-b border-[#F0F2F5] overflow-x-auto no-scrollbar shrink-0">
             <button
               type="button"
@@ -1622,10 +1626,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         {/* ======================================================== */}
-        {/* RIGHT COLUMN: WhatsApp Chat Window & Wallpaper           */}
+        {/* RIGHT COLUMN: Chat Window & Wallpaper                    */}
         {/* ======================================================== */}
         <div className={`flex-1 flex-col min-w-0 bg-[#EFEAE2] relative ${mobileChatView === 'messages' ? 'flex h-full' : 'hidden md:flex'}`}>
-          {/* Subtle WhatsApp Geometric Doodle Wallpaper */}
+          {/* Subtle Geometric Doodle Wallpaper */}
           <div
             className="absolute inset-0 opacity-[0.07] pointer-events-none bg-repeat"
             style={{
@@ -1823,7 +1827,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
                 {groupedMessages.map((group) => (
                 <div key={group.dateLabel} className="space-y-2.5">
-                  {/* WhatsApp Center Date Bubble */}
+                  {/* Center Date Bubble */}
                   <div className="flex justify-center my-2">
                     <span className="px-3 py-1 rounded-lg bg-[#FFFFFF] shadow-xs text-[11px] font-medium text-[#54656F] border border-[#E9EDEF]/80 uppercase tracking-wide">
                       {group.dateLabel}
@@ -1844,7 +1848,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     const listenedByList = Array.isArray(m.listenedBy) ? m.listenedBy : [];
                     const isListened = listenedByList.length > 0;
 
-                    // WhatsApp Read Receipts:
+                    // Read Receipts:
                     // Seen: Double Blue Check (34B7F1)
                     // Delivered: Double Gray Check (8696A0)
                     // Sent: Single Gray Check (8696A0)
@@ -1874,13 +1878,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               : 'bg-[#FFFFFF] text-[#111B21] rounded-tl-xs'
                           }`}
                         >
-                          {/* WhatsApp Floating Reaction Bar (Quick Emoji Picker) */}
+                          {/* Floating Reaction Bar (Quick Emoji Picker) */}
                           {activeReactionPickerMsgId === m.id && (
                             <div
                               className={`absolute -top-11 ${isMe ? 'right-0' : 'left-0'} z-30 bg-white shadow-xl rounded-full px-2 py-1 border border-gray-200/90 flex items-center space-x-1 animate-in fade-in zoom-in-95 duration-150 select-none`}
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {WHATSAPP_REACTIONS.map((emoji) => {
+                              {CHAT_REACTIONS.map((emoji) => {
                                 const myReaction = m.reactions?.[currentUserId]?.emoji;
                                 const isSelected = myReaction === emoji;
                                 return (
@@ -1902,7 +1906,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
                           {/* Quick Action Toolbar on Hover */}
                           <div className={`absolute top-1.5 ${isMe ? 'left-2 -translate-x-full pr-1.5' : 'right-2 translate-x-full pl-1.5'} hidden group-hover:flex items-center space-x-1 z-20`}>
-                            {/* React with Emoji (WhatsApp Style - Available for ALL Users) */}
+                            {/* React with Emoji */}
                             {!m.deletedForEveryone && (
                               <button
                                 type="button"
@@ -1913,9 +1917,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 className={`p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-gray-600 hover:text-black cursor-pointer transition-colors ${
                                   activeReactionPickerMsgId === m.id ? 'bg-emerald-50 text-[#00A884] border-[#00A884]/40' : ''
                                 }`}
-                                title="React to message (WhatsApp style)"
+                                title="React"
                               >
                                 <Smile className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {/* Message Info (Allowed in student, parent, and admin dashboards; hidden in tutor dashboard per policy) */}
+                            {role !== 'tutor' && !m.deletedForEveryone && (isMe || role === 'admin') && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedMessageInfo(m);
+                                }}
+                                className="p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-gray-600 hover:text-emerald-700 cursor-pointer transition-colors"
+                                title="Message Info"
+                              >
+                                <Info className="w-3.5 h-3.5" />
                               </button>
                             )}
 
@@ -1934,38 +1953,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               </button>
                             )}
 
-                            {/* Edit message (Strict Safety Policy: ONLY Academy Admin can edit messages) */}
-                            {!m.deletedForEveryone && m.text && role === 'admin' && (
+                            {/* Edit message (Allowed for author or admin) */}
+                            {!m.deletedForEveryone && m.text && (isMe || role === 'admin') && (
                               <button
                                 type="button"
                                 onClick={() => handleStartEditMessage(m)}
                                 className="p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-blue-600 hover:bg-blue-50 cursor-pointer"
-                                title="Edit message (Admin only)"
+                                title="Edit message"
                               >
                                 <Pencil className="w-3.5 h-3.5" />
                               </button>
                             )}
 
-                            {/* Delete message (Strict Safety Policy: ONLY Academy Admin can delete messages) */}
-                            {!m.deletedForEveryone && role === 'admin' && (
+                            {/* Delete message (Allowed for author or admin) */}
+                            {!m.deletedForEveryone && (isMe || role === 'admin') && (
                               <button
                                 type="button"
                                 onClick={() => handleDeleteMessage(m.id)}
                                 className="p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-rose-600 hover:bg-rose-50 cursor-pointer"
-                                title="Delete message for everyone (Admin only)"
+                                title="Delete message for everyone"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-
-                            {(isMe || role === 'admin') && !m.deletedForEveryone && (
-                              <button
-                                type="button"
-                                onClick={() => setSelectedMessageInfo(m)}
-                                className="p-1 rounded-md bg-white/90 shadow-xs border border-gray-200 text-gray-600 hover:text-black cursor-pointer"
-                                title="Message Info (Seen & Delivered)"
-                              >
-                                <Info className="w-3.5 h-3.5 text-[#00A884]" />
                               </button>
                             )}
                           </div>
@@ -2106,23 +2114,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             )}
 
                             {isMe && (
-                              <div
-                                onClick={() => setSelectedMessageInfo(m)}
-                                className="flex items-center ml-0.5 cursor-pointer hover:opacity-80"
-                                title="Click to view message delivery info"
-                              >
-                                {isSeen ? (
-                                  <CheckCheck className="w-3.5 h-3.5 text-[#34B7F1]" title="Seen / Read by recipient(s) (Double Blue Ticks)" />
-                                ) : isDelivered ? (
-                                  <CheckCheck className="w-3.5 h-3.5 text-[#8696A0]" title="Delivered to recipient device(s) (Double Gray Ticks)" />
+                              <div className="flex items-center ml-0.5">
+                                {role === 'tutor' ? (
+                                  // In tutor dashboard: ONLY see green ticks when Admin read their message
+                                  (seenByList.some(id => id === 'admin' || id.startsWith('admin') || id === 'supervisor') || m.read) ? (
+                                    <CheckCheck className="w-3.5 h-3.5 text-[#00A884]" title="Seen by Admin" />
+                                  ) : isDelivered ? (
+                                    <CheckCheck className="w-3.5 h-3.5 text-[#8696A0]" title="Delivered" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5 text-[#8696A0]" title="Sent" />
+                                  )
                                 ) : (
-                                  <Check className="w-3.5 h-3.5 text-[#8696A0]" title="Sent to server (Single Gray Tick)" />
+                                  // In student, parent, and admin dashboards: see blue ticks when another person has read
+                                  (seenByList.some(id => id !== m.senderId) || m.read) ? (
+                                    <CheckCheck className="w-3.5 h-3.5 text-[#53bdeb]" title="Read" />
+                                  ) : isDelivered ? (
+                                    <CheckCheck className="w-3.5 h-3.5 text-[#8696A0]" title="Delivered" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5 text-[#8696A0]" title="Sent" />
+                                  )
                                 )}
                               </div>
                             )}
                           </div>
 
-                          {/* WhatsApp Reaction Pill Badge on Message Bubble */}
+                          {/* Reaction Pill Badge on Message Bubble */}
                           {(() => {
                             const reactionsMap = m.reactions || {};
                             const entries: ChatReaction[] = Object.values(reactionsMap);
@@ -2349,7 +2365,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <Paperclip className="w-5 h-5" />
               </button>
 
-              {/* WhatsApp Attachment Popup Menu */}
+              {/* Attachment Popup Menu */}
               {showAttachMenu && (
                 <div className="absolute bottom-14 left-0 bg-[#FFFFFF] rounded-2xl shadow-xl border border-[#E9EDEF] p-2 space-y-1 w-48 z-30 animate-in fade-in slide-in-from-bottom-2">
                   <button
@@ -2412,122 +2428,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </div>
 
-      {/* ======================================================== */}
-      {/* WHATSAPP MESSAGE INFO MODAL                              */}
-      {/* ======================================================== */}
-      {selectedMessageInfo && (selectedMessageInfo.senderId === currentUserId || role === 'admin') && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
-          onClick={() => setSelectedMessageInfo(null)}
-        >
-          <div
-            className="bg-[#FFFFFF] rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl border border-[#E9EDEF]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b pb-3">
-              <div className="flex items-center space-x-2">
-                <Info className="w-5 h-5 text-[#00A884]" />
-                <h4 className="font-bold text-sm text-[#111B21]">Message Info</h4>
-              </div>
-              <button
-                onClick={() => setSelectedMessageInfo(null)}
-                className="p-1 text-[#8696A0] hover:text-[#111B21] rounded-md cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            {/* Message Bubble Summary */}
-            <div className="p-3 bg-[#F0F2F5] rounded-xl border border-[#E9EDEF] text-xs space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-[#111B21]">{selectedMessageInfo.senderName}</span>
-                <span className="text-[10px] font-mono text-[#54656F]">{formatMessageTimestamp(selectedMessageInfo.timestamp)}</span>
-              </div>
-              <p className="text-[#111B21] whitespace-pre-wrap">{selectedMessageInfo.text || 'Attachment message'}</p>
-            </div>
-
-            {/* Read & Delivery Details */}
-            <div className="space-y-3 text-xs max-h-64 overflow-y-auto pr-1">
-              {/* 1. Read By / Seen By */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between font-bold text-[#111B21]">
-                  <div className="flex items-center gap-1.5 text-[#34B7F1]">
-                    <CheckCheck className="w-4 h-4" />
-                    <span>Read by</span>
-                  </div>
-                  <span className="text-[11px] text-[#54656F]">
-                    {selectedMessageInfo.seenBy?.length || 1} participant(s)
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  {selectedMessageInfo.seenBy && selectedMessageInfo.seenBy.length > 0 ? (
-                    selectedMessageInfo.seenBy.map((uid) => {
-                      const timeStr = selectedMessageInfo.seenTimestamps?.[uid];
-                      const nameMatch = getThreadParticipants(selectedMessageInfo.threadId).find(p => p.id === uid)?.name;
-                      return (
-                        <div key={uid} className="flex items-center justify-between p-2 rounded-lg bg-sky-50/60 border border-sky-100">
-                          <span className="font-semibold text-[#111B21]">
-                            {uid === currentUserId ? 'You (Sender)' : nameMatch || `User ${uid}`}
-                          </span>
-                          <span className="text-[10px] font-mono text-sky-800">
-                            {timeStr ? formatMessageTimestamp(timeStr) : 'Read'}
-                          </span>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-[11px] text-[#54656F] italic pl-2">No read receipts yet</p>
-                  )}
-                </div>
-              </div>
-
-              {/* 2. Delivered To */}
-              <div className="space-y-1.5 pt-2 border-t border-[#F0F2F5]">
-                <div className="flex items-center justify-between font-bold text-[#111B21]">
-                  <div className="flex items-center gap-1.5 text-[#8696A0]">
-                    <CheckCheck className="w-4 h-4" />
-                    <span>Delivered to</span>
-                  </div>
-                  <span className="text-[11px] text-[#54656F]">
-                    {selectedMessageInfo.deliveredTo?.length || 1} participant(s)
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  {selectedMessageInfo.deliveredTo && selectedMessageInfo.deliveredTo.length > 0 ? (
-                    selectedMessageInfo.deliveredTo.map((uid) => {
-                      const timeStr = selectedMessageInfo.deliveredTimestamps?.[uid];
-                      const nameMatch = getThreadParticipants(selectedMessageInfo.threadId).find(p => p.id === uid)?.name;
-                      return (
-                        <div key={uid} className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-100">
-                          <span className="font-medium text-[#111B21]">
-                            {uid === currentUserId ? 'You (Sender)' : nameMatch || `User ${uid}`}
-                          </span>
-                          <span className="text-[10px] font-mono text-[#54656F]">
-                            {timeStr ? formatMessageTimestamp(timeStr) : 'Delivered'}
-                          </span>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-[11px] text-[#54656F] italic pl-2">Delivered to server</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2 border-t">
-              <button
-                type="button"
-                onClick={() => setSelectedMessageInfo(null)}
-                className="px-4 py-1.5 bg-[#00A884] hover:bg-[#008f6f] text-white rounded-lg text-xs font-semibold cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ======================================================== */}
       {/* MICROPHONE PERMISSION GUIDE MODAL                        */}
@@ -2787,7 +2688,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* WHATSAPP REACTION DETAIL BREAKDOWN MODAL                 */}
+      {/* REACTION DETAIL BREAKDOWN MODAL                          */}
       {/* ======================================================== */}
       {activeReactionDetailMsg && (
         <div
@@ -2922,6 +2823,182 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MESSAGE INFO DIALOG (READ BY & DELIVERED TO)              */}
+      {/* ======================================================== */}
+      {selectedMessageInfo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-2xs p-4 animate-in fade-in duration-150"
+          onClick={() => setSelectedMessageInfo(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-[#E9EDEF] space-y-4 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#00A884] flex items-center justify-center">
+                  <Info className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#111B21]">Message Info</h3>
+                  <p className="text-[11px] text-[#667781]">Delivery & Read Receipts</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedMessageInfo(null)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Message Preview Snippet */}
+            <div className="p-3 bg-[#F0F2F5] rounded-xl text-xs space-y-1">
+              <p className="text-gray-800 line-clamp-3 select-text italic">
+                "{selectedMessageInfo.text || (selectedMessageInfo.attachment ? selectedMessageInfo.attachment.name : 'Attachment')}"
+              </p>
+              <div className="flex items-center justify-between text-[10px] text-gray-500 pt-1 border-t border-gray-200/60">
+                <span>Sent {new Date(selectedMessageInfo.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="font-mono text-[9px] text-gray-400">{new Date(selectedMessageInfo.timestamp).toLocaleDateString()}</span>
+              </div>
+            </div>
+
+            {(() => {
+              const participants = getThreadParticipants(selectedMessageInfo.threadId || activeThreadId);
+              // CRITICAL REQUIREMENT: Strictly exclude message sender and current user from "Read by" and "Delivered to"
+              const otherParticipants = participants.filter(
+                p => p.id !== selectedMessageInfo.senderId && p.id !== currentUserId
+              );
+
+              const seenList = selectedMessageInfo.seenBy || [];
+              const deliveredList = selectedMessageInfo.deliveredTo || [];
+
+              // Other people who read the message
+              const readers = otherParticipants.filter(p =>
+                seenList.includes(p.id) ||
+                (p.role === 'admin' && selectedMessageInfo.read) ||
+                (p.id.toLowerCase() === 'admin' && selectedMessageInfo.read)
+              );
+
+              // Other people who received the message but haven't read it yet
+              const deliveredOnly = otherParticipants.filter(p =>
+                !readers.some(r => r.id === p.id) &&
+                (deliveredList.includes(p.id) || selectedMessageInfo.delivered)
+              );
+
+              return (
+                <div className="space-y-4 max-h-72 overflow-y-auto pr-1">
+                  {/* 1. READ BY SECTION (Double Blue Ticks) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-800">
+                      <CheckCheck className="w-4 h-4 text-[#53bdeb]" />
+                      <span>Read by</span>
+                      <span className="text-[10px] font-mono text-gray-400">({readers.length})</span>
+                    </div>
+
+                    {readers.length === 0 ? (
+                      <div className="p-2.5 bg-gray-50 rounded-xl text-xs text-gray-500 italic flex items-center gap-2">
+                        <CheckCheck className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                        <span>No other participant has read this message yet.</span>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-100 bg-gray-50/70 rounded-xl p-2 border border-gray-100 space-y-1">
+                        {readers.map(p => {
+                          const seenTime = selectedMessageInfo.seenTimestamps?.[p.id] || selectedMessageInfo.readAt;
+                          const formattedSeen = seenTime
+                            ? new Date(seenTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                            : 'Seen';
+
+                          return (
+                            <div key={p.id} className="flex items-center justify-between py-1.5 px-1">
+                              <div className="flex items-center space-x-2">
+                                <div className="w-7 h-7 rounded-full bg-sky-100 text-[#0284C7] flex items-center justify-center font-bold text-[11px]">
+                                  {p.name.slice(0, 1).toUpperCase()}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-900">{p.name}</p>
+                                  <span className="text-[9px] uppercase font-mono px-1 py-0.2 rounded bg-gray-200 text-gray-700">
+                                    {p.role}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-[10px] text-sky-600 font-medium flex items-center gap-1">
+                                  <CheckCheck className="w-3 h-3 text-[#53bdeb]" /> {formattedSeen}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. DELIVERED TO SECTION (Double Gray Ticks) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-gray-800">
+                      <CheckCheck className="w-4 h-4 text-[#8696A0]" />
+                      <span>Delivered to</span>
+                      <span className="text-[10px] font-mono text-gray-400">({deliveredOnly.length})</span>
+                    </div>
+
+                    {deliveredOnly.length === 0 ? (
+                      <div className="p-2.5 bg-gray-50 rounded-xl text-xs text-gray-500 italic flex items-center gap-2">
+                        <Check className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                        <span>{readers.length > 0 ? 'All delivered recipients have read the message.' : 'Delivered to server.'}</span>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-100 bg-gray-50/70 rounded-xl p-2 border border-gray-100 space-y-1">
+                        {deliveredOnly.map(p => {
+                          const delTime = selectedMessageInfo.deliveredTimestamps?.[p.id] || selectedMessageInfo.deliveredAt;
+                          const formattedDel = delTime
+                            ? new Date(delTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                            : 'Delivered';
+
+                          return (
+                            <div key={p.id} className="flex items-center justify-between py-1.5 px-1">
+                              <div className="flex items-center space-x-2">
+                                <div className="w-7 h-7 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center font-bold text-[11px]">
+                                  {p.name.slice(0, 1).toUpperCase()}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-900">{p.name}</p>
+                                  <span className="text-[9px] uppercase font-mono px-1 py-0.2 rounded bg-gray-200 text-gray-700">
+                                    {p.role}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1">
+                                  <CheckCheck className="w-3 h-3 text-[#8696A0]" /> {formattedDel}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="pt-2 border-t border-gray-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedMessageInfo(null)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserPlus, Shield, CheckCircle, Copy, AlertCircle } from 'lucide-react';
+import { X, UserPlus, Shield, CheckCircle, Copy, AlertCircle, Users, Plus, Trash2, GraduationCap, Phone, Globe, Clock } from 'lucide-react';
 import { UserRole, Tutor, Student } from '../../types';
-import { registerFirebaseUserWithProfile, getNextSequentialStudentId } from '../../services/dataService';
+import { registerFirebaseUserWithProfile, getNextSequentialStudentId, getNextSequentialFamilyId, addStudent } from '../../services/dataService';
+import { generateStudentEmail } from '../../utils/studentEmail';
 import { SUPPORTED_COUNTRIES, COMMON_TIMEZONES, detectUserLocation } from '../../utils/timezone';
 import { isRemoteCustomShiftTutor } from '../../utils/tutorPrivacy';
 
@@ -34,6 +35,37 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   const [assignedTutorId, setAssignedTutorId] = useState('Unassigned');
   const [parentName, setParentName] = useState('');
   const [parentEmail, setParentEmail] = useState('');
+
+  // Parent specific dual mode & multi-child
+  const [enrollParentAsStudent, setEnrollParentAsStudent] = useState(false);
+  const [phone, setPhone] = useState('');
+  const [childrenList, setChildrenList] = useState<Array<{
+    name: string;
+    age: number | '';
+    courseType: string;
+    loginPassword: string;
+    useCustomEmail: boolean;
+    loginEmail: string;
+  }>>([
+    { name: '', age: '', courseType: 'Nazra with Tajweed', loginPassword: 'quran123', useCustomEmail: false, loginEmail: '' }
+  ]);
+
+  const handleAddChild = () => {
+    setChildrenList(prev => [
+      ...prev,
+      { name: '', age: '', courseType: 'Nazra with Tajweed', loginPassword: 'quran123', useCustomEmail: false, loginEmail: '' }
+    ]);
+  };
+
+  const handleRemoveChild = (index: number) => {
+    if (childrenList.length > 1) {
+      setChildrenList(prev => prev.filter((_, i) => i !== index));
+    }
+  };
+
+  const handleUpdateChild = (index: number, updates: Partial<typeof childrenList[0]>) => {
+    setChildrenList(prev => prev.map((c, i) => i === index ? { ...c, ...updates } : c));
+  };
 
   // Tutor specific
   const [tutorId, setTutorId] = useState(`Tutor ${availableTutors.length + 1}`);
@@ -109,9 +141,82 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           department
         };
       } else if (role === 'parent') {
+        const familyGroupId = getNextSequentialFamilyId(students);
+        const familyGroupName = `${name.trim()}'s Family`;
+        let linkedStudentIds: string[] = [];
+
+        // 1. If parent is enrolled as student too (Dual Mode)
+        if (enrollParentAsStudent) {
+          const parentStuId = getNextSequentialStudentId(students);
+          await addStudent({
+            studentId: parentStuId,
+            name: name.trim(),
+            studentType: 'adult',
+            email: email.trim().toLowerCase(),
+            phone: phone.trim(),
+            parentName: '',
+            parentEmail: '',
+            parentPhone: '',
+            parentId: '',
+            familyGroupId,
+            familyGroupName,
+            assignedTutorId: 'Tutor 1',
+            country,
+            timezone,
+            courseType: 'Quran Reading / Nazra',
+            status: 'Active',
+            trialSessionsCompleted: 0,
+            trialSessionsTotal: 5,
+            trialStatus: 'Converted',
+            createdAt: new Date().toISOString()
+          });
+          linkedStudentIds.push(parentStuId);
+        }
+
+        // 2. Process children list
+        const validChildren = childrenList.filter(c => c.name.trim());
+        let tempStuCache = [...students];
+        for (const child of validChildren) {
+          const childStuId = getNextSequentialStudentId(tempStuCache);
+          tempStuCache.push({ id: 'temp_' + childStuId, studentId: childStuId, name: child.name.trim(), status: 'Active' } as any);
+
+          const childEmail = child.useCustomEmail && child.loginEmail.trim()
+            ? child.loginEmail.trim().toLowerCase()
+            : generateStudentEmail(child.name, childStuId);
+
+          linkedStudentIds.push(childStuId);
+
+          await addStudent({
+            studentId: childStuId,
+            name: child.name.trim(),
+            age: child.age === '' ? undefined : Number(child.age),
+            studentType: 'child',
+            email: childEmail,
+            phone: phone.trim(),
+            parentName: name.trim(),
+            parentEmail: email.trim().toLowerCase(),
+            parentPhone: phone.trim(),
+            parentId: '',
+            familyGroupId,
+            familyGroupName,
+            assignedTutorId: 'Tutor 1',
+            country,
+            timezone,
+            courseType: child.courseType as any,
+            status: 'Active',
+            trialSessionsCompleted: 0,
+            trialSessionsTotal: 5,
+            trialStatus: 'Converted',
+            createdAt: new Date().toISOString()
+          });
+        }
+
         profileData = {
-          parentName: name,
-          linkedStudentIds: [studentId]
+          parentName: name.trim(),
+          familyGroupId,
+          familyGroupName,
+          linkedStudentIds,
+          enrollParentAsStudent
         };
       }
 
@@ -120,6 +225,9 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         password,
         displayName: name,
         role,
+        phone,
+        country,
+        timezone,
         profileData
       });
 
@@ -265,17 +373,39 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-[#161F1A] mb-1">
-                    Email Address (Login Identity)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-[#161F1A]">
+                      Email Address (Login Identity)
+                    </label>
+                    {role === 'student' && (
+                      <button
+                        type="button"
+                        onClick={() => setEmail(generateStudentEmail(name, studentId))}
+                        className="text-[10px] text-[#2D8B5C] hover:underline font-semibold cursor-pointer"
+                        title="Generate branded student email (e.g. ali.stu101@islamictuition.us)"
+                      >
+                        ⚡ Auto-generate ({generateStudentEmail(name, studentId)})
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="user@islamictuition.us"
+                    placeholder={role === 'student' ? generateStudentEmail(name, studentId) : 'user@islamictuition.us'}
                     className="w-full border border-[#D5D0C6] rounded-lg p-2 bg-white font-mono"
                   />
+                  {role === 'student' && !email && name.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setEmail(generateStudentEmail(name, studentId))}
+                      className="mt-1 text-[11px] text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <span className="text-[10px] text-gray-500">Recommended:</span>
+                      <span className="font-bold">{generateStudentEmail(name, studentId)}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -480,6 +610,172 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                       onChange={(e) => setDepartment(e.target.value)}
                       className="w-full border border-[#D5D0C6] rounded-lg p-1.5 bg-white"
                     />
+                  </div>
+                </div>
+              )}
+
+              {role === 'parent' && (
+                <div className="space-y-3 pt-3 border-t border-[#E3DFD7]">
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Users className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>Unified Family Session & Multi-Child Enrollment</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-800 leading-relaxed">
+                      Enroll one or multiple children under a single Family ID. As a parent, you will manage all sibling dashboards, lesson reports, and combined tuition payments under one unified login.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-[#FAF9F7] border border-[#D5D0C6] rounded-xl">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enrollParentAsStudent}
+                        onChange={(e) => setEnrollParentAsStudent(e.target.checked)}
+                        className="rounded text-[#2D8B5C] focus:ring-[#2D8B5C] w-4 h-4 mt-0.5"
+                      />
+                      <div className="text-xs">
+                        <span className="font-bold text-gray-900 block">🎓 Enroll Parent as Student Too (Dual Mode)</span>
+                        <span className="text-gray-600 leading-tight block text-[11px]">
+                          Check this if you are also attending classes as a student learner. The system will assign you a student ID along with your parent role, enabling a toggle in your dashboard to switch between Student Mode and Parent Mode.
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <div>
+                      <h4 className="font-bold text-gray-900 text-xs flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-[#2D8B5C]" />
+                        <span>Enrolling Children ({childrenList.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-gray-500">
+                        Add all children who will attend classes under your unified family session
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddChild}
+                      className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#1E5C3D] border border-emerald-200 rounded-lg font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Sibling</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {childrenList.map((child, index) => (
+                      <div
+                        key={index}
+                        className="p-3.5 rounded-xl border border-gray-200 bg-[#FAF9F7] space-y-3 relative"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-gray-800 text-xs flex items-center gap-1.5">
+                            <span className="w-5 h-5 rounded-full bg-[#1E5C3D] text-white flex items-center justify-center text-[10px] font-mono">
+                              {index + 1}
+                            </span>
+                            <span>Child #{index + 1} Profile</span>
+                          </span>
+                          {childrenList.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveChild(index)}
+                              className="text-rose-600 hover:text-rose-800 p-1 rounded-md hover:bg-rose-50 cursor-pointer"
+                              title="Remove child"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div className="sm:col-span-2">
+                            <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                              Child Full Name *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={child.name}
+                              onChange={(e) => handleUpdateChild(index, { name: e.target.value })}
+                              placeholder="e.g. Zayd Ahmed"
+                              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                              Age (Years)
+                            </label>
+                            <input
+                              type="number"
+                              min={3}
+                              max={25}
+                              value={child.age}
+                              onChange={(e) => handleUpdateChild(index, { age: e.target.value === '' ? '' : Number(e.target.value) })}
+                              placeholder="e.g. 8"
+                              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                              Course / Curriculum
+                            </label>
+                            <select
+                              value={child.courseType}
+                              onChange={(e) => handleUpdateChild(index, { courseType: e.target.value })}
+                              className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                            >
+                              <option value="Nazra with Tajweed">Nazra with Tajweed</option>
+                              <option value="Hifz ul Quran">Hifz ul Quran</option>
+                              <option value="Tafseer & Islamic Studies">Tafseer & Islamic Studies</option>
+                              <option value="Quranic Arabic Basics">Quranic Arabic Basics</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                              Child Login PIN / Password
+                            </label>
+                            <input
+                              type="text"
+                              value={child.loginPassword}
+                              onChange={(e) => handleUpdateChild(index, { loginPassword: e.target.value })}
+                              placeholder="Default: quran123"
+                              className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="pt-1">
+                          <label className="flex items-center gap-2 cursor-pointer text-[11px] text-gray-600">
+                            <input
+                              type="checkbox"
+                              checked={child.useCustomEmail}
+                              onChange={(e) => handleUpdateChild(index, { useCustomEmail: e.target.checked })}
+                              className="rounded text-[#2D8B5C] focus:ring-[#2D8B5C]"
+                            />
+                            <span>Child has their own personal email address</span>
+                          </label>
+                          {child.useCustomEmail ? (
+                            <input
+                              type="email"
+                              value={child.loginEmail}
+                              onChange={(e) => handleUpdateChild(index, { loginEmail: e.target.value })}
+                              placeholder="childsownemail@gmail.com"
+                              className="w-full mt-1.5 px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                            />
+                          ) : (
+                            <p className="text-[10px] text-gray-500 mt-1 italic">
+                              ✨ Academy assigns unique branded login email (e.g. <strong className="font-mono text-[#1E5C3D]">child.stu101@islamictuition.us</strong>). Real email inbox not required for kids.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

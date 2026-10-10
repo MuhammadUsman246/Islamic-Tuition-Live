@@ -56,6 +56,8 @@ import {
   loadOlderLessonsArchive
 } from '../../services/dataService';
 import { TutorAttendanceModal } from '../modals/TutorAttendanceModal';
+import { TutorModal } from '../modals/TutorModal';
+import { TutorShiftsAttendanceManager } from '../common/TutorShiftsAttendanceManager';
 import { LessonMaterialEditModal } from '../modals/LessonMaterialEditModal';
 import { LessonEditModal } from '../modals/LessonEditModal';
 import { LessonModal } from '../modals/LessonModal';
@@ -120,6 +122,10 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   const [tutorObserveSearch, setTutorObserveSearch] = useState<string>('');
   const [tutorObserveStatusFilter, setTutorObserveStatusFilter] = useState<'all' | 'running' | 'tutor_waiting' | 'student_waiting' | 'scheduled_now' | 'idle'>('all');
   const [copiedLinkTutorId, setCopiedLinkTutorId] = useState<string | null>(null);
+
+  // Supervisor Tutor Shift Schedule Modal state
+  const [isSupervisorTutorModalOpen, setIsSupervisorTutorModalOpen] = useState<boolean>(false);
+  const [selectedSupervisorTutorForModal, setSelectedSupervisorTutorForModal] = useState<Tutor | null>(null);
 
   // Real-time live status map polled from backend server
   const [liveRoomsStatusMap, setLiveRoomsStatusMap] = useState<Record<string, LiveRoomStatusItem>>({});
@@ -398,7 +404,9 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
   const [supervisorTimeMode, setSupervisorTimeMode] = useState<'all' | 'monthly' | '60days' | 'weekly' | 'custom'>('weekly');
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [supervisorStudentId, setSupervisorStudentId] = useState<string>('all');
-  const [supervisorAttendanceSubTab, setSupervisorAttendanceSubTab] = useState<'students' | 'tutors'>('students');
+  const [supervisorAttendanceSubTab, setSupervisorAttendanceSubTab] = useState<'tutors' | 'students'>('tutors');
+  const [supervisorAttPeriod, setSupervisorAttPeriod] = useState<'7days' | '30days' | '60days' | 'all'>('7days');
+  const [isLoadingOlderAtt, setIsLoadingOlderAtt] = useState<boolean>(false);
   const [supervisorStudentAttFilter, setSupervisorStudentAttFilter] = useState<string>('all');
   const [supervisorStatusAttFilter, setSupervisorStatusAttFilter] = useState<'all' | 'Present' | 'Late' | 'Absent' | 'Excused'>('all');
   const [supervisorStudentAttSearchQuery, setSupervisorStudentAttSearchQuery] = useState<string>('');
@@ -465,6 +473,12 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
 
   const filteredSupervisorStudentAttendance = React.useMemo(() => {
     return unifiedSupervisorStudentAttendance.filter(rec => {
+      // 1. Date window filter (Default to Last 7 Days)
+      if (supervisorAttPeriod !== 'all') {
+        const days = supervisorAttPeriod === '7days' ? 7 : supervisorAttPeriod === '30days' ? 30 : 60;
+        const cutoff = getRelativeOperationalDate(-days);
+        if (rec.date && rec.date < cutoff) return false;
+      }
       if (supervisorStudentAttFilter !== 'all' && rec.studentId !== supervisorStudentAttFilter) return false;
       if (supervisorStatusAttFilter !== 'all' && rec.status !== supervisorStatusAttFilter) return false;
       if (supervisorStudentAttSearchQuery.trim()) {
@@ -477,7 +491,14 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
       }
       return true;
     });
-  }, [unifiedSupervisorStudentAttendance, supervisorStudentAttFilter, supervisorStatusAttFilter, supervisorStudentAttSearchQuery]);
+  }, [unifiedSupervisorStudentAttendance, supervisorAttPeriod, supervisorStudentAttFilter, supervisorStatusAttFilter, supervisorStudentAttSearchQuery]);
+
+  const displayedTutorAttendance = React.useMemo(() => {
+    if (supervisorAttPeriod === 'all') return tutorAttendance;
+    const days = supervisorAttPeriod === '7days' ? 7 : supervisorAttPeriod === '30days' ? 30 : 60;
+    const cutoff = getRelativeOperationalDate(-days);
+    return (tutorAttendance || []).filter(ta => !ta.date || ta.date >= cutoff);
+  }, [tutorAttendance, supervisorAttPeriod]);
 
   const supervisorStudentAttStats = React.useMemo(() => {
     const base = filteredSupervisorStudentAttendance;
@@ -995,6 +1016,25 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                       </div>
                     )}
 
+                    {/* Tutor Official Shift Timing */}
+                    <div className="flex items-center justify-between text-[11px] text-[#5A6B61] bg-[#FAF9F7] px-2.5 py-1.5 rounded-lg border border-[#E3DFD7]">
+                      <span className="flex items-center gap-1 font-mono">
+                        <Clock className="w-3 h-3 text-[#2D8B5C]" />
+                        Shift: <strong className="text-[#161F1A]">{t.shiftStartTimePKT || '12:30 AM'} – {t.shiftEndTimePKT || '07:00 AM'} PKT</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSupervisorTutorForModal(t);
+                          setIsSupervisorTutorModalOpen(true);
+                        }}
+                        className="text-[10px] text-[#2D8B5C] font-bold hover:underline cursor-pointer"
+                        title="Adjust tutor shift hours & days"
+                      >
+                        Edit Hours
+                      </button>
+                    </div>
+
                     {/* Stats Metrics */}
                     <div className="grid grid-cols-2 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">
                       <div className="bg-[#FAF9F7] p-2 rounded-lg">
@@ -1015,13 +1055,13 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                       disabled={isConnectingObserver}
                       onClick={() => handleEnterAndObserveClass(t)}
                       className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer disabled:opacity-50 active:scale-95 ring-2 ring-emerald-400/20"
-                      title="Enter this tutor's live classroom in 100% Stealth Mode (invisible to Tutor & Student)"
+                      title="Enter this tutor's live classroom as Supervisor with full observation controls"
                     >
                       <Eye className="w-4 h-4 text-emerald-200" />
                       <span>
                         {isConnectingObserver && activeObservingTutor?.tutorId === t.tutorId
-                          ? 'Connecting Stealth Mode...'
-                          : '🕵️ Enter & Observe (Stealth Supervisor)'}
+                          ? 'Connecting Observer...'
+                          : 'Observe — Supervisor'}
                       </span>
                     </button>
 
@@ -1203,34 +1243,46 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
               </p>
             </div>
 
-            {/* Sub-tab Switcher */}
+            {/* Sub-tab Switcher: Tutor Shifts Attendance FIRST by default */}
             <div className="inline-flex rounded-lg border border-[#D5D0C6] p-0.5 bg-[#FAF9F7] text-xs">
-              <button
-                type="button"
-                onClick={() => setSupervisorAttendanceSubTab('students')}
-                className={`px-3 py-1.5 rounded-md font-semibold transition-all cursor-pointer ${
-                  supervisorAttendanceSubTab === 'students'
-                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
-                    : 'text-[#5A6B61] hover:text-[#161F1A]'
-                }`}
-              >
-                🎓 Student Class Attendance
-              </button>
               <button
                 type="button"
                 onClick={() => setSupervisorAttendanceSubTab('tutors')}
                 className={`px-3 py-1.5 rounded-md font-semibold transition-all cursor-pointer ${
                   supervisorAttendanceSubTab === 'tutors'
-                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs font-bold'
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
                 }`}
               >
-                ⏰ Tutor Shifts & Attendance
+                ⏰ Tutor Shifts & Attendance (Default)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSupervisorAttendanceSubTab('students')}
+                className={`px-3 py-1.5 rounded-md font-semibold transition-all cursor-pointer ${
+                  supervisorAttendanceSubTab === 'students'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs font-bold'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                🎓 Student Class Attendance
               </button>
             </div>
           </div>
 
-          {supervisorAttendanceSubTab === 'students' ? (
+          {supervisorAttendanceSubTab === 'tutors' ? (
+            /* Tutor Shifts & Lateness Attendance Manager */
+            <TutorShiftsAttendanceManager
+              tutors={inOfficeTutors}
+              tutorAttendance={tutorAttendance}
+              role="Supervisor"
+              onRefreshData={onRefreshData}
+              onEditTutorShiftSchedule={(tutor) => {
+                setSelectedSupervisorTutorForModal(tutor);
+                setIsSupervisorTutorModalOpen(true);
+              }}
+            />
+          ) : (
             <div className="space-y-4">
               {/* Filter Panel & Stats */}
               <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
@@ -1295,23 +1347,58 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Status Pills */}
-                <div className="flex items-center space-x-1.5 pt-1 border-t border-[#EAE6DE]">
-                  <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
-                  {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setSupervisorStatusAttFilter(st)}
-                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                        supervisorStatusAttFilter === st
-                          ? 'bg-[#2D8B5C] text-white shadow-2xs'
-                          : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
-                      }`}
-                    >
-                      {st === 'all' ? 'All Records' : st}
-                    </button>
-                  ))}
+                {/* Period & Status Filter Pills */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-[#EAE6DE]">
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                    <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Time Period:</span>
+                    {(['7days', '30days', '60days', 'all'] as const).map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={async () => {
+                          setSupervisorAttPeriod(p);
+                          if (p !== '7days') {
+                            setIsLoadingOlderAtt(true);
+                            try {
+                              const days = p === '30days' ? 35 : p === '60days' ? 65 : 180;
+                              await loadOlderLessonsArchive({ daysBack: days });
+                              if (onRefreshData) await onRefreshData();
+                            } finally {
+                              setIsLoadingOlderAtt(false);
+                            }
+                          }
+                        }}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          supervisorAttPeriod === p
+                            ? 'bg-[#1E5C3D] text-white shadow-2xs'
+                            : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                        }`}
+                      >
+                        {p === '7days' ? 'Last 7 Days (Default)' : p === '30days' ? 'Last 30 Days' : p === '60days' ? 'Last 60 Days' : 'All Records'}
+                      </button>
+                    ))}
+                    {isLoadingOlderAtt && (
+                      <span className="text-[10px] text-emerald-700 animate-pulse font-medium">Fetching history...</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                    <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Status:</span>
+                    {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setSupervisorStatusAttFilter(st)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          supervisorStatusAttFilter === st
+                            ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                            : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                        }`}
+                      >
+                        {st === 'all' ? 'All' : st}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1375,124 +1462,6 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
                     </table>
                   </div>
                 )}
-              </div>
-            </div>
-          ) : (
-            /* Tutor Shifts Audit */
-            <div className="space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h4 className="text-sm font-bold text-[#161F1A]">Tutor Shift Punctuality &amp; Lateness</h4>
-                <button
-                  onClick={() => {
-                    setSelectedAttendanceRecord(null);
-                    setIsAttendanceModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-bold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Record Tutor Attendance</span>
-                </button>
-              </div>
-
-              {/* Monthly Attendance Summary per Tutor (Item 13) */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
-                  Faculty Monthly Attendance Summaries
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  {inOfficeTutors.map(t => {
-                    const s = tutorSummaryMap[t.tutorId] || { total: 0, present: 0, absent: 0, late: 0, excused: 0 };
-                    return (
-                      <div key={t.id} className="bg-white p-4 rounded-xl border border-[#E3DFD7] shadow-xs space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-1.5">
-                            <span className="text-xs font-bold text-[#2D8B5C]">{t.tutorId}</span>
-                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.availabilityStatus === 'Available' ? 'bg-[#25D366] animate-pulse' : 'bg-amber-500'}`} title={t.availabilityStatus || 'Busy'} />
-                          </div>
-                          <span className="text-[10px] text-[#5A6B61] font-bold">{t.realName}</span>
-                        </div>
-                        <div className="grid grid-cols-4 gap-1 text-center pt-1 border-t border-[#EAE6DE]">
-                          <div className="bg-[#FAF9F7] p-1.5 rounded">
-                            <span className="text-[10px] text-[#5A6B61] block">Total</span>
-                            <strong className="text-xs text-[#161F1A]">{s.total}</strong>
-                          </div>
-                          <div className="bg-emerald-50 p-1.5 rounded">
-                            <span className="text-[10px] text-emerald-800 block">Pres.</span>
-                            <strong className="text-xs text-emerald-800">{s.present}</strong>
-                          </div>
-                          <div className="bg-amber-50 p-1.5 rounded">
-                            <span className="text-[10px] text-amber-800 block">Late</span>
-                            <strong className="text-xs text-amber-800">{s.late}</strong>
-                          </div>
-                          <div className="bg-red-50 p-1.5 rounded">
-                            <span className="text-[10px] text-red-800 block">Abs.</span>
-                            <strong className="text-xs text-red-800">{s.absent}</strong>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Audit Table */}
-              <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Tutor ID</th>
-                      <th className="py-3 px-4">Faculty Name</th>
-                      <th className="py-3 px-4">Date</th>
-                      <th className="py-3 px-4">Time In (PKT)</th>
-                      <th className="py-3 px-4">Time Out</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Lateness</th>
-                      <th className="py-3 px-4">Marked By</th>
-                      <th className="py-3 px-4">Notes</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EAE6DE]">
-                    {tutorAttendance.map(ta => (
-                      <tr key={ta.id} className="hover:bg-[#FAF9F7]/60">
-                        <td className="py-3 px-4 font-bold text-[#2D8B5C]">{ta.tutorId}</td>
-                        <td className="py-3 px-4 font-semibold text-[#161F1A]">{ta.tutorName}</td>
-                        <td className="py-3 px-4">{ta.date}</td>
-                        <td className="py-3 px-4 font-mono">{ta.timeIn || ta.loginTime || '—'}</td>
-                        <td className="py-3 px-4 font-mono">{ta.timeOut || '—'}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            ta.status === 'Present' || ta.status === 'On Time'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : ta.status === 'Late'
-                              ? 'bg-amber-100 text-amber-800'
-                              : ta.status === 'Absent'
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-blue-100 text-blue-800'
-                          }`}>
-                            {ta.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-[#5A6B61]">
-                          {ta.lateDurationMinutes && ta.lateDurationMinutes > 0 ? `${ta.lateDurationMinutes} mins` : '0 min'}
-                        </td>
-                        <td className="py-3 px-4 text-[#5A6B61] text-[11px]">{ta.markedBy || 'System'}</td>
-                        <td className="py-3 px-4 text-[#5A6B61]">{ta.notes || '—'}</td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() => {
-                              setSelectedAttendanceRecord(ta);
-                              setIsAttendanceModalOpen(true);
-                            }}
-                            className="px-2.5 py-1 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors cursor-pointer"
-                          >
-                            Edit
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
@@ -2212,6 +2181,24 @@ export const SupervisorDashboard: React.FC<SupervisorDashboardProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Supervisor Tutor Shift Timing Modal */}
+      {isSupervisorTutorModalOpen && (
+        <TutorModal
+          isOpen={isSupervisorTutorModalOpen}
+          onClose={() => {
+            setIsSupervisorTutorModalOpen(false);
+            setSelectedSupervisorTutorForModal(null);
+          }}
+          initialTutor={selectedSupervisorTutorForModal}
+          onSave={async (tutorData) => {
+            if (selectedSupervisorTutorForModal?.id) {
+              await updateTutor(selectedSupervisorTutorForModal.id, tutorData);
+              if (onRefreshData) await onRefreshData();
+            }
+          }}
+        />
       )}
     </div>
   );

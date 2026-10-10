@@ -1,4 +1,4 @@
-import { Lesson, StudentFee } from '../types';
+import { Lesson, StudentFee, TutorAttendanceRecord } from '../types';
 import { getTutorDisplayId } from './tutorPrivacy';
 
 /**
@@ -144,5 +144,129 @@ export const exportFullAcademyBackupJSON = (snapshot: {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+};
+
+/**
+ * Export daily tutor attendance shift logs as a clean CSV for payroll and records
+ */
+export const exportTutorAttendanceToCSV = (
+  filenamePrefix: string,
+  records: TutorAttendanceRecord[],
+  periodLabel?: string
+) => {
+  const headers = [
+    'Date',
+    'Tutor ID',
+    'Faculty Name',
+    'Status',
+    'Shift Hours (PKT)',
+    'Time In',
+    'Time Out',
+    'Late Duration (Mins)',
+    'Marked By',
+    'Notes'
+  ];
+
+  const sanitizeCell = (val: string | number | undefined | null) => {
+    if (val === undefined || val === null) return '""';
+    const str = String(val).replace(/"/g, '""');
+    return `"${str}"`;
+  };
+
+  const rows = records.map(r => [
+    r.date || '—',
+    r.tutorId || '—',
+    r.tutorName || '—',
+    r.status || 'Present',
+    `${r.shiftStartTimePKT || '12:30 AM'} - ${r.shiftEndTimePKT || '07:00 AM'}`,
+    r.timeIn || r.loginTime || '—',
+    r.timeOut || '—',
+    r.lateDurationMinutes ?? 0,
+    r.markedBy || 'System',
+    r.notes || '—'
+  ]);
+
+  const csvRows = [
+    headers.map(h => `"${h}"`).join(','),
+    ...rows.map(row => row.map(sanitizeCell).join(','))
+  ];
+
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.join('\n');
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  const cleanTitle = filenamePrefix.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const filename = `${cleanTitle}_tutor_attendance_${Date.now()}.csv`;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+/**
+ * Export monthly faculty punctuality & late audit summary for payroll
+ */
+export const exportTutorMonthlyAuditToCSV = (
+  filenamePrefix: string,
+  summaryData: Array<{
+    tutorId: string;
+    tutorName: string;
+    scheduledDays: number;
+    presentDays: number;
+    lateDays: number;
+    totalLateMinutes: number;
+    absentDays: number;
+    leaveDays: number;
+    punctualityRate: number;
+    lateDatesBreakdown: string;
+  }>
+) => {
+  const headers = [
+    'Tutor ID',
+    'Faculty Name',
+    'Scheduled Days',
+    'On Time Days',
+    'Late Days',
+    'Total Late Minutes',
+    'Absent Days',
+    'Leave Days',
+    'Punctuality Rate (%)',
+    'Late Dates & Minutes Breakdown'
+  ];
+
+  const sanitizeCell = (val: string | number | undefined | null) => {
+    if (val === undefined || val === null) return '""';
+    const str = String(val).replace(/"/g, '""');
+    return `"${str}"`;
+  };
+
+  const rows = summaryData.map(s => [
+    s.tutorId,
+    s.tutorName,
+    s.scheduledDays,
+    s.presentDays,
+    s.lateDays,
+    s.totalLateMinutes,
+    s.absentDays,
+    s.leaveDays,
+    `${s.punctualityRate}%`,
+    s.lateDatesBreakdown || 'None'
+  ]);
+
+  const csvRows = [
+    headers.map(h => `"${h}"`).join(','),
+    ...rows.map(row => row.map(sanitizeCell).join(','))
+  ];
+
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.join('\n');
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  const cleanTitle = filenamePrefix.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const filename = `${cleanTitle}_monthly_audit_${Date.now()}.csv`;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 };
 

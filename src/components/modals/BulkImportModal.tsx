@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, CheckCircle, Sparkles, AlertCircle, Loader2, Copy, FileSpreadsheet } from 'lucide-react';
 import { Student, Tutor, TimetableClass, DayOfWeek, CourseType, AllowedCurrency } from '../../types';
 import { addStudent, addClass, getNextSequentialStudentId } from '../../services/dataService';
+import { generateStudentEmail, generateParentEmail } from '../../utils/studentEmail';
 
 interface BulkImportModalProps {
   isOpen: boolean;
@@ -135,9 +136,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
         finalStudentId = `STU-${startCounter + parsed.length}`;
       }
 
-      const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const studentEmail = `${cleanName}@gmail.com`;
-      const parentEmail = `${cleanName}parent@gmail.com`;
+      const studentEmail = generateStudentEmail(name, finalStudentId);
+      const parentEmail = generateParentEmail(name, finalStudentId);
 
       const isDuplicate = students.some(
         (s) =>

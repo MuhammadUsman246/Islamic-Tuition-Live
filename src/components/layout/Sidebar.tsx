@@ -132,7 +132,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'student_lessons', label: 'My Lessons & Homework', icon: BookOpen },
           { id: 'student_attendance', label: 'My Attendance', icon: CheckSquare },
           ...(showFeeToStudent ? [{ id: 'student_fees', label: 'Fee Receipts', icon: DollarSign }] : []),
-          { id: 'student_referrals', label: 'Refer a Student (Sadaqah)', icon: Share2 },
+          { id: 'student_referrals', label: 'Refer a Student', icon: Share2 },
           { id: 'student_profile', label: 'My Profile & Avatar', icon: User },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Contact Admin', icon: MessageSquare }
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, onC
           { id: 'parent_lessons', label: 'Lesson History & Progress', icon: BookOpen },
           { id: 'parent_attendance', label: 'Attendance Records', icon: CheckSquare },
           { id: 'parent_fees', label: 'Tuition Invoices', icon: DollarSign },
-          { id: 'parent_referrals', label: 'Refer a Student (Sadaqah)', icon: Share2 },
+          { id: 'parent_referrals', label: 'Refer a Student', icon: Share2 },
           { id: 'announcements', label: 'Announcements', icon: Bell },
           { id: 'messages', label: 'Contact Admin', icon: MessageSquare }
         ];

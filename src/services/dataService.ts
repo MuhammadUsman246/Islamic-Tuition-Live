@@ -79,6 +79,8 @@ import {
   AcademyUserSession,
   SummaryMetrics
 } from '../types';
+import { generateStudentEmail, generateParentEmail, ACADEMY_DOMAIN } from '../utils/studentEmail';
+export { generateStudentEmail, generateParentEmail, ACADEMY_DOMAIN };
 
 export enum OperationType {
   CREATE = 'create',
@@ -1000,6 +1002,50 @@ export function getNextSequentialStudentId(existingStudents?: Student[]): string
   // Next sequential ID
   const nextNum = maxNumber > 0 ? maxNumber + 1 : 101;
   return `STU-${nextNum}`;
+}
+
+/**
+ * Calculates the next sequential Family ID (e.g. FAM-1001, FAM-1002, ...)
+ */
+export function getNextSequentialFamilyId(existingStudents?: Student[], existingUsers?: UserProfile[]): string {
+  const students = (existingStudents && existingStudents.length > 0)
+    ? existingStudents
+    : ((CACHE.students && CACHE.students.length > 0)
+        ? CACHE.students
+        : (loadCachedCollection<Student[]>('students') || (isCleanDataMode() ? [] : SEED_STUDENTS)));
+
+  let maxNum = 1000;
+  for (const s of students) {
+    if (!s) continue;
+    const famId = s.familyGroupId || '';
+    const match = famId.match(/FAM-(\d+)/i);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
+      }
+    }
+  }
+
+  const users = (existingUsers && existingUsers.length > 0)
+    ? existingUsers
+    : ((CACHE.systemUsers && CACHE.systemUsers.length > 0)
+        ? CACHE.systemUsers
+        : (loadCachedCollection<UserProfile[]>('systemUsers') || []));
+
+  for (const u of users) {
+    if (!u) continue;
+    const famId = u.familyGroupId || '';
+    const match = famId.match(/FAM-(\d+)/i);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
+      }
+    }
+  }
+
+  return `FAM-${maxNum + 1}`;
 }
 
 export async function addStudent(studentData: Omit<Student, 'id'>): Promise<string> {
@@ -2658,13 +2704,13 @@ export function deduplicateAttendance(records: AttendanceRecord[]): AttendanceRe
   );
 }
 
-export function getRecentLessonCutoffDate(days = 90): string {
+export function getRecentLessonCutoffDate(days = 14): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
 }
 
-export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string, daysWindow = 90): () => void {
+export function subscribeToLessons(callback: (lessons: Lesson[]) => void, filterTutorId?: string, daysWindow = 14): () => void {
   const getFallback = () => deduplicateLessons(CACHE.lessons || loadCachedCollection<Lesson[]>('lessons') || (isCleanDataMode() ? [] : SEED_LESSONS));
   if (isFirestoreQuotaExceeded()) {
     callback(getFallback());
@@ -2710,8 +2756,8 @@ export async function getLessons(forceRefresh = false): Promise<Lesson[]> {
   }
   try {
     if (!isFirestoreQuotaExceeded()) {
-      // Optimization 2: Strict 30-Day Window by Default (cuts initial reads by >70%)
-      const cutoffDateStr = getRecentLessonCutoffDate(30);
+      // Optimization: Strict 14-Day Window by Default (cuts initial reads by >85%)
+      const cutoffDateStr = getRecentLessonCutoffDate(14);
       const snap = await getDocs(
         query(collection(db, LESSONS_COL), where('date', '>=', cutoffDateStr), limit(150))
       );
@@ -3902,7 +3948,7 @@ export async function deleteAnnouncement(id: string): Promise<string> {
 }
 
 // ==========================================
-// INTERNAL CHAT / MESSAGING (Attachments, Voice Notes, Read Receipts, WhatsApp Status)
+// INTERNAL CHAT / MESSAGING (Attachments, Voice Notes, Read Receipts, Delivery Status)
 // ==========================================
 export function canonicalizeChatThreadId(threadId: string): string {
   const raw = (threadId || '').trim();
@@ -4221,14 +4267,21 @@ export async function markVoiceNoteAsListened(messageId: string, currentUserId: 
 }
 
 /**
- * Edit a chat message text (STRICT SAFETY POLICY: ONLY Academy Admin can edit messages)
+ * Edit a chat message text.
+ * Admin can edit any message; students, parents, and tutors can edit their own sent messages.
  */
-export async function editChatMessage(messageId: string, newText: string, callerRole?: UserRole): Promise<void> {
-  if (callerRole && callerRole !== 'admin') {
-    throw new Error('Security policy: Only Academy Administrators are authorized to edit messages.');
-  }
+export async function editChatMessage(messageId: string, newText: string, callerRole?: UserRole, currentUserId?: string): Promise<void> {
   try {
     const docRef = doc(db, MESSAGES_COL, messageId);
+    if (callerRole !== 'admin') {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const msg = snap.data() as ChatMessage;
+        if (currentUserId && msg.senderId !== currentUserId) {
+          throw new Error('Permission denied: You can only edit your own messages.');
+        }
+      }
+    }
     await updateDoc(docRef, {
       text: newText,
       isEdited: true,
@@ -4241,14 +4294,21 @@ export async function editChatMessage(messageId: string, newText: string, caller
 }
 
 /**
- * Delete a chat message (STRICT SAFETY POLICY: ONLY Academy Admin can delete messages)
+ * Delete a chat message.
+ * Admin can delete any message; students, parents, and tutors can delete their own sent messages.
  */
 export async function deleteChatMessage(messageId: string, deletedBy: string, callerRole?: UserRole, forEveryone = true): Promise<void> {
-  if (callerRole && callerRole !== 'admin') {
-    throw new Error('Security policy: Only Academy Administrators are authorized to delete messages.');
-  }
   try {
     const docRef = doc(db, MESSAGES_COL, messageId);
+    if (callerRole !== 'admin') {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const msg = snap.data() as ChatMessage;
+        if (deletedBy && msg.senderId !== deletedBy) {
+          throw new Error('Permission denied: You can only delete your own messages.');
+        }
+      }
+    }
     if (forEveryone) {
       await updateDoc(docRef, {
         text: 'This message was deleted',
@@ -4266,7 +4326,7 @@ export async function deleteChatMessage(messageId: string, deletedBy: string, ca
 }
 
 /**
- * Toggle or update an emoji reaction on a chat message (WhatsApp style)
+ * Toggle or update an emoji reaction on a chat message
  * Every user (Admin, Supervisor, Tutor, Student, Parent) can react to any message.
  * Tapping the same emoji toggles it off. Tapping a different emoji changes the reaction.
  */
@@ -5225,23 +5285,37 @@ export async function rejectUserAccount(uid: string, adminName = 'Admin'): Promi
   }
 }
 
-/**
- * Self-registration for Student and Parent roles only.
- * Creates real Firebase Authentication user + Firestore profile with status 'pending_approval'.
- * Admin, Supervisor and Tutor are STRICTLY FORBIDDEN from registering via this method.
- */
-export async function registerSelfStudentOrParent(params: {
+export interface ChildRegistrationItem {
+  name: string;
+  age?: number;
+  courseType?: CourseType;
+  loginEmail?: string;
+  loginPassword?: string;
+}
+
+export interface RegisterSelfStudentOrParentParams {
   email: string;
   password: string;
   displayName: string;
   role: 'student' | 'parent';
+  studentType?: 'adult' | 'child'; // Adult student manages self; child managed by parent
   phone?: string;
   country?: string;
   timezone?: string;
   courseType?: CourseType;
   parentName?: string;
   parentEmail?: string;
-}): Promise<UserProfile> {
+  // Multi-child registration for parents:
+  children?: ChildRegistrationItem[];
+  enrollParentAsStudent?: boolean;
+}
+
+/**
+ * Self-registration for Student and Parent roles only.
+ * Creates real Firebase Authentication user + Firestore profile with status 'pending_approval'.
+ * Admin, Supervisor and Tutor are STRICTLY FORBIDDEN from registering via this method.
+ */
+export async function registerSelfStudentOrParent(params: RegisterSelfStudentOrParentParams): Promise<UserProfile> {
   if (params.role !== 'student' && params.role !== 'parent') {
     throw new Error('Public registration is strictly limited to Students and Parents. Faculty accounts are provisioned exclusively by Academy Administration.');
   }
@@ -5262,36 +5336,166 @@ export async function registerSelfStudentOrParent(params: {
 
   let linkedChildren: string[] = [];
   let generatedStudentId: string | undefined = undefined;
+  let familyGroupId: string | undefined = undefined;
+  let familyGroupName: string | undefined = undefined;
 
-  // 2. Check existing student records in 'students' collection for auto-linking
+  // 2. Handle Parent vs Student logic
   if (params.role === 'parent') {
+    // Generate sequential unified Family ID for this household (e.g. FAM-1001)
+    familyGroupId = getNextSequentialFamilyId();
+    familyGroupName = `${params.displayName.trim()}'s Family`;
+
+    // If parent is also enrolling as a student learner
+    if (params.enrollParentAsStudent) {
+      generatedStudentId = getNextSequentialStudentId();
+      try {
+        const parentAsStudentDoc: Omit<Student, 'id'> = {
+          studentId: generatedStudentId,
+          name: params.displayName.trim(),
+          studentType: 'adult',
+          email: cleanEmail,
+          phone: params.phone ? params.phone.trim() : '',
+          parentName: '',
+          parentEmail: '',
+          parentPhone: '',
+          parentId: uid,
+          familyGroupId,
+          familyGroupName,
+          assignedTutorId: 'Tutor 1',
+          country: params.country || 'USA',
+          timezone: params.timezone || 'America/New_York',
+          courseType: params.courseType || 'Quran Reading / Nazra',
+          status: 'Pending',
+          trialSessionsCompleted: 0,
+          trialSessionsTotal: 5,
+          trialStatus: 'Decision Pending',
+          createdAt: new Date().toISOString()
+        };
+        await addDoc(collection(db, STUDENTS_COL), sanitizeFirestoreObject(parentAsStudentDoc));
+      } catch (err) {
+        console.warn('Could not register parent as student record:', err);
+      }
+    }
+
+    // A. Check existing student records in 'students' collection for auto-linking (preserves 160+ students)
     try {
       const parentSnap = await getDocs(query(collection(db, STUDENTS_COL), where('parentEmail', '==', cleanEmail)));
       if (!parentSnap.empty) {
-        linkedChildren = parentSnap.docs.map(d => (d.data() as Student).studentId).filter(Boolean);
+        for (const docSnap of parentSnap.docs) {
+          const st = docSnap.data() as Student;
+          if (st.studentId && st.studentId !== generatedStudentId) {
+            linkedChildren.push(st.studentId);
+            // Link existing student record to this family ID & parentId
+            await updateDoc(doc(db, STUDENTS_COL, docSnap.id), {
+              parentId: uid,
+              familyGroupId,
+              familyGroupName
+            });
+          }
+        }
       }
     } catch (err) {
       console.warn('Parent registration children auto-link notice:', err);
     }
+
+    // B. If parent submitted children in enrollment form, create records for each child
+    if (params.children && params.children.length > 0) {
+      let tempStudentCache = [...(CACHE.students || loadCachedCollection<Student[]>('students') || SEED_STUDENTS)];
+      for (let idx = 0; idx < params.children.length; idx++) {
+        const child = params.children[idx];
+        if (!child.name.trim()) continue;
+
+        const childStuId = getNextSequentialStudentId(tempStudentCache);
+        tempStudentCache.push({ id: 'temp_' + childStuId, studentId: childStuId, name: child.name.trim(), status: 'Pending' } as any);
+
+        const childCleanName = child.name.trim();
+        // Use custom kid login email or auto-generate unique branded student email (e.g. ali.stu101@islamictuition.us)
+        const childCleanEmail = child.loginEmail?.trim().toLowerCase() ||
+          generateStudentEmail(childCleanName, childStuId);
+
+        linkedChildren.push(childStuId);
+
+        try {
+          const newChildDoc: Omit<Student, 'id'> = {
+            studentId: childStuId,
+            name: childCleanName,
+            age: child.age,
+            studentType: 'child',
+            email: childCleanEmail,
+            phone: params.phone ? params.phone.trim() : '',
+            parentName: params.displayName.trim(),
+            parentEmail: cleanEmail,
+            parentPhone: params.phone ? params.phone.trim() : '',
+            parentId: uid,
+            familyGroupId,
+            familyGroupName,
+            assignedTutorId: 'Tutor 1',
+            country: params.country || 'USA',
+            timezone: params.timezone || 'America/New_York',
+            courseType: child.courseType || 'Quran Reading / Nazra',
+            status: 'Pending',
+            trialSessionsCompleted: 0,
+            trialSessionsTotal: 5,
+            trialStatus: 'Decision Pending',
+            createdAt: new Date().toISOString()
+          };
+          await addDoc(collection(db, STUDENTS_COL), sanitizeFirestoreObject(newChildDoc));
+
+          // If child password provided, create real child auth user via secondary app
+          if (child.loginPassword && child.loginPassword.length >= 6) {
+            try {
+              const secAuth = getSecondaryAuthApp();
+              const childCred = await createUserWithEmailAndPassword(secAuth, childCleanEmail, child.loginPassword);
+              const childProfile: UserProfile = {
+                uid: childCred.user.uid,
+                email: childCleanEmail,
+                displayName: childCleanName,
+                role: 'student',
+                studentType: 'child',
+                status: 'pending_approval',
+                studentId: childStuId,
+                familyGroupId,
+                familyGroupName,
+                parentName: params.displayName.trim(),
+                parentEmail: cleanEmail,
+                phone: params.phone ? params.phone.trim() : '',
+                country: params.country || 'USA',
+                timezone: params.timezone || 'America/New_York',
+                courseType: child.courseType || 'Quran Reading / Nazra',
+                createdAt: new Date().toISOString()
+              };
+              await setDoc(doc(db, USERS_COL, childCred.user.uid), sanitizeFirestoreObject(childProfile));
+            } catch (authErr) {
+              console.warn('Child auth creation notice:', authErr);
+            }
+          }
+        } catch (err) {
+          console.warn('Could not register child student:', err);
+        }
+      }
+    }
   } else if (params.role === 'student') {
-    generatedStudentId = `STU-${Math.floor(100 + Math.random() * 900)}`;
+    generatedStudentId = getNextSequentialStudentId();
   }
 
   // 3. Persist profile in Firestore with status 'pending_approval' (Awaiting Director Review)
+  const isAdultStudent = params.role === 'student' && params.studentType === 'adult';
   const newProfile: UserProfile = {
     uid,
     email: cleanEmail,
     displayName: params.displayName.trim(),
     role: params.role,
     status: 'pending_approval',
+    studentType: params.role === 'student' ? (params.studentType || 'adult') : undefined,
     phone: params.phone ? params.phone.trim() : '',
     country: params.country || 'USA',
     timezone: params.timezone || 'America/New_York',
     courseType: params.courseType || 'Quran Reading / Nazra',
-    parentName: params.parentName ? params.parentName.trim() : '',
-    parentEmail: params.parentEmail ? params.parentEmail.trim().toLowerCase() : '',
+    parentName: isAdultStudent ? '' : (params.parentName ? params.parentName.trim() : ''),
+    parentEmail: isAdultStudent ? '' : (params.parentEmail ? params.parentEmail.trim().toLowerCase() : ''),
     ...(linkedChildren.length > 0 ? { linkedStudentIds: linkedChildren } : {}),
     ...(generatedStudentId ? { studentId: generatedStudentId } : {}),
+    ...(familyGroupId ? { familyGroupId, familyGroupName } : {}),
     createdAt: new Date().toISOString()
   };
 
@@ -5308,10 +5512,11 @@ export async function registerSelfStudentOrParent(params: {
         studentId: generatedStudentId,
         name: params.displayName.trim(),
         email: cleanEmail,
+        studentType: params.studentType || 'adult',
         phone: params.phone ? params.phone.trim() : '',
-        parentName: params.parentName ? params.parentName.trim() : `${params.displayName.trim()}'s Parent`,
-        parentEmail: params.parentEmail ? params.parentEmail.trim().toLowerCase() : cleanEmail,
-        parentPhone: params.phone ? params.phone.trim() : '',
+        parentName: isAdultStudent ? '' : (params.parentName ? params.parentName.trim() : ''),
+        parentEmail: isAdultStudent ? '' : (params.parentEmail ? params.parentEmail.trim().toLowerCase() : ''),
+        parentPhone: isAdultStudent ? '' : (params.phone ? params.phone.trim() : ''),
         assignedTutorId: 'Tutor 1',
         country: params.country || 'USA',
         timezone: params.timezone || 'America/New_York',
@@ -6816,7 +7021,7 @@ export async function fetchAllAcademyData(
 }
 
 // ==========================================
-// LIVE CALLING API (WhatsApp Style Live Calls)
+// LIVE CALLING API (Live Audio & Video Calls)
 // ==========================================
 const CALLS_COL = 'calls';
 

@@ -120,7 +120,7 @@ export async function processAudioVoiceNote(blob: Blob): Promise<{ dataUrl: stri
 
 /**
  * Clean audio constraints with native hardware noise suppression, echo cancellation,
- * and auto gain control matching WhatsApp Web & WebRTC standards.
+ * and auto gain control WebRTC standards.
  */
 export function getCleanAudioConstraints(): MediaTrackConstraints {
   return {
@@ -166,7 +166,7 @@ export function getSupportedAudioMimeType(): string {
  * Optional Web Audio stream handler for calls (without aggressive gain compression)
  */
 export function createCleanAudioStream(sourceStream: MediaStream): { cleanStream: MediaStream; audioContext: AudioContext | null } {
-  // Direct hardware stream is the cleanest and zero-latency approach matching WhatsApp.
+  // Direct hardware stream is the cleanest and zero-latency approach.
   return { cleanStream: sourceStream, audioContext: null };
 }
 
@@ -335,7 +335,7 @@ export function isDesktopNotificationPermitted(): boolean {
 }
 
 /**
- * Play a discreet gentle WhatsApp-style audio chime
+ * Play a discreet gentle audio chime
  */
 export function playNotificationChime(): void {
   try {
@@ -360,7 +360,7 @@ export function playNotificationChime(): void {
 }
 
 /**
- * Start repeating outgoing ringtone (WhatsApp standard ringing cadence)
+ * Start repeating outgoing ringtone (standard ringing cadence)
  */
 export function startOutgoingRingtone(): () => void {
   let isStopped = false;

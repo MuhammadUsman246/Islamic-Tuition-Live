@@ -4,6 +4,7 @@ import { Student, Tutor, StudentStatus, CourseType, TrialStatus, AllowedCurrency
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
 import { registerUserAccount, addReferral, getNextSequentialStudentId, notifyTrial5SessionsCompleted } from '../../services/dataService';
+import { generateStudentEmail, generateParentEmail } from '../../utils/studentEmail';
 
 interface StudentModalProps {
   isOpen: boolean;
@@ -25,6 +26,9 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   initialStudent
 }) => {
   const [studentId, setStudentId] = useState<string>(() => getNextSequentialStudentId(students));
+  const [studentType, setStudentType] = useState<'child' | 'adult'>('child');
+  const [familyGroupId, setFamilyGroupId] = useState<string>('');
+  const [familyGroupName, setFamilyGroupName] = useState<string>('');
   const [name, setName] = useState<string>('');
   const [age, setAge] = useState<number | ''>('');
   const [joiningDate, setJoiningDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -59,14 +63,17 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   useEffect(() => {
     if (initialStudent) {
       setStudentId(initialStudent.studentId);
+      setStudentType(initialStudent.studentType || (initialStudent.age && initialStudent.age >= 18 ? 'adult' : 'child'));
+      setFamilyGroupId(initialStudent.familyGroupId || '');
+      setFamilyGroupName(initialStudent.familyGroupName || '');
       setName(initialStudent.name);
       setAge(initialStudent.age !== undefined ? initialStudent.age : '');
       setJoiningDate(initialStudent.joiningDate || initialStudent.trialStartDate || initialStudent.createdAt?.slice(0, 10) || new Date().toISOString().slice(0, 10));
       setEmail(initialStudent.email);
       setPhone(initialStudent.phone);
-      setParentName(initialStudent.parentName);
-      setParentEmail(initialStudent.parentEmail);
-      setParentPhone(initialStudent.parentPhone);
+      setParentName(initialStudent.parentName || '');
+      setParentEmail(initialStudent.parentEmail || '');
+      setParentPhone(initialStudent.parentPhone || '');
       setAssignedTutorId(initialStudent.assignedTutorId);
       setStatus(initialStudent.status);
       setCourseType(initialStudent.courseType);
@@ -86,6 +93,9 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setShowFeeToStudent(initialStudent.showFeeToStudent !== false);
     } else {
       setStudentId(getNextSequentialStudentId(students));
+      setStudentType('child');
+      setFamilyGroupId('');
+      setFamilyGroupName('');
       setName('');
       setAge('');
       setJoiningDate(new Date().toISOString().slice(0, 10));
@@ -121,13 +131,13 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       alert('Please enter the student full name.');
       return;
     }
-    if (!parentName.trim()) {
-      alert('Please enter the parent / guardian name.');
+    if (studentType === 'child' && !parentName.trim()) {
+      alert('Please enter the parent / guardian name for child students.');
       return;
     }
     setSaving(true);
-    const finalStudentEmail = email.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}@academy.com`;
-    const finalParentEmail = parentEmail.trim() || `${studentId.toLowerCase().replace(/[^a-z0-9]/g, '')}.parent@academy.com`;
+    const finalStudentEmail = email.trim() || generateStudentEmail(name, studentId);
+    const finalParentEmail = parentEmail.trim() || generateParentEmail(parentName, studentId);
     const effectiveTutorId = initialStudent ? (initialStudent.assignedTutorId || 'Unassigned') : 'Unassigned';
 
     try {
@@ -136,15 +146,19 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           studentId,
           name: name.trim(),
           age: age === '' ? undefined : Number(age),
+          studentType,
+          familyGroupId: familyGroupId.trim() || undefined,
+          familyGroupName: familyGroupName.trim() || undefined,
           joiningDate,
           trialStartDate: initialStudent?.trialStartDate || joiningDate,
           email: finalStudentEmail,
           phone,
-          parentName: parentName.trim(),
-          parentEmail: finalParentEmail,
-          parentPhone,
+          parentName: studentType === 'adult' ? '' : parentName.trim(),
+          parentEmail: studentType === 'adult' ? '' : finalParentEmail,
+          parentPhone: studentType === 'adult' ? '' : parentPhone,
           assignedTutorId: effectiveTutorId,
           status,
+          isOnLeave: status === 'On Leave',
           courseType,
           country,
           timezone,
@@ -250,6 +264,43 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+          {/* Student Category Selector */}
+          <div className="p-3 bg-[#FAF9F7] rounded-xl border border-[#D5D0C6] space-y-2">
+            <label className="block text-xs font-bold text-[#161F1A]">Student Category</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentType('child');
+                  setCreateParentUser(true);
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  studentType === 'child'
+                    ? 'bg-[#1E5C3D] text-white border-[#1E5C3D] shadow-xs'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <span>🧒</span>
+                <span>Child Student (Parent-Managed)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentType('adult');
+                  setCreateParentUser(false);
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  studentType === 'adult'
+                    ? 'bg-[#1E5C3D] text-white border-[#1E5C3D] shadow-xs'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <span>🎓</span>
+                <span>Adult Student (Self-Managing)</span>
+              </button>
+            </div>
+          </div>
+
           {/* Identity */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
@@ -311,14 +362,37 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           {/* Contact Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-[#161F1A] mb-1">Student Email</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold text-[#161F1A]">Student Email / Login Handle</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail(generateStudentEmail(name, studentId));
+                  }}
+                  className="text-[10px] text-[#2D8B5C] hover:underline font-semibold cursor-pointer"
+                  title="Generate unique branded student email handle (e.g. ali.stu101@islamictuition.us)"
+                >
+                  ⚡ Auto-generate ({generateStudentEmail(name, studentId)})
+                </button>
+              </div>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="student@example.com"
+                placeholder={generateStudentEmail(name, studentId)}
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs"
               />
+              {!email && name.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setEmail(generateStudentEmail(name, studentId))}
+                  className="mt-1 text-[11px] text-[#1E5C3D] bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Click to apply recommended unique handle"
+                >
+                  <span className="text-[10px] text-gray-500">Recommended:</span>
+                  <span className="font-bold">{generateStudentEmail(name, studentId)}</span>
+                </button>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#161F1A] mb-1">Student Phone / WhatsApp</label>
@@ -332,45 +406,94 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             </div>
           </div>
 
-          {/* Parent Details */}
-          <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-3">
-            <span className="text-xs font-bold text-[#1E5C3D] uppercase tracking-wider block">
-              Parent / Guardian Information
-            </span>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Name</label>
-                <input
-                  type="text"
-                  value={parentName}
-                  onChange={(e) => setParentName(e.target.value)}
-                  placeholder="e.g. Farooq Ahmed"
-                  className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Email</label>
-                <input
-                  type="email"
-                  value={parentEmail}
-                  onChange={(e) => setParentEmail(e.target.value)}
-                  placeholder="parent@example.com"
-                  className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Phone</label>
-                <input
-                  type="text"
-                  value={parentPhone}
-                  onChange={(e) => setParentPhone(e.target.value)}
-                  placeholder="+1 555 987 6543"
-                  className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
-                />
-              </div>
+          {/* Adult Student Mode Info Banner */}
+          {studentType === 'adult' ? (
+            <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-800 space-y-1">
+              <span className="font-bold block flex items-center gap-1.5">
+                <span>🎓</span> Adult Student Mode Active
+              </span>
+              <p className="text-[11px] leading-relaxed">
+                This student manages their own account, timetable, and payments autonomously. Parent / guardian details are omitted and no parent login account will be generated.
+              </p>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Parent Details for Child Students */}
+              <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-3">
+                <span className="text-xs font-bold text-[#1E5C3D] uppercase tracking-wider block">
+                  Parent / Guardian Information
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Name *</label>
+                    <input
+                      type="text"
+                      value={parentName}
+                      onChange={(e) => setParentName(e.target.value)}
+                      placeholder="e.g. Farooq Ahmed"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                      required={studentType === 'child'}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Email</label>
+                    <input
+                      type="email"
+                      value={parentEmail}
+                      onChange={(e) => setParentEmail(e.target.value)}
+                      placeholder="parent@example.com"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Parent Phone</label>
+                    <input
+                      type="text"
+                      value={parentPhone}
+                      onChange={(e) => setParentPhone(e.target.value)}
+                      placeholder="+1 555 987 6543"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Family ID & Sibling Grouping */}
+              <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-[#1E5C3D] flex items-center gap-1.5">
+                    <span>👨‍👩‍👧</span>
+                    <span>Family ID & Sibling Grouping</span>
+                  </label>
+                  <span className="text-[10px] text-gray-500 bg-white px-2 py-0.5 rounded border border-gray-200">
+                    Multi-child unified session
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Family Group ID</label>
+                    <input
+                      type="text"
+                      value={familyGroupId}
+                      onChange={(e) => setFamilyGroupId(e.target.value)}
+                      placeholder="e.g. FAM-001 or FAM-ALFARSI"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white font-mono uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Family Group Name</label>
+                    <input
+                      type="text"
+                      value={familyGroupName}
+                      onChange={(e) => setFamilyGroupName(e.target.value)}
+                      placeholder="e.g. Ahmed Family"
+                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1.5 text-xs bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Academic Status & Course Type (Tutor is assigned & synced automatically via Master Timetable) */}
           <div className="space-y-2">
@@ -382,11 +505,10 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                   onChange={(e) => setStatus(e.target.value as StudentStatus)}
                   className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs bg-white"
                 >
-                  <option value="Trial">Trial (5 Free Sessions)</option>
-                  <option value="Confirmed">Confirmed</option>
                   <option value="Active">Active</option>
+                  <option value="Trial">Trial (5 Free Sessions)</option>
                   <option value="Pending">Pending</option>
-                  <option value="Not Taking">Not Taking</option>
+                  <option value="On Leave">On Leave</option>
                   <option value="Inactive">Inactive</option>
                 </select>
               </div>
@@ -714,30 +836,32 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                 )}
               </div>
 
-              {/* Parent Account */}
-              <div className="bg-white p-3 rounded-lg border border-emerald-200/80 space-y-2">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={createParentUser}
-                    onChange={(e) => setCreateParentUser(e.target.checked)}
-                    className="rounded border-[#D5D0C6] text-[#2D8B5C] focus:ring-[#2D8B5C]"
-                  />
-                  <span className="text-xs font-bold text-[#161F1A]">Create Parent Login</span>
-                </label>
-                {createParentUser && (
-                  <div>
-                    <label className="block text-[10px] text-[#5A6B61] mb-1">Parent Initial Password</label>
+              {/* Parent Account (Child Students Only) */}
+              {studentType === 'child' && (
+                <div className="bg-white p-3 rounded-lg border border-emerald-200/80 space-y-2">
+                  <label className="flex items-center space-x-2 cursor-pointer">
                     <input
-                      type="text"
-                      value={parentPassword}
-                      onChange={(e) => setParentPassword(e.target.value)}
-                      placeholder="e.g. parent123"
-                      className="w-full border border-[#D5D0C6] rounded-md px-2 py-1 text-xs font-mono"
+                      type="checkbox"
+                      checked={createParentUser}
+                      onChange={(e) => setCreateParentUser(e.target.checked)}
+                      className="rounded border-[#D5D0C6] text-[#2D8B5C] focus:ring-[#2D8B5C]"
                     />
-                  </div>
-                )}
-              </div>
+                    <span className="text-xs font-bold text-[#161F1A]">Create Parent Login</span>
+                  </label>
+                  {createParentUser && (
+                    <div>
+                      <label className="block text-[10px] text-[#5A6B61] mb-1">Parent Initial Password</label>
+                      <input
+                        type="text"
+                        value={parentPassword}
+                        onChange={(e) => setParentPassword(e.target.value)}
+                        placeholder="e.g. parent123"
+                        className="w-full border border-[#D5D0C6] rounded-md px-2 py-1 text-xs font-mono"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <p className="text-[11px] text-[#5A6B61]">
               Students log into the Student Portal; parents log into the Parent Portal to track attendance, fees, and teacher notes.

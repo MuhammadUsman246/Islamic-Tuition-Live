@@ -9,6 +9,9 @@ export interface UserProfile {
   status: UserAccountStatus;
   tutorId?: string; // e.g. "Tutor 1"
   studentId?: string; // e.g. "STU-001"
+  studentType?: 'adult' | 'child'; // Adult student (self-managed) vs Young Child (parent-managed)
+  familyGroupId?: string; // e.g. "FAM-001" for sibling grouping
+  familyGroupName?: string; // e.g. "Ahmed Family"
   linkedStudentIds?: string[]; // For parents: ["STU-001", "STU-002"]
   phone?: string;
   country?: string;
@@ -71,12 +74,15 @@ export interface Tutor {
   availabilityStatus?: 'Available' | 'Busy';
   hourlyRatePKR?: number;
   monthlySalaryPKR?: number;
+  shiftStartTimePKT?: string; // e.g. "12:30 AM"
+  shiftEndTimePKT?: string;   // e.g. "07:00 AM"
+  shiftDays?: string[];       // e.g. ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
   assignedStudentIds: string[];
   notes?: string;
   createdAt: string;
 }
 
-export type StudentStatus = 'Trial' | 'Confirmed' | 'Active' | 'Pending' | 'Not Taking' | 'Inactive';
+export type StudentStatus = 'Active' | 'Trial' | 'Pending' | 'On Leave' | 'Inactive' | 'Confirmed' | 'Not Taking';
 export type TrialStatus = 
   | 'Day 1' 
   | 'Follow-up' 
@@ -105,6 +111,7 @@ export interface Student {
   studentId: string; // e.g. "STU-001"
   name: string;
   age?: number; // Student age in years
+  studentType?: 'adult' | 'child'; // Adult student (self-managed) vs Young Child (parent-managed)
   joiningDate?: string; // YYYY-MM-DD joining date
   email: string;
   phone: string;
@@ -302,6 +309,8 @@ export interface TutorAttendanceRecord {
   loginTime?: string; // HH:mm
   timeIn?: string; // HH:mm
   timeOut?: string; // HH:mm
+  shiftStartTimePKT?: string;
+  shiftEndTimePKT?: string;
   status: TutorAttendanceStatus;
   lateDurationMinutes?: number;
   notes?: string;
@@ -458,17 +467,17 @@ export interface ChatMessage {
   status?: 'sent' | 'delivered' | 'seen';
   readAt?: string;
   deliveredAt?: string;
-  seenBy?: string[]; // IDs of users who saw the message (WhatsApp group seen receipts & 1-1 double-blue ticks)
+  seenBy?: string[]; // IDs of users who saw the message
   deliveredTo?: string[]; // IDs of users the message has been delivered to
   seenTimestamps?: Record<string, string>; // userId -> ISO timestamp
   deliveredTimestamps?: Record<string, string>; // userId -> ISO timestamp
-  listenedBy?: string[]; // IDs of users who listened to voice notes (WhatsApp blue microphone status)
+  listenedBy?: string[]; // IDs of users who listened to voice notes
   attachment?: ChatAttachment;
   isEdited?: boolean;
   editedAt?: string;
   deletedForEveryone?: boolean;
   deletedBy?: string;
-  reactions?: Record<string, ChatReaction>; // userId -> ChatReaction (WhatsApp-style emoji reactions)
+  reactions?: Record<string, ChatReaction>; // userId -> ChatReaction (Emoji reactions)
 }
 
 export interface ChatThread {

@@ -14,11 +14,16 @@ import {
   LogOut,
   RefreshCw,
   KeyRound,
-  X
+  X,
+  Plus,
+  Trash2,
+  Users,
+  GraduationCap
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { registerSelfStudentOrParent } from '../../services/dataService';
 import { CourseType, UserProfile } from '../../types';
+import { generateStudentEmail } from '../../utils/studentEmail';
 import { SUPPORTED_COUNTRIES, COMMON_TIMEZONES, detectUserLocation } from '../../utils/timezone';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
@@ -60,20 +65,54 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
   const [resetLoading, setResetLoading] = useState(false);
 
   // Self-Registration Form State (Student & Parent ONLY)
-  const [regRole, setRegRole] = useState<'student' | 'parent'>('student');
+  const [regRole, setRegRole] = useState<'student' | 'parent'>('parent');
   const [displayName, setDisplayName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [phone, setPhone] = useState('');
+  
+  // Multi-child registration state for parents
+  const [childrenList, setChildrenList] = useState<Array<{
+    name: string;
+    age: number | '';
+    courseType: CourseType;
+    useCustomEmail: boolean;
+    loginEmail: string;
+    loginPassword: string;
+  }>>([
+    { name: '', age: '', courseType: 'Quran Reading / Nazra', useCustomEmail: false, loginEmail: '', loginPassword: 'quran123' }
+  ]);
   
   // Auto-detect browser location & timezone on initial mount
   const detectedLoc = detectUserLocation();
   const [country, setCountry] = useState(detectedLoc.country);
   const [timezone, setTimezone] = useState(detectedLoc.timezone);
   const [courseType, setCourseType] = useState<CourseType>('Quran Reading / Nazra');
-  const [parentName, setParentName] = useState('');
-  const [parentEmail, setParentEmail] = useState('');
+  const [enrollParentAsStudent, setEnrollParentAsStudent] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
+
+  const handleAddChild = () => {
+    setChildrenList(prev => [
+      ...prev,
+      { name: '', age: '', courseType: 'Quran Reading / Nazra', useCustomEmail: false, loginEmail: '', loginPassword: 'quran123' }
+    ]);
+  };
+
+  const handleRemoveChild = (index: number) => {
+    if (childrenList.length <= 1) return;
+    setChildrenList(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleUpdateChild = (index: number, updates: Partial<{
+    name: string;
+    age: number | '';
+    courseType: CourseType;
+    useCustomEmail: boolean;
+    loginEmail: string;
+    loginPassword: string;
+  }>) => {
+    setChildrenList(prev => prev.map((child, idx) => idx === index ? { ...child, ...updates } : child));
+  };
 
   // Handle Country selection change: update country and preselect a default timezone for that country
   const handleCountryChange = (newCountryName: string) => {
@@ -244,20 +283,54 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
     setLoading(true);
 
     try {
-      await registerSelfStudentOrParent({
-        email: regEmail.trim(),
-        password: regPassword,
-        displayName: displayName.trim(),
-        role: regRole,
-        phone: phone.trim(),
-        country,
-        timezone,
-        courseType: regRole === 'student' ? courseType : undefined,
-        parentName: regRole === 'student' ? parentName : undefined,
-        parentEmail: regRole === 'student' ? parentEmail : undefined
-      });
+      if (regRole === 'parent') {
+        const validChildren = childrenList
+          .filter(c => c.name.trim())
+          .map(c => ({
+            name: c.name.trim(),
+            age: c.age === '' ? undefined : Number(c.age),
+            courseType: c.courseType,
+            loginEmail: c.useCustomEmail && c.loginEmail.trim() ? c.loginEmail.trim() : undefined,
+            loginPassword: c.loginPassword.trim() || 'quran123'
+          }));
 
-      setSuccessMsg('Registration submitted successfully! Your application is now awaiting Academic Director activation.');
+        if (validChildren.length === 0) {
+          throw new Error('Please provide the full name for at least one child to enroll.');
+        }
+
+        await registerSelfStudentOrParent({
+          email: regEmail.trim(),
+          password: regPassword,
+          displayName: displayName.trim(),
+          role: 'parent',
+          phone: phone.trim(),
+          country,
+          timezone,
+          children: validChildren,
+          enrollParentAsStudent
+        });
+
+        setSuccessMsg(
+          `Parent account & Family ID registered successfully for ${displayName.trim()} with ${validChildren.length} enrolled child(ren)! Awaiting Academic Director activation.`
+        );
+      } else {
+        // Adult student self-enrollment (no parents needed)
+        await registerSelfStudentOrParent({
+          email: regEmail.trim(),
+          password: regPassword,
+          displayName: displayName.trim(),
+          role: 'student',
+          studentType: 'adult',
+          phone: phone.trim(),
+          country,
+          timezone,
+          courseType
+        });
+
+        setSuccessMsg(
+          `Adult student enrollment submitted successfully for ${displayName.trim()}! Awaiting Academic Director activation.`
+        );
+      }
     } catch (err: any) {
       console.error('Registration error:', err);
       setError(err.message || 'Failed to complete registration.');
@@ -467,21 +540,9 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                 {/* Role Switcher */}
                 <div>
                   <label className="block font-semibold text-gray-700 mb-1.5">
-                    Select Account Type
+                    Select Enrollment Type
                   </label>
                   <div className="grid grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setRegRole('student')}
-                      className={`py-2.5 px-3 rounded-xl font-medium border text-xs transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
-                        regRole === 'student'
-                          ? 'bg-[#2D8B5C] text-white border-[#2D8B5C] shadow-xs'
-                          : 'bg-[#FAF9F7] text-gray-600 border-[#D5D0C6] hover:bg-gray-100 hover:text-gray-800'
-                      }`}
-                    >
-                      <span>🎓</span>
-                      <span>Student</span>
-                    </button>
                     <button
                       type="button"
                       onClick={() => setRegRole('parent')}
@@ -492,11 +553,66 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                       }`}
                     >
                       <span>👨‍👩‍👧</span>
-                      <span>Parent / Guardian</span>
+                      <span>Parent / Family</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRegRole('student')}
+                      className={`py-2.5 px-3 rounded-xl font-medium border text-xs transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                        regRole === 'student'
+                          ? 'bg-[#2D8B5C] text-white border-[#2D8B5C] shadow-xs'
+                          : 'bg-[#FAF9F7] text-gray-600 border-[#D5D0C6] hover:bg-gray-100 hover:text-gray-800'
+                      }`}
+                    >
+                      <span>🎓</span>
+                      <span>Adult Student (18+)</span>
                     </button>
                   </div>
                 </div>
 
+                {/* Mode Explanation Notice */}
+                {regRole === 'parent' ? (
+                  <div className="space-y-2.5">
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Users className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span>Unified Family Session & Multi-Child Enrollment</span>
+                      </div>
+                      <p className="text-[11px] text-emerald-800 leading-relaxed">
+                        Enroll one or multiple children under a single Family ID. As a parent, you will manage all sibling dashboards, lesson reports, and combined tuition payments under one unified login.
+                      </p>
+                    </div>
+
+                    <div className="p-3 bg-[#FAF9F7] border border-[#D5D0C6] rounded-xl">
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={enrollParentAsStudent}
+                          onChange={(e) => setEnrollParentAsStudent(e.target.checked)}
+                          className="rounded text-[#2D8B5C] focus:ring-[#2D8B5C] w-4 h-4 mt-0.5"
+                        />
+                        <div className="text-xs">
+                          <span className="font-bold text-gray-900 block">🎓 Enroll Parent as Student Too (Dual Mode)</span>
+                          <span className="text-gray-600 leading-tight block text-[11px]">
+                            Check this if you are also attending classes as a student learner. The system will assign you a student ID along with your parent role, enabling a toggle in your dashboard to switch between Student Mode and Parent Mode.
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-sky-50 border border-sky-200 text-sky-900 rounded-xl space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <GraduationCap className="w-4 h-4 text-sky-700 shrink-0" />
+                      <span>Adult Self-Managed Student</span>
+                    </div>
+                    <p className="text-[11px] text-sky-800 leading-relaxed">
+                      For independent adult learners. You manage your own classes, scheduling, and fees directly. No parent or guardian details are required.
+                    </p>
+                  </div>
+                )}
+
+                {/* Primary User Details */}
                 <div>
                   <label className="block font-medium text-gray-700 mb-1">
                     {regRole === 'student' ? 'Student Full Name' : 'Parent / Guardian Full Name'}
@@ -517,7 +633,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-medium text-gray-700 mb-1">
-                      Email Address
+                      {regRole === 'student' ? 'Student Email Address' : 'Parent Email (For Invoices & Notices)'}
                     </label>
                     <div className="relative">
                       <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
@@ -534,7 +650,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
 
                   <div>
                     <label className="block font-medium text-gray-700 mb-1">
-                      Password
+                      {regRole === 'student' ? 'Student Account Password' : 'Parent Account Password'}
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
@@ -609,8 +725,9 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                   </div>
                 </div>
 
+                {/* ADULT STUDENT COURSE SELECTION */}
                 {regRole === 'student' && (
-                  <div className="space-y-3 pt-1 border-t border-[#E3DFD7]">
+                  <div className="space-y-3 pt-2 border-t border-[#E3DFD7]">
                     <div>
                       <label className="block font-medium text-gray-700 mb-1">
                         Quranic Course / Curriculum
@@ -628,33 +745,151 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ initialMode = 'signin' }
                         <option value="Urdu Language">Urdu Language</option>
                       </select>
                     </div>
+                  </div>
+                )}
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* PARENT MULTI-CHILD ENROLLMENT SECTION */}
+                {regRole === 'parent' && (
+                  <div className="space-y-3 pt-3 border-t border-[#E3DFD7]">
+                    <div className="flex items-center justify-between">
                       <div>
-                        <label className="block font-medium text-gray-700 mb-1">
-                          Parent / Guardian Name (Optional)
-                        </label>
-                        <input
-                          type="text"
-                          value={parentName}
-                          onChange={(e) => setParentName(e.target.value)}
-                          placeholder="e.g. Tariq Khan"
-                          className="w-full px-3 py-2 border border-[#D5D0C6] rounded-xl bg-white text-xs focus:ring-2 focus:ring-[#2D8B5C]/20 focus:border-[#2D8B5C] outline-hidden"
-                        />
+                        <h4 className="font-bold text-gray-900 text-xs flex items-center gap-1.5">
+                          <Users className="w-4 h-4 text-[#2D8B5C]" />
+                          <span>Enrolling Children ({childrenList.length})</span>
+                        </h4>
+                        <p className="text-[11px] text-gray-500">
+                          Add all children who will attend classes under your unified family session
+                        </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={handleAddChild}
+                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#1E5C3D] border border-emerald-200 rounded-lg font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Sibling</span>
+                      </button>
+                    </div>
 
-                      <div>
-                        <label className="block font-medium text-gray-700 mb-1">
-                          Parent Email Address (Optional)
-                        </label>
-                        <input
-                          type="email"
-                          value={parentEmail}
-                          onChange={(e) => setParentEmail(e.target.value)}
-                          placeholder="parent@family.org"
-                          className="w-full px-3 py-2 border border-[#D5D0C6] rounded-xl bg-white text-xs focus:ring-2 focus:ring-[#2D8B5C]/20 focus:border-[#2D8B5C] outline-hidden"
-                        />
-                      </div>
+                    <div className="space-y-3">
+                      {childrenList.map((child, index) => (
+                        <div
+                          key={index}
+                          className="p-3.5 rounded-xl border border-gray-200 bg-[#FAF9F7] space-y-3 relative"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-800 text-xs flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-[#1E5C3D] text-white flex items-center justify-center text-[10px] font-mono">
+                                {index + 1}
+                              </span>
+                              <span>Child #{index + 1} Profile</span>
+                            </span>
+                            {childrenList.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveChild(index)}
+                                className="text-rose-600 hover:text-rose-800 p-1 rounded-md hover:bg-rose-50 cursor-pointer"
+                                title="Remove child"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <div className="sm:col-span-2">
+                              <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                                Child Full Name *
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={child.name}
+                                onChange={(e) => handleUpdateChild(index, { name: e.target.value })}
+                                placeholder="e.g. Zayd Ahmed"
+                                className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                                Age (Years)
+                              </label>
+                              <input
+                                type="number"
+                                min={3}
+                                max={25}
+                                value={child.age}
+                                onChange={(e) => handleUpdateChild(index, { age: e.target.value === '' ? '' : Number(e.target.value) })}
+                                placeholder="e.g. 8"
+                                className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                                Course / Curriculum
+                              </label>
+                              <select
+                                value={child.courseType}
+                                onChange={(e) => handleUpdateChild(index, { courseType: e.target.value as CourseType })}
+                                className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                              >
+                                <option value="Quran Reading / Nazra">Quran Reading / Nazra</option>
+                                <option value="Noorani Qaida">Noorani Qaida (Beginner)</option>
+                                <option value="Tajweed Rules">Tajweed & Phonetics</option>
+                                <option value="Hifz (Memorization)">Hifz (Quran Memorization)</option>
+                                <option value="Islamic Studies">Islamic Studies & Duas</option>
+                                <option value="Urdu Language">Urdu Language</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-medium text-gray-700 mb-1">
+                                Child Login PIN / Password
+                              </label>
+                              <input
+                                type="text"
+                                value={child.loginPassword}
+                                onChange={(e) => handleUpdateChild(index, { loginPassword: e.target.value })}
+                                placeholder="Default: quran123"
+                                className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pt-1">
+                            <label className="flex items-center gap-2 cursor-pointer text-[11px] text-gray-600">
+                              <input
+                                type="checkbox"
+                                checked={child.useCustomEmail}
+                                onChange={(e) => handleUpdateChild(index, { useCustomEmail: e.target.checked })}
+                                className="rounded text-[#2D8B5C] focus:ring-[#2D8B5C]"
+                              />
+                              <span>Child has their own personal email address</span>
+                            </label>
+                            {child.useCustomEmail ? (
+                              <input
+                                type="email"
+                                value={child.loginEmail}
+                                onChange={(e) => handleUpdateChild(index, { loginEmail: e.target.value })}
+                                placeholder="childsownemail@gmail.com"
+                                className="w-full mt-1.5 px-2.5 py-1.5 border border-gray-300 rounded-lg bg-white text-xs focus:ring-1 focus:ring-[#2D8B5C] outline-hidden"
+                              />
+                            ) : (
+                              <p className="text-[10px] text-gray-500 mt-1 italic">
+                                ✨ Academy assigns unique branded login email (e.g. <strong className="font-mono text-[#1E5C3D]">{generateStudentEmail(child.name || 'Ali', 'STU-101')}</strong>). Real email inbox not required for kids.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl text-[11px] text-gray-600">
+                      💡 <strong>Already have children registered in the academy?</strong> If you have existing student records, registering with your parent email will automatically link them into your unified family dashboard without losing any lessons or attendance!
                     </div>
                   </div>
                 )}

@@ -31,6 +31,7 @@ interface PaymentNoticeModalProps {
 }
 
 export const PAYMENT_METHODS = [
+  { id: 'Visa / Mastercard', name: 'Credit / Debit Card (Visa / Mastercard)', category: 'Card', isRemittance: false },
   // US & Digital Wallets
   { id: 'Zelle', name: 'Zelle (US Bank Instant Transfer)', category: 'Digital Wallet', isRemittance: false },
   { id: 'PayPal', name: 'PayPal (Balance / Card)', category: 'Digital Wallet', isRemittance: false },
@@ -62,7 +63,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const [paymentDate, setPaymentDate] = useState<string>(fee.paymentDate || todayStr);
-  const [paymentMethod, setPaymentMethod] = useState<string>(fee.paymentMethod || 'Zelle');
+  const [paymentMethod, setPaymentMethod] = useState<string>(fee.paymentMethod || 'Visa / Mastercard');
   const [reference, setReference] = useState<string>(fee.paymentReference || '');
   const [mtcnNumber, setMtcnNumber] = useState<string>(fee.paymentMtcnNumber || '');
   const [senderName, setSenderName] = useState<string>(fee.paymentSenderName || fee.parentName || '');
@@ -269,6 +270,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                 onChange={(e) => setPaymentMethod(e.target.value)}
                 className="min-h-[44px] w-full text-xs px-3 py-2.5 border border-[#D5D0C6] rounded-xl bg-white text-[#161F1A] focus:outline-none focus:ring-2 focus:ring-[#2D8B5C] font-medium"
               >
+                <option value="Visa / Mastercard">Credit / Debit Card (Visa / Mastercard)</option>
                 <optgroup label="🇺🇸 US & Digital Wallets">
                   <option value="Zelle">Zelle (US Bank Instant Transfer)</option>
                   <option value="PayPal">PayPal</option>
@@ -384,9 +386,6 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                 <span>Proof of Payment / Transfer Receipt</span>
                 <span className="text-[10px] font-normal text-[#5A6B61]">(Optional photo or screenshot)</span>
               </label>
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> Fast Upload Ready
-              </span>
             </div>
 
             {/* Hidden native input */}
@@ -408,7 +407,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                   >
                     <img
                       src={receiptImage}
-                      alt="Receipt WebP preview"
+                      alt="Receipt preview"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                     />
                     <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
@@ -418,21 +417,13 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
 
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-[#161F1A] truncate">
-                      {receiptStats?.fileName || 'Payment_Receipt.webp'}
+                      {receiptStats?.fileName || 'Payment_Receipt.jpg'}
                     </p>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[11px] font-mono font-bold text-[#2D8B5C] bg-emerald-50 px-1.5 py-0.5 rounded">
-                        WebP • {receiptStats?.compressedSizeKB || '42'} KB
+                      <span className="text-[11px] font-medium text-[#2D8B5C] bg-emerald-50 px-1.5 py-0.5 rounded">
+                        Receipt attached successfully
                       </span>
-                      {receiptStats?.reductionPercentage ? (
-                        <span className="text-[11px] text-[#5A6B61]">
-                          ({receiptStats.reductionPercentage}% smaller)
-                        </span>
-                      ) : null}
                     </div>
-                    <span className="text-[10px] text-gray-400 block mt-0.5">
-                      Zero server bloat • Embeds safely in invoice
-                    </span>
                   </div>
                 </div>
 
@@ -477,10 +468,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                   <div className="flex flex-col items-center justify-center py-2 space-y-2">
                     <RefreshCw className="w-6 h-6 text-[#2D8B5C] animate-spin" />
                     <span className="text-xs font-semibold text-[#161F1A]">
-                      Optimizing and converting image to compressed WebP...
-                    </span>
-                    <span className="text-[10px] text-[#5A6B61]">
-                      Keeps page lightning fast & Firestore memory tiny
+                      Processing receipt image...
                     </span>
                   </div>
                 ) : (
@@ -492,7 +480,7 @@ export const PaymentNoticeModal: React.FC<PaymentNoticeModalProps> = ({
                       Click to upload receipt photo or drag & drop
                     </span>
                     <p className="text-[11px] text-[#5A6B61]">
-                      PNG, JPG, or Screenshot • Automatically compressed to lightweight WebP (&lt;60KB)
+                      Upload payment slip or receipt image
                     </p>
                   </div>
                 )}

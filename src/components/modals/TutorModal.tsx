@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserCheck, Video, DollarSign, Phone, Mail, FileText, Key } from 'lucide-react';
+import { X, UserCheck, Video, DollarSign, Phone, Mail, FileText, Key, Clock, Calendar } from 'lucide-react';
 import { Tutor } from '../../types';
 import { registerUserAccount } from '../../services/dataService';
 
@@ -28,6 +28,10 @@ export const TutorModal: React.FC<TutorModalProps> = ({
   const [status, setStatus] = useState<'Active' | 'Inactive' | 'On Leave'>('Active');
   const [availabilityStatus, setAvailabilityStatus] = useState<'Available' | 'Busy'>('Available');
   const [notes, setNotes] = useState<string>('');
+  const [shiftPreset, setShiftPreset] = useState<string>('12:30 AM - 07:00 AM');
+  const [shiftStartTimePKT, setShiftStartTimePKT] = useState<string>('12:30 AM');
+  const [shiftEndTimePKT, setShiftEndTimePKT] = useState<string>('07:00 AM');
+  const [shiftDays, setShiftDays] = useState<string[]>(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
   const [createTutorUser, setCreateTutorUser] = useState<boolean>(true);
   const [tutorPassword, setTutorPassword] = useState<string>('tutor123');
   const [saving, setSaving] = useState<boolean>(false);
@@ -45,6 +49,22 @@ export const TutorModal: React.FC<TutorModalProps> = ({
       setStatus(initialTutor.status || 'Active');
       setAvailabilityStatus(initialTutor.availabilityStatus || 'Available');
       setNotes(initialTutor.notes || '');
+      const start = initialTutor.shiftStartTimePKT || '12:30 AM';
+      const end = initialTutor.shiftEndTimePKT || '07:00 AM';
+      setShiftStartTimePKT(start);
+      setShiftEndTimePKT(end);
+      setShiftDays(initialTutor.shiftDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
+      if (start === '12:30 AM' && end === '07:00 AM') {
+        setShiftPreset('12:30 AM - 07:00 AM');
+      } else if (start === '01:00 AM' && end === '07:00 AM') {
+        setShiftPreset('01:00 AM - 07:00 AM');
+      } else if (start === '12:30 AM' && end === '06:00 AM') {
+        setShiftPreset('12:30 AM - 06:00 AM');
+      } else if (start === '01:00 AM' && end === '06:00 AM') {
+        setShiftPreset('01:00 AM - 06:00 AM');
+      } else {
+        setShiftPreset('custom');
+      }
     } else {
       const nextId = `Tutor ${existingTutorsCount + 1}`;
       setTutorId(nextId);
@@ -57,6 +77,10 @@ export const TutorModal: React.FC<TutorModalProps> = ({
       setStatus('Active');
       setAvailabilityStatus('Available');
       setNotes('');
+      setShiftStartTimePKT('12:30 AM');
+      setShiftEndTimePKT('07:00 AM');
+      setShiftPreset('12:30 AM - 07:00 AM');
+      setShiftDays(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
     }
   }, [initialTutor, existingTutorsCount, isOpen]);
 
@@ -89,6 +113,9 @@ export const TutorModal: React.FC<TutorModalProps> = ({
           monthlySalaryPKR: Number(monthlySalaryPKR) || 0,
           status,
           availabilityStatus,
+          shiftStartTimePKT: shiftStartTimePKT.trim() || '12:30 AM',
+          shiftEndTimePKT: shiftEndTimePKT.trim() || '07:00 AM',
+          shiftDays: shiftDays.length > 0 ? shiftDays : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
           notes: notes.trim()
         },
         initialTutor?.id
@@ -242,6 +269,128 @@ export const TutorModal: React.FC<TutorModalProps> = ({
                 placeholder="+92 300 1234567"
                 className="w-full border border-[#D5D0C6] rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
               />
+            </div>
+          </div>
+
+          {/* Shift Schedule & Standard Working Hours (PKT) */}
+          <div className="p-3.5 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-[#161F1A] flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-[#2D8B5C]" />
+                Faculty Shift Schedule &amp; Timings (PKT)
+              </label>
+              <span className="text-[10px] font-bold text-[#2D8B5C] bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                Pakistan Standard Time
+              </span>
+            </div>
+
+            {/* Shift Presets */}
+            <div>
+              <label className="block text-[11px] font-semibold text-[#5A6B61] mb-1">Shift Timing Preset</label>
+              <select
+                value={shiftPreset}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setShiftPreset(val);
+                  if (val === '12:30 AM - 07:00 AM') {
+                    setShiftStartTimePKT('12:30 AM');
+                    setShiftEndTimePKT('07:00 AM');
+                  } else if (val === '01:00 AM - 07:00 AM') {
+                    setShiftStartTimePKT('01:00 AM');
+                    setShiftEndTimePKT('07:00 AM');
+                  } else if (val === '12:30 AM - 06:00 AM') {
+                    setShiftStartTimePKT('12:30 AM');
+                    setShiftEndTimePKT('06:00 AM');
+                  } else if (val === '01:00 AM - 06:00 AM') {
+                    setShiftStartTimePKT('01:00 AM');
+                    setShiftEndTimePKT('06:00 AM');
+                  }
+                }}
+                className="w-full border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 text-xs bg-white font-medium focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
+              >
+                <option value="12:30 AM - 07:00 AM">12:30 AM – 07:00 AM PKT (Standard Night Shift - Default)</option>
+                <option value="01:00 AM - 07:00 AM">01:00 AM – 07:00 AM PKT (1 AM Start Shift)</option>
+                <option value="12:30 AM - 06:00 AM">12:30 AM – 06:00 AM PKT (Early Out Shift)</option>
+                <option value="01:00 AM - 06:00 AM">01:00 AM – 06:00 AM PKT (6-Hour Shift)</option>
+                <option value="custom">Custom Timing (Enter Specific Start / End)...</option>
+              </select>
+            </div>
+
+            {/* Custom / Editable Start and End Times */}
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-[11px] font-semibold text-[#161F1A] mb-1">
+                  Shift Start Time
+                </label>
+                <input
+                  type="text"
+                  value={shiftStartTimePKT}
+                  onChange={(e) => {
+                    setShiftStartTimePKT(e.target.value);
+                    setShiftPreset('custom');
+                  }}
+                  placeholder="e.g. 12:30 AM"
+                  className="w-full border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 text-xs font-mono bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-[#161F1A] mb-1">
+                  Shift End Time
+                </label>
+                <input
+                  type="text"
+                  value={shiftEndTimePKT}
+                  onChange={(e) => {
+                    setShiftEndTimePKT(e.target.value);
+                    setShiftPreset('custom');
+                  }}
+                  placeholder="e.g. 07:00 AM"
+                  className="w-full border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 text-xs font-mono bg-white focus:ring-1 focus:ring-[#2D8B5C] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Weekly Working Days */}
+            <div className="pt-1 border-t border-[#EAE6DE]">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-semibold text-[#5A6B61] flex items-center gap-1">
+                  <Calendar className="w-3 h-3 text-[#2D8B5C]" /> Weekly Working Days ({shiftDays.length} Days)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShiftDays(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])}
+                  className="text-[10px] text-[#2D8B5C] hover:underline font-bold"
+                >
+                  Reset Mon–Fri (5 Days)
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const).map(day => {
+                  const isSelected = shiftDays.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          if (shiftDays.length > 1) {
+                            setShiftDays(shiftDays.filter(d => d !== day));
+                          }
+                        } else {
+                          setShiftDays([...shiftDays, day]);
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                          : 'bg-white text-[#5A6B61] border border-[#D5D0C6] hover:bg-gray-50'
+                      }`}
+                    >
+                      {day.slice(0, 3)}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 

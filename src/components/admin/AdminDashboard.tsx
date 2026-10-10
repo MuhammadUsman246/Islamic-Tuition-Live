@@ -69,7 +69,8 @@ import {
   DeleteConfirmTarget,
   CourseType,
   StudentStatus,
-  SummaryMetrics
+  SummaryMetrics,
+  StudentReferralLead
 } from '../../types';
 import { TimetableGrid } from '../common/TimetableGrid';
 import { TutorSlotAvailabilityInspector } from '../common/TutorSlotAvailabilityInspector';
@@ -97,6 +98,7 @@ import { MultiDayClassDeleteModal } from '../modals/MultiDayClassDeleteModal';
 import { StudentLeaveModal } from '../modals/StudentLeaveModal';
 import { ShiftTutorModal } from '../modals/ShiftTutorModal';
 import { StudentFolderModal } from '../modals/StudentFolderModal';
+import { TutorShiftsAttendanceManager } from '../common/TutorShiftsAttendanceManager';
 import { AdminCommandPalette } from './AdminCommandPalette';
 import { QuickFinancialAndTrialAnalytics } from './QuickFinancialAndTrialAnalytics';
 import { AcademySecurityTab } from './AcademySecurityTab';
@@ -164,7 +166,9 @@ import {
   updateFamilyGroupBatch,
   loadOlderLessonsArchive,
   checkAndApplyReferralDiscountOnFirstPayment,
-  notifyTrial5SessionsCompleted
+  notifyTrial5SessionsCompleted,
+  getStudentReferralLeads,
+  updateStudentReferralLead
 } from '../../services/dataService';
 import { clearAllAcademyData } from '../../services/seedData';
 
@@ -202,6 +206,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const { userProfile } = useAuth();
 
   // Modal states
+  const [studentReferralLeads, setStudentReferralLeads] = useState<StudentReferralLead[]>([]);
+  useEffect(() => {
+    getStudentReferralLeads().then(setStudentReferralLeads).catch(() => {});
+  }, []);
+
+  const pendingReferralLeads = useMemo(() => {
+    return studentReferralLeads.filter(l => l.status === 'Pending Contact' || l.status === 'Contacted' || l.status === 'Trial Scheduled');
+  }, [studentReferralLeads]);
+
   const [activePreviewImage, setActivePreviewImage] = useState<string | null>(null);
   const [isClassModalOpen, setIsClassModalOpen] = useState<boolean>(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: DayOfWeek; time: string; tutorId?: string } | undefined>();
@@ -572,7 +585,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Attendance quick marking state
   const [attStudentId, setAttStudentId] = useState(students[0]?.studentId || '');
   const [attStatus, setAttStatus] = useState<'Present' | 'Absent' | 'Excused'>('Present');
-  const [attendanceSubTab, setAttendanceSubTab] = useState<'students' | 'tutors'>('students');
+  const [attendanceSubTab, setAttendanceSubTab] = useState<'tutors' | 'students'>('tutors');
+  const [adminAttPeriod, setAdminAttPeriod] = useState<'7days' | '30days' | '60days' | 'all'>('7days');
+  const [isLoadingOlderAdminAtt, setIsLoadingOlderAdminAtt] = useState<boolean>(false);
   const [adminAttStudentFilter, setAdminAttStudentFilter] = useState<string>('all');
   const [adminAttStatusFilter, setAdminAttStatusFilter] = useState<'all' | 'Present' | 'Late' | 'Absent' | 'Excused'>('all');
   const [adminAttSearchQuery, setAdminAttSearchQuery] = useState<string>('');
@@ -644,6 +659,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const filteredAdminStudentAttendance = useMemo(() => {
     return unifiedAdminStudentAttendance.filter(rec => {
+      // 1. Date window filter (Default to Last 7 Days)
+      if (adminAttPeriod !== 'all') {
+        const days = adminAttPeriod === '7days' ? 7 : adminAttPeriod === '30days' ? 30 : 60;
+        const cutoff = getRelativeOperationalDate(-days);
+        if (rec.date && rec.date < cutoff) return false;
+      }
       if (adminAttStudentFilter !== 'all' && rec.studentId !== adminAttStudentFilter) return false;
       if (adminAttStatusFilter !== 'all' && rec.status !== adminAttStatusFilter) return false;
       if (adminAttSearchQuery.trim()) {
@@ -656,7 +677,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       return true;
     });
-  }, [unifiedAdminStudentAttendance, adminAttStudentFilter, adminAttStatusFilter, adminAttSearchQuery]);
+  }, [unifiedAdminStudentAttendance, adminAttPeriod, adminAttStudentFilter, adminAttStatusFilter, adminAttSearchQuery]);
+
+  const displayedAdminTutorAttendance = useMemo(() => {
+    if (adminAttPeriod === 'all') return tutorAttendance;
+    const days = adminAttPeriod === '7days' ? 7 : adminAttPeriod === '30days' ? 30 : 60;
+    const cutoff = getRelativeOperationalDate(-days);
+    return (tutorAttendance || []).filter(ta => !ta.date || ta.date >= cutoff);
+  }, [tutorAttendance, adminAttPeriod]);
 
   const adminStudentAttStats = useMemo(() => {
     const base = filteredAdminStudentAttendance;
@@ -2365,6 +2393,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
 
+                    {/* Tutor Official Shift Timing */}
+                    <div className="flex items-center justify-between text-[11px] text-[#5A6B61] bg-[#FAF9F7] px-2.5 py-1.5 rounded-lg border border-[#E3DFD7]">
+                      <span className="flex items-center gap-1 font-mono">
+                        <Clock className="w-3 h-3 text-[#2D8B5C]" />
+                        Shift: <strong className="text-[#161F1A]">{t.shiftStartTimePKT || '12:30 AM'} – {t.shiftEndTimePKT || '07:00 AM'} PKT</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTutor(t);
+                          setIsTutorModalOpen(true);
+                        }}
+                        className="text-[10px] text-[#2D8B5C] font-bold hover:underline cursor-pointer"
+                        title="Adjust tutor shift hours & days"
+                      >
+                        Edit Hours
+                      </button>
+                    </div>
+
                     {/* Stats Metrics */}
                     <div className="grid grid-cols-2 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">
                       <div className="bg-[#FAF9F7] p-2 rounded-lg">
@@ -2385,13 +2432,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       disabled={isConnectingAdminObserver}
                       onClick={() => handleAdminEnterAndObserveClass(t)}
                       className="w-full py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer disabled:opacity-50 active:scale-95 ring-2 ring-emerald-400/20"
-                      title="Enter this tutor's live classroom in 100% Stealth Mode (invisible to Tutor & Student) with full Super-Host control"
+                      title="Enter this tutor's live classroom as SuperAdmin with full meeting controls"
                     >
                       <Eye className="w-4 h-4 text-emerald-200" />
                       <span>
                         {isConnectingAdminObserver && adminActiveObservingTutor?.tutorId === t.tutorId
-                          ? 'Connecting Stealth Mode...'
-                          : '🕵️ Enter & Observe (Stealth Super-Host)'}
+                          ? 'Connecting Observer...'
+                          : 'Observe — SuperAdmin'}
                       </span>
                     </button>
 
@@ -2451,9 +2498,212 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* 1. OVERVIEW TAB */}
       {currentTab === 'overview' && (
         <div className="space-y-6">
+          {/* Priority Card 1: Submitted Payment Notices */}
+          {submittedFeesList.length > 0 && (
+            <div className="bg-gradient-to-r from-slate-50 via-teal-50/35 to-emerald-50/20 border border-teal-200/80 p-4 sm:p-5 rounded-2xl shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-teal-200/60">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-700 flex items-center justify-center relative shrink-0">
+                    <DollarSign className="w-5 h-5" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-teal-500 rounded-full border-2 border-white animate-ping" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-teal-500 rounded-full border-2 border-white" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {submittedFeesList.length} Payment Notice{submittedFeesList.length > 1 ? 's' : ''} Awaiting Admin Confirmation
+                      </h3>
+                      <span className="px-2 py-0.5 bg-teal-700 text-white rounded-full text-[10px] font-bold uppercase tracking-wider">
+                        Priority Action
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Students or parents have notified fee payment and uploaded bank receipts. Review and confirm receipt to credit accounts.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCurrentTab('fees')}
+                  className="text-xs font-bold text-teal-900 bg-teal-100 hover:bg-teal-200 px-3 py-1.5 rounded-lg transition-colors shrink-0 self-start sm:self-center cursor-pointer"
+                >
+                  View in Fees Tab →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+                {submittedFeesList.map(f => (
+                  <div key={f.id} className="bg-white p-3.5 rounded-xl border border-teal-200/70 shadow-2xs space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-xs sm:text-sm">{f.studentName}</span>
+                          <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {f.studentId}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">Invoice: <span className="font-mono font-semibold">{f.invoiceNumber}</span> ({f.billingPeriod})</p>
+                        <p className="text-xs text-teal-900 font-bold mt-1">
+                          Amount: {getCurrencySymbol(f.currency)}{f.amount.toLocaleString()} via {f.paymentMethod || 'Bank Transfer'}
+                        </p>
+                        {f.paymentReference && <p className="text-[11px] text-slate-500 font-mono mt-0.5">Ref: {f.paymentReference}</p>}
+                        {f.paymentMtcnNumber && <p className="text-[11px] text-amber-800 font-mono font-bold mt-0.5">MTCN: {f.paymentMtcnNumber}</p>}
+                      </div>
+                      <div className="text-right shrink-0 space-y-1">
+                        <span className="text-[10px] font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 inline-block">
+                          Payment Submitted
+                        </span>
+                        {f.receiptImage && (
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setViewingReceiptFee(f)}
+                              className="text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded border border-emerald-300 inline-flex items-center gap-1 cursor-pointer mt-1"
+                            >
+                              <FileImage className="w-3 h-3 text-[#2D8B5C]" />
+                              <span>View Receipt</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (confirm(`Decline payment notice for ${f.studentName}?`)) {
+                            await updateFee(f.id, { status: 'Pending' });
+                            if (onRefreshData) await onRefreshData();
+                          }
+                        }}
+                        className="px-3 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                      >
+                        Decline
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await updateFee(f.id, {
+                            status: 'Paid',
+                            paymentDate: f.paymentDate || todayStr,
+                            paymentMethod: f.paymentMethod || 'Bank Transfer (Admin Confirmed)',
+                            adminConfirmedAt: new Date().toISOString(),
+                            adminConfirmedBy: userProfile?.displayName || 'Admin'
+                          });
+                          await checkAndApplyReferralDiscountOnFirstPayment(f.studentId, f.invoiceNumber);
+                          if (onRefreshData) await onRefreshData();
+                        }}
+                        className="px-3.5 py-1 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-lg shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Confirm Received</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Priority Card 2: Submitted Student Referrals */}
+          {pendingReferralLeads.length > 0 && (
+            <div className="bg-gradient-to-r from-slate-50 via-indigo-50/35 to-teal-50/20 border border-indigo-200/80 p-4 sm:p-5 rounded-2xl shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-200/60">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-700 flex items-center justify-center relative shrink-0">
+                    <UserPlus className="w-5 h-5" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-indigo-500 rounded-full border-2 border-white animate-ping" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-indigo-500 rounded-full border-2 border-white" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {pendingReferralLeads.length} Submitted Student Referral{pendingReferralLeads.length > 1 ? 's' : ''} Awaiting Contact
+                      </h3>
+                      <span className="px-2 py-0.5 bg-indigo-600 text-white rounded-full text-[10px] font-bold uppercase tracking-wider">
+                        New Leads
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Students and parents submitted new student recommendations via the Islamic Values Referral Portal. Reach out via WhatsApp to schedule trial lessons.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCurrentTab('referrals')}
+                  className="text-xs font-bold text-indigo-900 bg-indigo-100 hover:bg-indigo-200 px-3 py-1.5 rounded-lg transition-colors shrink-0 self-start sm:self-center cursor-pointer"
+                >
+                  View in Referrals Tab →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+                {pendingReferralLeads.map(lead => (
+                  <div key={lead.id} className="bg-white p-3.5 rounded-xl border border-indigo-200/70 shadow-2xs space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-xs sm:text-sm">{lead.referredFriendName}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                            {lead.courseInterest || 'Quran Reading'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">Recommended by: <span className="font-semibold text-slate-900">{lead.referrerName}</span> ({lead.referrerRole || 'student'})</p>
+                        <p className="text-xs text-slate-500 mt-0.5">📞 WhatsApp: <span className="font-mono font-semibold text-slate-800">{lead.whatsappNumber}</span> {lead.country ? `(${lead.country})` : ''}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[10px] font-semibold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 inline-block">
+                          {lead.status}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block mt-1">{lead.dateSubmitted}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await updateStudentReferralLead(lead.id, { status: 'Contacted' });
+                          const updated = await getStudentReferralLeads();
+                          setStudentReferralLeads(updated);
+                        }}
+                        className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                      >
+                        Mark Contacted
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await updateStudentReferralLead(lead.id, { status: 'Trial Scheduled' });
+                          const updated = await getStudentReferralLeads();
+                          setStudentReferralLeads(updated);
+                        }}
+                        className="px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer"
+                      >
+                        Trial Scheduled
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await updateStudentReferralLead(lead.id, { status: 'Converted & Discount Applied' });
+                          const updated = await getStudentReferralLeads();
+                          setStudentReferralLeads(updated);
+                          if (onRefreshData) await onRefreshData();
+                        }}
+                        className="px-3 py-1 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                      >
+                        Mark Converted
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Prominent Pending Online Registrations Approval Banner */}
           {pendingUsers.length > 0 && (
-            <div id="admin_pending_registrations_banner" className="bg-gradient-to-r from-[#FFF9ED] via-amber-50 to-emerald-50/40 border-2 border-[#E8A93E] p-4 sm:p-5 rounded-2xl shadow-sm space-y-4">
+            <div id="admin_pending_registrations_banner" className="bg-gradient-to-r from-slate-50 via-teal-50/20 to-emerald-50/20 border border-teal-200 p-4 sm:p-5 rounded-2xl shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/60">
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center relative shrink-0">
@@ -4240,219 +4490,393 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Filters Bar */}
-              <div className="p-3.5 bg-white border border-[#E3DFD7] rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center space-x-2 flex-1 max-w-sm">
-                  <Search className="w-4 h-4 text-[#5A6B61]" />
-                  <input
-                    type="text"
-                    value={studentSearch}
-                    onChange={(e) => setStudentSearch(e.target.value)}
-                    placeholder="Search students by name or Student ID..."
-                    className="w-full border-none focus:outline-none text-xs"
-                  />
-                </div>
-                  <div className="flex items-center space-x-3">
-                  <label className="text-[#5A6B61] font-medium">Status Filter:</label>
-                  <select
-                    value={studentStatusFilter}
-                    onChange={(e) => setStudentStatusFilter(e.target.value)}
-                    className="border border-[#D5D0C6] rounded-md px-2.5 py-1 text-xs bg-white font-semibold text-[#161F1A]"
-                  >
-                    <option value="all">All Statuses ({students.length})</option>
-                    <option value="Active">Active Sheet ({students.filter(s => s.status === 'Active' && activeSheetStudentIds.has(s.studentId)).length})</option>
-                    <option value="Trial">Trial ({students.filter(s => s.status === 'Trial').length})</option>
-                    <option value="Confirmed">Confirmed ({students.filter(s => s.status === 'Confirmed').length})</option>
-                    <option value="Pending">Pending ({students.filter(s => s.status === 'Pending').length})</option>
-                    <option value="on_leave">🏖️ On Leave ({students.filter(s => s.isOnLeave).length})</option>
-                    <option value="discontinued">🛑 Inactive / Unassigned ({students.filter(s => s.status === 'Not Taking' || s.status === 'Inactive' || !activeSheetStudentIds.has(s.studentId)).length})</option>
-                    <option value="unassigned_slots">🚫 Unassigned / Not in Master Sheet ({unassignedStudentsList.length})</option>
-                    <option value="Not Taking">🚫 Not Taking ({students.filter(s => s.status === 'Not Taking').length})</option>
-                    <option value="Inactive">📁 Inactive ({students.filter(s => s.status === 'Inactive').length})</option>
-                  </select>
-                </div>
-              </div>
+              {/* Modern SaaS Student Directory Filter & Stats Bar */}
+              {(() => {
+                const canonicalActiveCount = students.filter(s => !s.isOnLeave && s.status !== 'On Leave' && (s.status === 'Active' || s.status === 'Confirmed')).length;
+                const canonicalTrialCount = students.filter(s => !s.isOnLeave && s.status !== 'On Leave' && s.status === 'Trial').length;
+                const canonicalPendingCount = students.filter(s => !s.isOnLeave && s.status !== 'On Leave' && s.status === 'Pending').length;
+                const canonicalOnLeaveCount = students.filter(s => Boolean(s.isOnLeave || s.status === 'On Leave')).length;
+                const canonicalInactiveCount = students.filter(s => !s.isOnLeave && s.status !== 'On Leave' && (s.status === 'Inactive' || s.status === 'Not Taking')).length;
 
-              {/* Students Table */}
-              <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Student ID</th>
-                      <th className="py-3 px-4">Student Name</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Course</th>
-                      <th className="py-3 px-4">Assigned Tutor</th>
-                      <th className="py-3 px-4">Parent Details</th>
-                      <th className="py-3 px-4">Tuition Fee</th>
-                      <th className="py-3 px-4">Timezone</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EAE6DE]">
-                    {students
-                      .filter(s => {
-                        const matchSearch = s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
-                          s.studentId.toLowerCase().includes(studentSearch.toLowerCase()) ||
-                          s.parentName?.toLowerCase().includes(studentSearch.toLowerCase());
-                        const matchStatus = studentStatusFilter === 'all'
-                          ? true
-                          : studentStatusFilter === 'on_leave'
-                          ? Boolean(s.isOnLeave)
-                          : studentStatusFilter === 'discontinued'
-                          ? (s.status === 'Not Taking' || s.status === 'Inactive' || !activeSheetStudentIds.has(s.studentId))
-                          : studentStatusFilter === 'unassigned_slots'
-                          ? !activeSheetStudentIds.has(s.studentId)
-                          : s.status === studentStatusFilter;
-                        return matchSearch && matchStatus;
-                      })
-                      .map(st => (
-                        <tr key={st.id} className="hover:bg-[#FAF9F7]/60 transition-colors">
-                          <td className="py-3 px-4 font-mono font-bold text-[#161F1A]">
-                            <button
-                              onClick={() => openStudent360(st)}
-                              className="font-mono font-bold text-[#2D8B5C] hover:underline cursor-pointer text-xs"
-                              title="Click to view Student File & Record"
-                            >
-                              {st.studentId}
-                            </button>
-                          </td>
-                          <td className="py-3 px-4">
-                            <button
-                              onClick={() => openStudent360(st)}
-                              className="font-bold text-[#161F1A] hover:text-[#2D8B5C] text-left block cursor-pointer"
-                              title="Click to view Student File & Record"
-                            >
-                              {st.name}
-                            </button>
-                            <div className="text-[11px] text-[#5A6B61] flex items-center gap-1.5 flex-wrap mt-0.5">
-                              <span>{st.email}</span>
-                              {st.age !== undefined && (
-                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#E8F5EE] text-[#1E5C3D] border border-emerald-200">
-                                  Age: {st.age}
-                                </span>
-                              )}
-                              {(st.joiningDate || st.createdAt) && (
-                                <span className="text-[10px] text-emerald-800 font-mono">
-                                  Joined: {st.joiningDate || st.createdAt?.slice(0,10)}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="space-y-1">
-                              {st.status === 'Trial' ? (() => {
-                                const trialInfo = calculateStudentTrialProgress(st, classes, lessons, attendance);
+                const filteredStudentsList = students.filter(s => {
+                  const query = studentSearch.trim().toLowerCase();
+                  const matchSearch = !query ||
+                    s.name.toLowerCase().includes(query) ||
+                    s.studentId.toLowerCase().includes(query) ||
+                    (s.parentName && s.parentName.toLowerCase().includes(query)) ||
+                    (s.assignedTutorId && s.assignedTutorId.toLowerCase().includes(query)) ||
+                    (s.courseType && s.courseType.toLowerCase().includes(query));
+
+                  if (!matchSearch) return false;
+
+                  if (studentStatusFilter === 'all') return true;
+                  if (studentStatusFilter === 'Active') return !s.isOnLeave && s.status !== 'On Leave' && (s.status === 'Active' || s.status === 'Confirmed');
+                  if (studentStatusFilter === 'Trial') return !s.isOnLeave && s.status !== 'On Leave' && s.status === 'Trial';
+                  if (studentStatusFilter === 'Pending') return !s.isOnLeave && s.status !== 'On Leave' && s.status === 'Pending';
+                  if (studentStatusFilter === 'On Leave') return Boolean(s.isOnLeave || s.status === 'On Leave');
+                  if (studentStatusFilter === 'Inactive') return !s.isOnLeave && s.status !== 'On Leave' && (s.status === 'Inactive' || s.status === 'Not Taking');
+                  return true;
+                });
+
+                return (
+                  <div className="space-y-3">
+                    {/* Status Tabs Bar & Search */}
+                    <div className="p-3 bg-white border border-[#E3DFD7] rounded-xl shadow-3xs flex flex-wrap items-center justify-between gap-3 text-xs">
+                      {/* Clean 5 Canonical Status Tabs */}
+                      <div className="flex items-center space-x-1 flex-wrap gap-y-1">
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('all')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'all'
+                              ? 'bg-[#161F1A] text-white shadow-2xs'
+                              : 'text-[#5A6B61] hover:text-[#161F1A] hover:bg-gray-100'
+                          }`}
+                        >
+                          <span>All Students</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'all' ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                            {students.length}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('Active')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'Active'
+                              ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                              : 'text-emerald-800 hover:text-emerald-950 hover:bg-emerald-50'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                          <span>Active</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'Active' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
+                            {canonicalActiveCount}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('Trial')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'Trial'
+                              ? 'bg-[#E8A93E] text-white shadow-2xs'
+                              : 'text-amber-800 hover:text-amber-950 hover:bg-amber-50'
+                          }`}
+                        >
+                          <Sparkles className="w-3 h-3 text-[#E8A93E]" />
+                          <span>Trial</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'Trial' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'}`}>
+                            {canonicalTrialCount}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('Pending')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'Pending'
+                              ? 'bg-blue-600 text-white shadow-2xs'
+                              : 'text-blue-800 hover:text-blue-950 hover:bg-blue-50'
+                          }`}
+                        >
+                          <Clock className="w-3 h-3 text-blue-500" />
+                          <span>Pending</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'Pending' ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'}`}>
+                            {canonicalPendingCount}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('On Leave')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'On Leave'
+                              ? 'bg-amber-700 text-white shadow-2xs'
+                              : 'text-amber-900 hover:text-amber-950 hover:bg-amber-50'
+                          }`}
+                        >
+                          <Palmtree className="w-3 h-3 text-amber-600" />
+                          <span>On Leave</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'On Leave' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-900'}`}>
+                            {canonicalOnLeaveCount}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setStudentStatusFilter('Inactive')}
+                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            studentStatusFilter === 'Inactive'
+                              ? 'bg-slate-600 text-white shadow-2xs'
+                              : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>Inactive</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${studentStatusFilter === 'Inactive' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
+                            {canonicalInactiveCount}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* Search Bar with Counter */}
+                      <div className="flex items-center space-x-2 w-full sm:w-auto flex-1 max-w-sm justify-end">
+                        <div className="relative w-full">
+                          <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#5A6B61]" />
+                          <input
+                            type="text"
+                            value={studentSearch}
+                            onChange={(e) => setStudentSearch(e.target.value)}
+                            placeholder="Search by student, ID, tutor, or parent..."
+                            className="w-full pl-8 pr-16 py-1.5 bg-[#FAF9F7] border border-[#D5D0C6] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-[#2D8B5C]"
+                          />
+                          <span className="absolute right-2.5 top-2 text-[10px] font-semibold text-[#5A6B61] pointer-events-none">
+                            {filteredStudentsList.length} shown
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Modern High-Density Students Table */}
+                    <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
+                      {filteredStudentsList.length === 0 ? (
+                        <div className="py-12 px-4 text-center">
+                          <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                          <p className="text-xs font-semibold text-[#161F1A]">No students found</p>
+                          <p className="text-[11px] text-[#5A6B61] mt-0.5">
+                            No students match the "{studentStatusFilter === 'all' ? 'All' : studentStatusFilter}" status filter or search criteria.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider text-[11px]">
+                              <tr>
+                                <th className="py-2.5 px-3.5">Student Profile</th>
+                                <th className="py-2.5 px-3.5">Status</th>
+                                <th className="py-2.5 px-3.5">Course &amp; Faculty</th>
+                                <th className="py-2.5 px-3.5">Guardian Contact</th>
+                                <th className="py-2.5 px-3.5">Tuition &amp; Zone</th>
+                                <th className="py-2.5 px-3.5 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#EAE6DE]">
+                              {filteredStudentsList.map(st => {
+                                const isOnLeave = Boolean(st.isOnLeave || st.status === 'On Leave');
+                                const isTrial = !isOnLeave && st.status === 'Trial';
+                                const isPending = !isOnLeave && st.status === 'Pending';
+                                const isActive = !isOnLeave && (st.status === 'Active' || st.status === 'Confirmed');
+                                const isInactive = !isOnLeave && (st.status === 'Inactive' || st.status === 'Not Taking');
+
                                 return (
-                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center w-max gap-1 ${trialInfo.stageBadgeColor}`}>
-                                    <Sparkles className="w-3 h-3" /> {trialInfo.stageLabel} ({trialInfo.daysCompleted}/5)
-                                  </span>
+                                  <tr key={st.id} className="hover:bg-[#FAF9F7]/70 transition-colors">
+                                    {/* Column 1: Student Profile */}
+                                    <td className="py-2.5 px-3.5">
+                                      <div className="flex items-center space-x-2.5">
+                                        <div className="w-8 h-8 rounded-lg bg-[#2D8B5C]/10 text-[#1E5C3D] font-bold text-xs flex items-center justify-center shrink-0 border border-[#2D8B5C]/20">
+                                          {st.name ? st.name.charAt(0).toUpperCase() : 'S'}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="flex items-center space-x-1.5 flex-wrap">
+                                            <button
+                                              type="button"
+                                              onClick={() => openStudent360(st)}
+                                              className="font-bold text-[#161F1A] hover:text-[#2D8B5C] cursor-pointer text-left truncate"
+                                              title="Open Student File & Record"
+                                            >
+                                              {st.name}
+                                            </button>
+                                            <span className="font-mono text-[10px] font-bold text-[#2D8B5C] bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 shrink-0">
+                                              {st.studentId}
+                                            </span>
+                                            {st.studentType === 'adult' ? (
+                                              <span className="text-[9px] font-bold text-sky-800 bg-sky-100 border border-sky-200 px-1.5 py-0.2 rounded shrink-0">
+                                                Adult
+                                              </span>
+                                            ) : (
+                                              <span className="text-[9px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded shrink-0">
+                                                Child
+                                              </span>
+                                            )}
+                                            {(st.familyGroupName || st.familyGroupId) && (
+                                              <span className="text-[9px] font-semibold text-purple-800 bg-purple-50 border border-purple-200 px-1.5 py-0.2 rounded flex items-center gap-1 shrink-0" title={`Family Group: ${st.familyGroupName || st.familyGroupId}`}>
+                                                <Users className="w-2.5 h-2.5 text-purple-600" />
+                                                <span>{st.familyGroupName || st.familyGroupId}</span>
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="text-[11px] text-[#5A6B61] flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                            {st.age !== undefined && (
+                                              <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1 py-0.2 rounded">
+                                                Age: {st.age}
+                                              </span>
+                                            )}
+                                            {(st.joiningDate || st.createdAt) && (
+                                              <span className="text-[10px] text-[#5A6B61] font-mono">
+                                                Joined {st.joiningDate || st.createdAt?.slice(0, 10)}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* Column 2: Status */}
+                                    <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                      {isOnLeave ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300" title={`${st.leaveReason || 'On leave'} (${st.leaveStartDate || ''} to ${st.leaveEndDate || 'indefinite'})`}>
+                                          <Palmtree className="w-3 h-3 text-amber-700" />
+                                          <span>On Leave</span>
+                                        </span>
+                                      ) : isTrial ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                                          <Sparkles className="w-3 h-3 text-[#E8A93E]" />
+                                          <span>Trial ({st.trialSessionsCompleted || 0}/5)</span>
+                                        </span>
+                                      ) : isPending ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-300">
+                                          <Clock className="w-3 h-3 text-blue-600" />
+                                          <span>Pending</span>
+                                        </span>
+                                      ) : isActive ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                          <span>Active</span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                          <span>Inactive</span>
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* Column 3: Course & Faculty */}
+                                    <td className="py-2.5 px-3.5">
+                                      <div className="space-y-0.5">
+                                        <p className="font-semibold text-[#161F1A] text-xs leading-snug">{st.courseType}</p>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (st.assignedTutorId && st.assignedTutorId !== 'Unassigned') {
+                                              setTutorFilter(st.assignedTutorId);
+                                              setCurrentTab('timetable');
+                                            }
+                                          }}
+                                          className={`inline-flex items-center gap-1 text-[11px] font-medium transition-colors ${
+                                            st.assignedTutorId && st.assignedTutorId !== 'Unassigned'
+                                              ? 'text-[#2D8B5C] hover:underline cursor-pointer'
+                                              : 'text-amber-800'
+                                          }`}
+                                          title="View on Master Timetable"
+                                        >
+                                          <Users className="w-3 h-3" />
+                                          <span>{st.assignedTutorId || 'Unassigned'}</span>
+                                        </button>
+                                      </div>
+                                    </td>
+
+                                    {/* Column 4: Guardian Contact */}
+                                    <td className="py-2.5 px-3.5">
+                                      <div className="space-y-0.5">
+                                        <p className="font-semibold text-[#161F1A] text-xs">{st.parentName || 'N/A'}</p>
+                                        <p className="text-[11px] text-[#5A6B61] truncate max-w-[180px]">
+                                          {st.parentPhone || st.parentEmail}
+                                        </p>
+                                      </div>
+                                    </td>
+
+                                    {/* Column 5: Tuition & Zone */}
+                                    <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                      <div className="space-y-0.5">
+                                        {st.monthlyFee ? (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold font-mono text-xs">
+                                            {getCurrencySymbol(st.feeCurrency)}{st.monthlyFee.toLocaleString()}/mo
+                                          </span>
+                                        ) : (
+                                          <span className="text-gray-400 font-normal text-xs">—</span>
+                                        )}
+                                        <div className="text-[10px] text-[#5A6B61] flex items-center gap-1">
+                                          <span className="font-mono font-semibold text-[#161F1A]">{getTimezoneShortCode(st.timezone)}</span>
+                                          <span>• {st.country}</span>
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* Column 6: Actions Toolbar (Compact & Single-Row) */}
+                                    <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                                      <div className="inline-flex items-center space-x-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => openStudent360(st)}
+                                          className="px-2.5 py-1 text-xs text-white bg-[#2D8B5C] font-bold hover:bg-[#1E5C3D] rounded-lg flex items-center space-x-1 shadow-2xs cursor-pointer transition-colors"
+                                          title="Open Student File & Record"
+                                        >
+                                          <FolderOpen className="w-3.5 h-3.5" />
+                                          <span>Student File</span>
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setStudentForShift(st);
+                                            setIsShiftTutorModalOpen(true);
+                                          }}
+                                          className="p-1.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 rounded-lg cursor-pointer transition-colors"
+                                          title={`Shift/transfer ${st.name} to another tutor`}
+                                        >
+                                          <ArrowRight className="w-3.5 h-3.5" />
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setStudentForLeave(st);
+                                            setIsStudentLeaveModalOpen(true);
+                                          }}
+                                          className={`p-1.5 rounded-lg border cursor-pointer transition-colors ${
+                                            isOnLeave
+                                              ? 'text-amber-900 bg-amber-100 hover:bg-amber-200 border-amber-300'
+                                              : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200/80'
+                                          }`}
+                                          title={isOnLeave ? 'Manage student leave status' : 'Set student on leave for days/weeks'}
+                                        >
+                                          <Palmtree className="w-3.5 h-3.5" />
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedStudent(st);
+                                            setIsStudentModalOpen(true);
+                                          }}
+                                          className="p-1.5 text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer transition-colors"
+                                          title="Edit student profile"
+                                        >
+                                          <Pencil className="w-3.5 h-3.5" />
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteStudent(st.id)}
+                                          className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer transition-colors"
+                                          title="Delete student"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
                                 );
-                              })() : (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                  st.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'
-                                }`}>
-                                  {st.status}
-                                </span>
-                              )}
-                              {!activeSheetStudentIds.has(st.studentId) && st.status !== 'Inactive' && st.status !== 'Not Taking' && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center w-max gap-1" title="This student has 0 active scheduled class slots in the Master Sheet">
-                                  <UserX className="w-2.5 h-2.5 text-amber-700" />
-                                  Unassigned (No Slots)
-                                </span>
-                              )}
-                              {st.isOnLeave && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center w-max gap-1" title={`${st.leaveReason || 'On leave'} (${st.leaveStartDate || ''} to ${st.leaveEndDate || 'indefinite'})`}>
-                                  <Palmtree className="w-2.5 h-2.5 text-amber-700" />
-                                  On Leave
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 font-medium text-[#161F1A]">{st.courseType}</td>
-                          <td className="py-3 px-4 font-semibold text-[#2D8B5C]">{st.assignedTutorId}</td>
-                          <td className="py-3 px-4">
-                            <span className="font-medium text-[#161F1A] block">{st.parentName || 'N/A'}</span>
-                            <span className="text-[11px] text-[#5A6B61]">{st.parentPhone || st.parentEmail}</span>
-                          </td>
-                          <td className="py-3 px-4 font-mono font-semibold text-[#161F1A]">
-                            {st.monthlyFee ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold">
-                                {getCurrencySymbol(st.feeCurrency)}{st.monthlyFee.toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-gray-400 font-normal">—</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-[#5A6B61]">
-                            <span className="font-mono text-xs font-semibold text-[#161F1A]" title={st.timezone}>
-                              {getTimezoneShortCode(st.timezone)}
-                            </span>
-                            <span className="text-[11px] text-[#5A6B61] ml-1.5">
-                              ({st.country})
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end space-x-1.5 flex-wrap gap-y-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStudentForShift(st);
-                                  setIsShiftTutorModalOpen(true);
-                                }}
-                                className="px-2 py-1 text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 font-semibold rounded flex items-center space-x-1 cursor-pointer"
-                                title={`Shift/transfer ${st.name} to another tutor`}
-                              >
-                                <ArrowRight className="w-3 h-3" />
-                                <span>Shift</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStudentForLeave(st);
-                                  setIsStudentLeaveModalOpen(true);
-                                }}
-                                className={`px-2 py-1 text-xs font-semibold rounded flex items-center space-x-1 cursor-pointer ${
-                                  st.isOnLeave
-                                    ? 'text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300'
-                                    : 'text-amber-700 bg-amber-50 hover:bg-amber-100'
-                                }`}
-                                title={st.isOnLeave ? "Manage active leave status" : "Set student on leave for days or month"}
-                              >
-                                <Palmtree className="w-3 h-3" />
-                                <span>{st.isOnLeave ? 'On Leave' : 'Leave'}</span>
-                              </button>
-                              <button
-                                onClick={() => openStudent360(st)}
-                                className="px-2.5 py-1 text-xs text-white bg-[#2D8B5C] font-bold hover:bg-[#1E5C3D] rounded flex items-center space-x-1 shadow-2xs cursor-pointer"
-                                title="Open Student File & Record"
-                              >
-                                <FolderOpen className="w-3.5 h-3.5" />
-                                <span>Student File</span>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setSelectedStudent(st);
-                                  setIsStudentModalOpen(true);
-                                }}
-                                className="px-2 py-1 text-xs text-[#2D8B5C] font-semibold hover:bg-[#2D8B5C]/10 rounded cursor-pointer"
-                                title="Edit registry details"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => handleDeleteStudent(st.id)}
-                                className="px-2 py-1 text-xs text-red-600 font-semibold hover:bg-red-50 rounded cursor-pointer"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
@@ -4616,6 +5040,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
+                  {/* Shift Timing & Working Days */}
+                  <div className="p-2.5 rounded-lg bg-[#FAF9F7] border border-[#E3DFD7] text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold text-[#5A6B61] flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-[#2D8B5C]" /> Official Shift (PKT)
+                      </span>
+                      <span className="font-mono font-bold text-[#161F1A] text-xs">
+                        {tutor.shiftStartTimePKT || '12:30 AM'} – {tutor.shiftEndTimePKT || '07:00 AM'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-[#5A6B61]">
+                      <span>Working Days:</span>
+                      <span className="font-semibold text-[#161F1A]">
+                        {tutor.shiftDays && tutor.shiftDays.length > 0 ? (
+                          tutor.shiftDays.length === 5 && tutor.shiftDays.includes('Monday') && tutor.shiftDays.includes('Friday')
+                            ? 'Mon–Fri (5 Days)'
+                            : tutor.shiftDays.map(d => d.slice(0, 3)).join(', ')
+                        ) : 'Mon–Fri (5 Days)'}
+                      </span>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-3 gap-2 text-xs py-1 border-t border-b border-[#EAE6DE] text-center">
                     <div>
                       <span className="text-[10px] text-[#5A6B61] block">Assigned Students</span>
@@ -4754,7 +5200,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         spreadsheetPeriod === 'weekly' ? 'bg-white text-[#2D8B5C] shadow-3xs' : 'text-[#5A6B61]'
                       }`}
                     >
-                      Last 7 Days (Live)
+                      Last 7 Days (Default)
                     </button>
                     <button
                       onClick={async () => {
@@ -6465,34 +6911,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
             </div>
 
-            {/* Sub-tab Switcher */}
+            {/* Sub-tab Switcher: Tutor Shifts Attendance FIRST by default */}
             <div className="inline-flex rounded-lg border border-[#D5D0C6] p-0.5 bg-[#FAF9F7] text-xs">
-              <button
-                type="button"
-                onClick={() => setAttendanceSubTab('students')}
-                className={`px-3 py-1 rounded-md font-semibold transition-all cursor-pointer ${
-                  attendanceSubTab === 'students'
-                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
-                    : 'text-[#5A6B61] hover:text-[#161F1A]'
-                }`}
-              >
-                🎓 Student Attendance
-              </button>
               <button
                 type="button"
                 onClick={() => setAttendanceSubTab('tutors')}
                 className={`px-3 py-1 rounded-md font-semibold transition-all cursor-pointer ${
                   attendanceSubTab === 'tutors'
-                    ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs font-bold'
                     : 'text-[#5A6B61] hover:text-[#161F1A]'
                 }`}
               >
-                ⏰ Tutor Shifts & Attendance (Item 13)
+                ⏰ Tutor Shifts & Attendance (Default)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAttendanceSubTab('students')}
+                className={`px-3 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                  attendanceSubTab === 'students'
+                    ? 'bg-[#2D8B5C] text-white shadow-2xs font-bold'
+                    : 'text-[#5A6B61] hover:text-[#161F1A]'
+                }`}
+              >
+                🎓 Student Class Attendance
               </button>
             </div>
           </div>
 
-          {attendanceSubTab === 'students' ? (
+          {attendanceSubTab === 'tutors' ? (
+            /* Tutor Shifts & Lateness Attendance Manager */
+            <TutorShiftsAttendanceManager
+              tutors={tutors}
+              tutorAttendance={tutorAttendance}
+              role="Admin"
+              onRefreshData={onRefreshData}
+              onEditTutorShiftSchedule={(tutor) => {
+                setSelectedTutor(tutor);
+                setIsTutorModalOpen(true);
+              }}
+            />
+          ) : (
             <div className="space-y-6">
               {/* Quick Student Attendance Form & Stats Overview */}
               <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4">
@@ -6558,23 +7016,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Status Filter Buttons */}
-                <div className="flex items-center space-x-1.5 pt-1 border-t border-[#EAE6DE]">
-                  <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
-                  {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setAdminAttStatusFilter(st)}
-                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                        adminAttStatusFilter === st
-                          ? 'bg-[#2D8B5C] text-white shadow-2xs'
-                          : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
-                      }`}
-                    >
-                      {st === 'all' ? 'All Records' : st}
-                    </button>
-                  ))}
+                {/* Period & Status Filter Controls */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-[#EAE6DE]">
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                    <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Time Period:</span>
+                    {(['7days', '30days', '60days', 'all'] as const).map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={async () => {
+                          setAdminAttPeriod(p);
+                          if (p !== '7days') {
+                            setIsLoadingOlderAdminAtt(true);
+                            try {
+                              const days = p === '30days' ? 35 : p === '60days' ? 65 : 180;
+                              await loadOlderLessonsArchive(days);
+                              if (onRefreshData) await onRefreshData();
+                            } finally {
+                              setIsLoadingOlderAdminAtt(false);
+                            }
+                          }
+                        }}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          adminAttPeriod === p
+                            ? 'bg-[#1E5C3D] text-white shadow-2xs'
+                            : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                        }`}
+                      >
+                        {p === '7days' ? 'Last 7 Days (Default)' : p === '30days' ? 'Last 30 Days' : p === '60days' ? 'Last 60 Days' : 'All Records'}
+                      </button>
+                    ))}
+                    {isLoadingOlderAdminAtt && (
+                      <span className="text-[10px] text-emerald-700 animate-pulse font-medium">Fetching history...</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                    <span className="text-[11px] font-bold text-[#5A6B61] mr-1">Filter Status:</span>
+                    {(['all', 'Present', 'Late', 'Absent', 'Excused'] as const).map(st => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setAdminAttStatusFilter(st)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          adminAttStatusFilter === st
+                            ? 'bg-[#2D8B5C] text-white shadow-2xs'
+                            : 'bg-[#FAF9F7] text-[#5A6B61] border border-[#E3DFD7] hover:bg-gray-100'
+                        }`}
+                      >
+                        {st === 'all' ? 'All Records' : st}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Quick Attendance Marking Accordion */}
@@ -6706,121 +7199,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </table>
                   </div>
                 )}
-              </div>
-            </div>
-          ) : (
-            /* Tutor Shifts Attendance (Item 13) */
-            <div className="space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1">
-                  <div className="p-3 bg-white border border-[#E3DFD7] rounded-xl">
-                    <span className="text-[10px] uppercase font-bold text-[#5A6B61]">Logged Shifts</span>
-                    <p className="text-lg font-bold text-[#161F1A]">{tutorAttendance.length}</p>
-                  </div>
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
-                    <span className="text-[10px] uppercase font-bold text-emerald-800">On Time</span>
-                    <p className="text-lg font-bold text-emerald-900">{tutorAttendance.filter(t => t.status === 'Present').length}</p>
-                  </div>
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                    <span className="text-[10px] uppercase font-bold text-amber-800">Late Arrivals</span>
-                    <p className="text-lg font-bold text-amber-900">{tutorAttendance.filter(t => t.status === 'Late').length}</p>
-                  </div>
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl">
-                    <span className="text-[10px] uppercase font-bold text-rose-800">Total Late Time</span>
-                    <p className="text-lg font-bold text-rose-900">
-                      {tutorAttendance.reduce((acc, t) => acc + (t.lateDurationMinutes || 0), 0)} min
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setSelectedTutorAttendanceRecord(null);
-                    setIsTutorAttendanceModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-[#2D8B5C] text-white text-xs font-semibold rounded-lg hover:bg-[#1E5C3D] flex items-center space-x-1.5 shadow-xs cursor-pointer self-stretch sm:self-auto justify-center"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Log Tutor Shift</span>
-                </button>
-              </div>
-
-              <div className="bg-white border border-[#E3DFD7] rounded-xl overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#FAF9F7] border-b border-[#E3DFD7] text-[#5A6B61] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Tutor</th>
-                      <th className="py-3 px-4">Shift Date</th>
-                      <th className="py-3 px-4">Shift Hours (PKT)</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Late Mins</th>
-                      <th className="py-3 px-4">Marked By</th>
-                      <th className="py-3 px-4">Notes / Substitute</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EAE6DE]">
-                    {tutorAttendance.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className="py-8 text-center text-[#5A6B61]">
-                          No tutor shift records logged yet. Click "Log Tutor Shift" above.
-                        </td>
-                      </tr>
-                    ) : (
-                      tutorAttendance.map(rec => (
-                        <tr key={rec.id} className="hover:bg-[#FAF9F7]/60">
-                          <td className="py-3 px-4">
-                            <span className="font-bold text-[#161F1A] block">{rec.tutorName}</span>
-                            <span className="text-[10px] font-mono text-[#2D8B5C]">{rec.tutorId}</span>
-                          </td>
-                          <td className="py-3 px-4 font-mono">{rec.date}</td>
-                          <td className="py-3 px-4 font-mono text-[#5A6B61]">
-                            {rec.timeIn || '01:00'} - {rec.timeOut || '05:00'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              rec.status === 'Present'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : rec.status === 'Late'
-                                ? 'bg-amber-100 text-amber-800'
-                                : rec.status === 'Absent'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {rec.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 font-mono font-bold">
-                            {(rec.lateDurationMinutes || 0) > 0 ? (
-                              <span className="text-amber-700">+{rec.lateDurationMinutes}m</span>
-                            ) : (
-                              <span className="text-[#5A6B61]">0m</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-[#5A6B61]">{rec.markedBy || 'Supervisor'}</td>
-                          <td className="py-3 px-4 text-[#5A6B61] max-w-xs truncate">{rec.notes || '-'}</td>
-                          <td className="py-3 px-4 text-right space-x-2">
-                            <button
-                              onClick={() => {
-                                setSelectedTutorAttendanceRecord(rec);
-                                setIsTutorAttendanceModalOpen(true);
-                              }}
-                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-semibold rounded-md transition-colors cursor-pointer"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteTutorAttendance(rec.id)}
-                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-md transition-colors cursor-pointer"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}

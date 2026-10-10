@@ -18,6 +18,7 @@ import {
   getNextSequentialStudentId,
   registerUserAccount
 } from '../../services/dataService';
+import { generateStudentEmail, generateParentEmail } from '../../utils/studentEmail';
 import { COMMON_TIMEZONES, SUPPORTED_COUNTRIES } from '../../utils/timezone';
 import { ALLOWED_CURRENCIES, getCurrencySymbol } from '../../utils/currency';
 import { TutorScheduleViewModal } from './TutorScheduleViewModal';
@@ -371,9 +372,9 @@ export const ClassModal: React.FC<ClassModalProps> = ({
 
         const cleanStuId = newStudentId.trim() || getNextSequentialStudentId(students);
         const todayIso = new Date().toISOString().slice(0, 10);
-        const finalStudentEmail = `${cleanStuId.toLowerCase().replace(/[^a-z0-9]/g, '')}@academy.com`;
+        const finalStudentEmail = generateStudentEmail(newStudentName, cleanStuId);
         const finalParentEmail =
-          newParentEmail.trim() || `${cleanStuId.toLowerCase().replace(/[^a-z0-9]/g, '')}.parent@academy.com`;
+          newParentEmail.trim() || generateParentEmail(newParentName, cleanStuId);
 
         await onRegisterStudent({
           studentId: cleanStuId,
@@ -744,9 +745,9 @@ export const ClassModal: React.FC<ClassModalProps> = ({
                       onChange={e => setNewStudentStatus(e.target.value as StudentStatus)}
                       className="w-full border border-[#D5D0C6] rounded-lg px-2.5 py-1.5 text-xs bg-white"
                     >
-                      <option value="Trial">Trial (5 Free Sessions)</option>
-                      <option value="Confirmed">Confirmed</option>
                       <option value="Active">Active</option>
+                      <option value="Trial">Trial (5 Free Sessions)</option>
+                      <option value="Pending">Pending</option>
                     </select>
                   </div>
                   <div>

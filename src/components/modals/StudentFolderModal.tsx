@@ -252,9 +252,8 @@ export const StudentFolderModal: React.FC<StudentFolderModalProps> = ({
                   >
                     <option value="Active" className="text-gray-900 bg-white">🟢 Active</option>
                     <option value="Trial" className="text-gray-900 bg-white">⭐ Trial ({student.trialSessionsCompleted || 0}/5)</option>
-                    <option value="Confirmed" className="text-gray-900 bg-white">✅ Confirmed</option>
+                    <option value="Pending" className="text-gray-900 bg-white">⏳ Pending (Fee / Decision)</option>
                     <option value="On Leave" className="text-gray-900 bg-white">🏖️ On Leave</option>
-                    <option value="Not Taking" className="text-gray-900 bg-white">🚫 Not Taking</option>
                     <option value="Inactive" className="text-gray-900 bg-white">📁 Inactive</option>
                   </select>
                 </div>

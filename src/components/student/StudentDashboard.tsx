@@ -164,7 +164,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const synthesizedStudent = useMemo<Student | null>(() => {
     if (matchedStudent || fetchedStudent) return null;
     if (userProfile && (userProfile.role === 'student' || userProfile.studentId || userProfile.email)) {
-      const cleanEmail = userProfile.email?.toLowerCase().trim() || 'student@academy.com';
+      const cleanEmail = userProfile.email?.toLowerCase().trim() || 'student@islamictuition.us';
       const displayName = userProfile.displayName || cleanEmail.split('@')[0] || 'Student';
       const stuId = userProfile.studentId || `STU-${cleanEmail.split('@')[0].toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
       return {
@@ -202,6 +202,22 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     if (sName && t === sName) return true;
     return false;
   };
+
+  // Determine if this student is ALSO a parent of enrolled children in the academy
+  const hasParentChildren = useMemo(() => {
+    if (actualRole === 'parent' || userProfile?.role === 'parent') return true;
+    const myEmailNorm = userProfile?.email?.toLowerCase().trim();
+    const myUid = userProfile?.uid;
+    if (!myEmailNorm && !myUid) return false;
+    return (
+      (userProfile?.linkedStudentIds && userProfile.linkedStudentIds.length > 0) ||
+      students.some(s =>
+        (s.parentEmail && s.parentEmail.toLowerCase().trim() === myEmailNorm && s.studentId !== matchedStudent?.studentId) ||
+        (myUid && s.parentId === myUid && s.studentId !== matchedStudent?.studentId) ||
+        (userProfile?.familyGroupId && s.familyGroupId === userProfile.familyGroupId && s.studentId !== matchedStudent?.studentId)
+      )
+    );
+  }, [actualRole, userProfile, students, matchedStudent]);
 
   // Filter student's own data strictly
   const myClasses = student ? classes.filter(c => isMatchCurrentStudent(c.studentId) || isMatchCurrentStudent(c.studentName)) : [];
@@ -449,34 +465,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
         </div>
       )}
 
-      {/* Welcome Banner with Permanent Zoom Classroom Link & Avatar */}
+      {/* Welcome Banner with Permanent Zoom Classroom Link */}
       {student && (
         <div className={`${welcomeBannerThemeClass} text-white p-4 sm:p-6 rounded-2xl shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4`}>
           <div className="flex items-start sm:items-center gap-3.5 sm:gap-4 min-w-0">
-            {/* Student Avatar with quick trigger */}
-            <button
-              type="button"
-              onClick={() => setIsProfileModalOpen(true)}
-              className="student-touch-target w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-700 p-0.5 shadow-md flex items-center justify-center overflow-hidden border-2 border-white/30 shrink-0 cursor-pointer hover:scale-105 transition-transform group relative"
-              title="Click to customize profile picture and goals"
-            >
-              {(!adminViewingRole && userProfile?.avatarUrl) ? (
-                <img
-                  src={userProfile.avatarUrl}
-                  alt="Student Avatar"
-                  className="w-full h-full object-cover rounded-2xl"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <span className="text-xl sm:text-2xl font-bold text-white">
-                  {((!adminViewingRole && userProfile?.displayName) || student.name).charAt(0).toUpperCase()}
-                </span>
-              )}
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-2xl">
-                <Edit3 className="w-4 h-4 text-white" />
-              </div>
-            </button>
-
             <div className="space-y-1.5 min-w-0 flex-1 break-words">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-[#E8A93E] text-white text-[10px] font-bold uppercase tracking-wider">
@@ -496,6 +488,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               </h2>
               <p className="text-xs text-[#d2e8dd] max-w-xl break-words">
                 Course: <strong>{student?.courseType}</strong> • Assigned Tutor: <strong>{resolvedTutorDisplayId}</strong>
+                {student?.studentType === 'adult' && (
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-white/20 text-emerald-100 font-semibold text-[10px]">
+                    Adult Student (Self-Managed)
+                  </span>
+                )}
               </p>
               {/* Assigned Tutor Classroom ID & Direct Link Pill */}
               <div className="pt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -528,21 +525,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           </div>
 
           <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 w-full lg:w-auto">
-            <button
-              type="button"
-              onClick={() => setIsProfileModalOpen(true)}
-              className="student-touch-target min-h-[44px] px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition-colors flex items-center justify-center space-x-1.5 border border-white/20 shadow-xs cursor-pointer"
-              title="Update profile picture, bio, and Islamic goals"
-            >
-              <User className="w-4 h-4 text-[#E8A93E] shrink-0" />
-              <span>Edit Profile & Avatar</span>
-            </button>
-
-            {(actualRole === 'parent' || userProfile?.role === 'parent') && (
+            {hasParentChildren && (
               <button
                 type="button"
-                onClick={() => setAdminViewingRole(actualRole === 'student' ? 'parent' : null, null)}
+                onClick={() => setAdminViewingRole('parent', null)}
                 className="student-touch-target min-h-[44px] px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition-colors flex items-center justify-center space-x-1.5 border border-white/20 shadow-xs cursor-pointer"
+                title="Switch to Parent Portal to check children's progress & combined family tuition"
               >
                 <Users className="w-4 h-4 text-emerald-200 shrink-0" />
                 <span>Return to Parent Guardian Portal</span>
@@ -1497,13 +1485,18 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 6: MY PROFILE & PERSONAL LEARNING JOURNEY */}
+      {/* TAB 6: ENHANCED PROFILE & PERSONAL LEARNING JOURNEY */}
       {currentTab === 'student_profile' && (
-        <div className="space-y-6">
-          {/* Top Profile Summary Card */}
-          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-[#E3DFD7] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-5 break-words">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-5 min-w-0 w-full md:w-auto">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#1E5C3D] to-[#2D8B5C] p-0.5 shadow-md flex items-center justify-center overflow-hidden border-2 border-white shrink-0">
+        <div className="space-y-6 max-w-5xl mx-auto">
+          {/* Enhanced Top Profile Summary Card */}
+          <div className="bg-gradient-to-r from-emerald-900 via-[#1E5C3D] to-teal-900 text-white p-6 sm:p-8 rounded-2xl shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+              <User className="w-48 h-48 text-emerald-300" />
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 min-w-0 w-full md:w-auto relative z-10">
+              {/* Large Enhanced Avatar with Glow */}
+              <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-white/20 p-1 shadow-2xl flex items-center justify-center overflow-hidden border-2 border-white/40 shrink-0 backdrop-blur-sm group cursor-pointer" onClick={() => setIsProfileModalOpen(true)}>
                 {(!adminViewingRole && userProfile?.avatarUrl) ? (
                   <img
                     src={userProfile.avatarUrl}
@@ -1512,29 +1505,34 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     referrerPolicy="no-referrer"
                   />
                 ) : (
-                  <span className="text-3xl font-bold text-white">
+                  <span className="text-4xl font-black text-white">
                     {((!adminViewingRole && userProfile?.displayName) || student?.name || 'S').charAt(0).toUpperCase()}
                   </span>
                 )}
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-3xl">
+                  <Edit3 className="w-6 h-6 text-amber-300" />
+                </div>
               </div>
 
-              <div className="space-y-1.5 min-w-0 flex-1 break-words">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-lg font-bold text-[#161F1A] break-words">
+              <div className="space-y-2 min-w-0 flex-1 break-words">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight break-words">
                     {(!adminViewingRole && userProfile?.preferredName) || student?.name || userProfile?.displayName}
                   </h3>
                   {!adminViewingRole && userProfile?.preferredName && (
-                    <span className="text-xs text-[#5A6B61] break-words">({student?.name})</span>
+                    <span className="text-xs text-emerald-200 italic break-words">({student?.name})</span>
                   )}
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#E8A93E] text-white">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-[#E8A93E] text-slate-950 shadow-sm">
                     {student?.courseType || 'Quranic Studies'}
                   </span>
                 </div>
-                <p className="text-xs text-[#5A6B61] break-words">
-                  Assigned ID: <strong className="font-mono text-[#2D8B5C]">{student?.studentId || userProfile?.studentId || 'STU-000'}</strong> • Instructor: <strong>{resolvedTutorDisplayId}</strong>
+                <p className="text-xs sm:text-sm text-emerald-100 break-words flex flex-wrap items-center gap-2">
+                  <span>Assigned ID: <strong className="font-mono bg-black/25 px-2 py-0.5 rounded text-amber-300">{student?.studentId || userProfile?.studentId || 'STU-000'}</strong></span>
+                  <span>•</span>
+                  <span>Instructor: <strong className="text-white">{resolvedTutorDisplayId}</strong></span>
                 </p>
                 {!adminViewingRole && userProfile?.bio && (
-                  <p className="text-xs text-[#161F1A] italic max-w-xl pt-0.5 break-words">
+                  <p className="text-xs text-emerald-200/90 italic max-w-xl pt-1 break-words">
                     "{userProfile.bio}"
                   </p>
                 )}
@@ -1544,7 +1542,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             <button
               type="button"
               onClick={() => setIsProfileModalOpen(true)}
-              className="student-touch-target min-h-[44px] w-full md:w-auto px-4 py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center space-x-2 shrink-0 cursor-pointer"
+              className="student-touch-target min-h-[48px] w-full md:w-auto px-6 py-3 bg-[#E8A93E] hover:bg-amber-400 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 shrink-0 cursor-pointer transform hover:scale-105 relative z-10"
             >
               <Edit3 className="w-4 h-4 shrink-0" />
               <span>Customize Profile & Avatar</span>
@@ -1552,64 +1550,64 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           </div>
 
           {/* Grid of Quranic Goals & Daily Habit Tracker */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Quran Goals & Preferences */}
-            <div className="bg-white p-5 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-4 break-words">
-              <div className="flex items-center space-x-2 border-b border-[#E3DFD7] pb-3">
-                <Target className="w-4 h-4 text-[#2D8B5C] shrink-0" />
+            <div className="bg-white p-6 rounded-2xl border border-[#E3DFD7] shadow-xs space-y-5 break-words">
+              <div className="flex items-center space-x-2.5 border-b border-[#E3DFD7] pb-3.5">
+                <Target className="w-5 h-5 text-[#2D8B5C] shrink-0" />
                 <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
                   Quran Goals & Favorites
                 </h4>
               </div>
 
-              <div className="space-y-3 text-xs">
-                <div className="p-3 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1 break-words">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1">
-                    <Target className="w-3 h-3 text-[#2D8B5C] shrink-0" />
+              <div className="space-y-3.5 text-xs">
+                <div className="p-4 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5 break-words">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1.5">
+                    <Target className="w-3.5 h-3.5 text-[#2D8B5C] shrink-0" />
                     <span>Personal Target</span>
                   </span>
-                  <p className="font-bold text-[#161F1A] break-words">
+                  <p className="font-bold text-sm text-[#161F1A] break-words">
                     {(!adminViewingRole && userProfile?.quranGoal) || 'Memorize Juz Amma with Tajweed rules'}
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="p-3 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1 break-words">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1">
-                      <Heart className="w-3 h-3 text-red-500 shrink-0" />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="p-4 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5 break-words">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1.5">
+                      <Heart className="w-3.5 h-3.5 text-red-500 shrink-0" />
                       <span>Favorite Surah</span>
                     </span>
-                    <p className="font-bold text-[#161F1A] break-words">
+                    <p className="font-bold text-sm text-[#161F1A] break-words">
                       {(!adminViewingRole && userProfile?.favoriteSurah) || 'Surah Ar-Rahman (55)'}
                     </p>
                   </div>
 
-                  <div className="p-3 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1 break-words">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-[#2D8B5C] shrink-0" />
+                  <div className="p-4 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5 break-words">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61] flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#2D8B5C] shrink-0" />
                       <span>Daily Target</span>
                     </span>
-                    <p className="font-bold text-[#161F1A] break-words">
+                    <p className="font-bold text-sm text-[#161F1A] break-words">
                       {(!adminViewingRole && userProfile?.dailyGoalMinutes) || 20} mins / day
                     </p>
                   </div>
                 </div>
 
                 {!adminViewingRole && userProfile?.hobbies && (
-                  <div className="p-3 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1 break-words">
+                  <div className="p-4 bg-[#FAF9F7] rounded-xl border border-[#E3DFD7] space-y-1.5 break-words">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6B61]">
                       Hobbies & Interests
                     </span>
-                    <p className="text-[#161F1A] font-medium break-words">{userProfile.hobbies}</p>
+                    <p className="text-sm text-[#161F1A] font-medium break-words">{userProfile.hobbies}</p>
                   </div>
                 )}
               </div>
             </div>
 
             {/* Protected Academy Records Shield */}
-            <div className="bg-[#FAF9F7] p-5 rounded-2xl border border-[#D5D0C6] shadow-xs space-y-4 break-words">
-              <div className="flex items-center space-x-2 border-b border-[#D5D0C6] pb-3">
-                <ShieldCheck className="w-4 h-4 text-[#1E5C3D] shrink-0" />
+            <div className="bg-[#FAF9F7] p-6 rounded-2xl border border-[#D5D0C6] shadow-xs space-y-5 break-words">
+              <div className="flex items-center space-x-2.5 border-b border-[#D5D0C6] pb-3.5">
+                <ShieldCheck className="w-5 h-5 text-[#1E5C3D] shrink-0" />
                 <h4 className="text-xs font-bold text-[#161F1A] uppercase tracking-wider">
                   Academic Safety Shield
                 </h4>
@@ -1619,29 +1617,29 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 To guarantee zero disruption to your tutor schedules, attendance records, and family tuition statements, official academic identity fields are managed exclusively by Academy Administration.
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                <div className="p-2.5 bg-white rounded-xl border border-[#E3DFD7] break-words">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-white rounded-xl border border-[#E3DFD7] break-words">
                   <span className="text-[10px] text-[#5A6B61] block font-semibold">Official Student Name</span>
-                  <strong className="text-[#161F1A] break-words block">{student?.name || userProfile?.displayName}</strong>
+                  <strong className="text-sm text-[#161F1A] break-words block">{student?.name || userProfile?.displayName}</strong>
                 </div>
 
-                <div className="p-2.5 bg-white rounded-xl border border-[#E3DFD7] break-words">
+                <div className="p-3 bg-white rounded-xl border border-[#E3DFD7] break-words">
                   <span className="text-[10px] text-[#5A6B61] block font-semibold">Assigned Student ID</span>
-                  <strong className="text-[#2D8B5C] font-mono break-words block">{student?.studentId || userProfile?.studentId || 'N/A'}</strong>
+                  <strong className="text-sm text-[#2D8B5C] font-mono break-words block">{student?.studentId || userProfile?.studentId || 'N/A'}</strong>
                 </div>
 
-                <div className="p-2.5 bg-white rounded-xl border border-[#E3DFD7] break-words">
+                <div className="p-3 bg-white rounded-xl border border-[#E3DFD7] break-words">
                   <span className="text-[10px] text-[#5A6B61] block font-semibold">Official Timezone</span>
-                  <strong className="text-[#161F1A] block font-mono break-words">{student?.timezone || 'America/New_York'}</strong>
+                  <strong className="text-sm text-[#161F1A] block font-mono break-words">{student?.timezone || 'America/New_York'}</strong>
                 </div>
 
-                <div className="p-2.5 bg-white rounded-xl border border-[#E3DFD7] break-words">
+                <div className="p-3 bg-white rounded-xl border border-[#E3DFD7] break-words">
                   <span className="text-[10px] text-[#5A6B61] block font-semibold">Enrolled Status</span>
-                  <strong className="text-emerald-700 block">{student?.status || 'Active'}</strong>
+                  <strong className="text-sm text-emerald-700 block">{student?.status || 'Active'}</strong>
                 </div>
               </div>
 
-              <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-[11px] text-emerald-900 flex items-center gap-2 break-words">
+              <div className="p-3.5 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2.5 break-words">
                 <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>You can safely update your avatar, bio, and personal goals anytime without affecting your classes!</span>
               </div>

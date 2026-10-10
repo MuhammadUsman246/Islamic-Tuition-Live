@@ -43,10 +43,10 @@ import { convertPKTToStudentTime, getTimezoneShortCode, isLessonInDateRange, get
 import { generateInvoicePDF, generateLessonReportPDF, generateStudentReportPDF } from '../../utils/pdfGenerator';
 import { FeeReceiptModal } from '../modals/FeeReceiptModal';
 import { PaymentNoticeModal } from '../modals/PaymentNoticeModal';
-import { StudentParentTourModal, hasSeenPortalTour } from '../modals/StudentParentTourModal';
 import { exportLessonsToCSV } from '../../utils/csvExporter';
 import { getCurrencySymbol } from '../../utils/currency';
 import { updateFee, loadOlderLessonsArchive } from '../../services/dataService';
+import { generateStudentEmail } from '../../utils/studentEmail';
 import { getLocalClassroomSettings, fetchLiveKitToken, getCanonicalRoomName, getTutorSlug, getTutorDisplayId } from '../../services/livekitService';
 import { IslamicTuitionClassroom } from '../classroom/IslamicTuitionClassroom';
 import { IslamicReferralSection } from '../common/IslamicReferralSection';
@@ -93,19 +93,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [isLoadingOlderLessons, setIsLoadingOlderLessons] = useState<boolean>(false);
   const [expandedMonths, setExpandedMonths] = useState<{ [key: string]: boolean }>({});
   const [expandedWeeks, setExpandedWeeks] = useState<{ [key: string]: boolean }>({});
-  const [isTourModalOpen, setIsTourModalOpen] = useState<boolean>(false);
-
-  // Automatically trigger Tour modal on first login for parent (never auto-popup during Admin Inspection Mode or after dismissal)
-  useEffect(() => {
-    if (typeof window === 'undefined' || adminViewingRole) return;
-    const targetKey = userProfile?.uid || userProfile?.email || 'parent_guest';
-    if (!hasSeenPortalTour('parent', targetKey)) {
-      const timer = setTimeout(() => {
-        setIsTourModalOpen(true);
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [userProfile?.uid, userProfile?.email, adminViewingRole]);
 
   const parentEmailNorm = userProfile?.email?.toLowerCase().trim() || '';
   const parentUid = userProfile?.uid || '';
@@ -150,7 +137,9 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       if (parentUid && s.parentId && s.parentId === parentUid) return true;
       // 3. Direct parent Email link
       if (parentEmailNorm && s.parentEmail && s.parentEmail.toLowerCase().trim() === parentEmailNorm) return true;
-      // 4. Parent is ALSO an enrolled adult student herself/himself
+      // 4. Family Group ID match for siblings
+      if (userProfile?.familyGroupId && s.familyGroupId && s.familyGroupId === userProfile.familyGroupId) return true;
+      // 5. Parent is ALSO an enrolled adult student herself/himself
       if (parentEmailNorm && s.email && s.email.toLowerCase().trim() === parentEmailNorm) return true;
       return false;
     });
@@ -160,12 +149,12 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     // Fallback synthesized child for logged in parent in fresh/incognito session
     if (parentEmailNorm && (userProfile?.role === 'parent' || explicitLinked.size > 0)) {
       const parentName = userProfile?.displayName || parentEmailNorm.split('@')[0];
-      const childStuId = Array.from(explicitLinked)[0] || `STU-${parentName.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+      const childStuId: string = (Array.from(explicitLinked)[0] as string) || `STU-${parentName.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
       return [{
         id: childStuId,
         studentId: childStuId,
         name: `${parentName}'s Student`,
-        email: `student.${parentEmailNorm}`,
+        email: generateStudentEmail(parentName, childStuId),
         parentEmail: parentEmailNorm,
         phone: userProfile?.phone || '',
         country: userProfile?.country || 'USA',
@@ -404,15 +393,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         {/* Child & Self Selector Pill Switcher */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsTourModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 hover:text-white font-bold text-xs transition-colors flex items-center space-x-1.5 border border-emerald-400/30 shadow-xs cursor-pointer"
-            title="Open interactive Parents Portal Help & Features Tour"
-          >
-            <Sparkles className="w-4 h-4 text-[#E8A93E]" />
-            <span>🎓 Dashboard Tour</span>
-          </button>
 
           {selfStudentProfile && (
             <button
@@ -1784,15 +1764,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         }}
       />
 
-      {/* Parents Onboarding & Dashboard Tour Modal */}
-      <StudentParentTourModal
-        isOpen={isTourModalOpen}
-        onClose={() => setIsTourModalOpen(false)}
-        userRole="parent"
-        userName={(!adminViewingRole && userProfile?.displayName) || activeChild?.parentName || 'Respected Parent'}
-        onNavigateTab={setCurrentTab}
-        storageKeyPrefix={userProfile?.uid || userProfile?.email || 'parent_guest'}
-      />
     </div>
   );
 };

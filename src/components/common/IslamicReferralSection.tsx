@@ -94,51 +94,43 @@ export const IslamicReferralSection: React.FC<IslamicReferralSectionProps> = ({
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Inspirational Islamic Header */}
-      <div className="bg-gradient-to-br from-[#12281D] via-[#1B3A2B] to-[#0D1C13] text-white p-6 sm:p-8 rounded-3xl border border-[#2D5A42] shadow-xl relative overflow-hidden">
-        {/* Subtle Watermark BG Pattern */}
-        <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
-          <BookOpen className="w-64 h-64 text-emerald-300" />
-        </div>
-
+      {/* Clean Professional Referral Header */}
+      <div className="bg-white p-6 sm:p-8 rounded-2xl border border-[#E3DFD7] shadow-xs relative overflow-hidden">
         <div className="relative z-10 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="px-3 py-1 bg-[#E8A93E] text-slate-950 text-xs font-black uppercase tracking-wider rounded-full flex items-center gap-1.5 shadow-sm">
-              <Sparkles className="w-3.5 h-3.5 text-slate-950" />
-              <span>Sadaqah Jariyah & Good Deeds Program</span>
-            </span>
-            <span className="px-3 py-1 bg-white/10 text-emerald-200 text-xs font-semibold rounded-full border border-white/15">
-              Flat $30 Tuition Discount per Referral
+            <span className="px-3 py-1 bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wider rounded-full flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Student Referral Program</span>
             </span>
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+            <h2 className="text-xl sm:text-2xl font-bold text-[#161F1A] tracking-tight">
               Share the Blessing of Quranic Education
             </h2>
-            <p className="text-xs sm:text-sm text-[#B0C9BC] leading-relaxed max-w-3xl">
-              Introducing relatives, friends, and neighbors to learning the Holy Quran is a continuous act of charity (<strong className="text-emerald-300">Sadaqah Jariyah</strong>). Every verse they recite brings eternal reward to your scale of good deeds. As our token of gratitude, you also receive an automatic <strong className="text-emerald-300">$30 flat tuition discount</strong> on your next fee invoice upon their first successful payment!
+            <p className="text-xs sm:text-sm text-[#5A6B61] leading-relaxed max-w-3xl">
+              Introducing relatives, friends, and neighbors to learning the Holy Quran is a wonderful way to spread knowledge and earn great rewards from Allah SWT as continuous Sadaqah Jariyah. Every verse they recite brings eternal reward to your scale of good deeds. As a token of gratitude for helping spread goodness, you also receive a $30 tuition discount on your next fee invoice upon their first successful payment.
             </p>
           </div>
 
-          {/* Hadith Callouts */}
+          {/* Inspirational Callouts */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 space-y-1">
-              <div className="flex items-center space-x-2 text-amber-300 font-bold text-xs">
-                <Heart className="w-4 h-4 fill-amber-300" />
+            <div className="bg-[#FAF9F7] p-4 rounded-xl border border-[#E3DFD7] space-y-1">
+              <div className="flex items-center space-x-2 text-[#2D8B5C] font-bold text-xs">
+                <Heart className="w-4 h-4 text-[#2D8B5C]" />
                 <span>Sahih al-Bukhari</span>
               </div>
-              <p className="text-xs text-emerald-100 italic">
+              <p className="text-xs text-[#5A6B61] italic">
                 "The best among you are those who learn the Quran and teach it."
               </p>
             </div>
 
-            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 space-y-1">
-              <div className="flex items-center space-x-2 text-amber-300 font-bold text-xs">
-                <Award className="w-4 h-4 text-amber-300" />
+            <div className="bg-[#FAF9F7] p-4 rounded-xl border border-[#E3DFD7] space-y-1">
+              <div className="flex items-center space-x-2 text-[#2D8B5C] font-bold text-xs">
+                <Award className="w-4 h-4 text-[#2D8B5C]" />
                 <span>Sahih Muslim</span>
               </div>
-              <p className="text-xs text-emerald-100 italic">
+              <p className="text-xs text-[#5A6B61] italic">
                 "Whoever guides someone to goodness will have a reward like the one who did it."
               </p>
             </div>

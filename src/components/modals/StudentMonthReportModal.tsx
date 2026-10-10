@@ -35,7 +35,7 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
   lessons,
   onOpenLogLesson
 }) => {
-  const [timeFilter, setTimeFilter] = useState<'30' | '14' | '60' | 'all'>('all');
+  const [timeFilter, setTimeFilter] = useState<'7' | '14' | '30' | '60' | 'all'>('7');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedLessonForDetail, setSelectedLessonForDetail] = useState<Lesson | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -61,7 +61,9 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
     const now = new Date();
     let cutoffDate: Date | null = null;
 
-    if (timeFilter === '14') {
+    if (timeFilter === '7') {
+      cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeFilter === '14') {
       cutoffDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     } else if (timeFilter === '30') {
       cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -200,6 +202,14 @@ export const StudentMonthReportModal: React.FC<StudentMonthReportModalProps> = (
         {/* Filter Controls */}
         <div className="px-6 py-3 border-b border-[#EAE6DE] bg-white flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center space-x-1.5 bg-[#F0ECE1] p-1 rounded-xl text-xs font-medium">
+            <button
+              onClick={() => setTimeFilter('7')}
+              className={`px-3 py-1 rounded-lg transition-colors ${
+                timeFilter === '7' ? 'bg-[#1E5C3D] text-white font-bold shadow-2xs' : 'text-[#5A6B61] hover:text-gray-900'
+              }`}
+            >
+              Last 7 Days (Default)
+            </button>
             <button
               onClick={() => setTimeFilter('14')}
               className={`px-3 py-1 rounded-lg transition-colors ${
