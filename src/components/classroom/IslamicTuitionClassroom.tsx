@@ -4025,7 +4025,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                 <button
                   type="button"
                   onClick={() => handleWaitingRoomAction(firstWaiter.id, 'KEEP_WAITING')}
-                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 text-amber-900 dark:text-amber-200 border border-amber-500/40 text-[11px] font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-extrabold flex items-center space-x-1 cursor-pointer shadow-xs transition-colors"
                   title="Keep student safely in waiting room until you finish the current session"
                 >
                   <Clock className="w-3.5 h-3.5" />

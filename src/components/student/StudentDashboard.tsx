@@ -400,21 +400,26 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const { joinClassroomSession } = useClassroom();
 
   const handleJoinLiveKitTestClass = async (targetStudentId?: string, overrideRoomCode?: string) => {
+    console.log('handleJoinLiveKitTestClass triggered', { targetStudentId, overrideRoomCode });
     try {
       setIsJoiningLiveKit(true);
-      const studentId = targetStudentId || student?.studentId;
+      const studentId = targetStudentId || student?.studentId || 'stu';
       const activeTutorId = overrideRoomCode || resolvedTutorDisplayId || student?.assignedTutorId || 'Tutor 1';
+      console.log('Resolving room name', { activeTutorId, studentId });
       const roomName = getCanonicalRoomName(activeTutorId, studentId, overrideRoomCode || customRoomCode);
+      console.log('Room name resolved:', roomName);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
-        identity: `student_${studentId || 'stu'}_${Date.now().toString(36)}`,
-        participantName: student?.name || userProfile?.displayName || 'Student',
+        identity: `student_${studentId}`,
+        participantName: 'Student',
         role: 'student',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
       });
+      console.log('Token fetched:', tokenRes);
       setLiveKitTokenData(tokenRes);
       setIsLiveKitModalOpen(true);
     } catch (err: any) {
+      console.error('Join classroom error:', err);
       showStudentToast(`Could not launch LiveKit Classroom: ${err?.message || err}`, 'error');
     } finally {
       setIsJoiningLiveKit(false);
@@ -579,7 +584,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               id="student_livekit_launch_button"
               onClick={() => handleJoinLiveKitTestClass(undefined, resolvedTutorDisplayId)}
               disabled={isJoiningLiveKit}
-              className="student-touch-target min-h-[48px] px-6 py-3 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-sm transition-all flex items-center justify-center space-x-2.5 shadow-md transform hover:scale-[1.01] cursor-pointer ring-2 ring-emerald-400/30"
+              className="student-touch-target min-h-[48px] px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition-all flex items-center justify-center space-x-2.5 shadow-md transform hover:scale-[1.01] cursor-pointer ring-2 ring-emerald-400/30"
               title={`Join your assigned tutor's live classroom (${resolvedTutorSlug})`}
             >
               <Radio className="w-5 h-5 text-[#E8A93E] animate-pulse shrink-0" />
