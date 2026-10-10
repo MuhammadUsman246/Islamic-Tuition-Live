@@ -4634,7 +4634,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                               <button
                                 type="button"
                                 onClick={() => handleWaitingRoomAction(w.id, 'KEEP_WAITING')}
-                                className="py-1 px-2 rounded-md bg-amber-500/20 hover:bg-amber-500/35 text-amber-900 dark:text-amber-200 border border-amber-500/40 text-[10px] font-bold cursor-pointer transition-colors"
+                                className="py-1 px-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold cursor-pointer transition-colors shadow-sm"
                                 title="Keep student in waiting room until ready"
                               >
                                 <span>Keep Waiting</span>

@@ -399,14 +399,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   const { joinClassroomSession } = useClassroom();
 
-  const handleJoinLiveKitTestClass = async (overrideRoomCode?: string) => {
+  const handleJoinLiveKitTestClass = async (targetStudentId?: string, overrideRoomCode?: string) => {
     try {
       setIsJoiningLiveKit(true);
+      const studentId = targetStudentId || student?.studentId;
       const activeTutorId = overrideRoomCode || resolvedTutorDisplayId || student?.assignedTutorId || 'Tutor 1';
-      const roomName = getCanonicalRoomName(activeTutorId, student?.studentId, overrideRoomCode || customRoomCode);
+      const roomName = getCanonicalRoomName(activeTutorId, studentId, overrideRoomCode || customRoomCode);
       const tokenRes = await fetchLiveKitToken({
         roomId: roomName,
-        identity: `student_${student?.studentId || 'stu'}_${Date.now().toString(36)}`,
+        identity: `student_${studentId || 'stu'}_${Date.now().toString(36)}`,
         participantName: student?.name || userProfile?.displayName || 'Student',
         role: 'student',
         customServerUrl: classroomSettings.livekitServerUrl || undefined,
@@ -576,7 +577,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             <button
               type="button"
               id="student_livekit_launch_button"
-              onClick={() => handleJoinLiveKitTestClass(resolvedTutorDisplayId)}
+              onClick={() => handleJoinLiveKitTestClass(undefined, resolvedTutorDisplayId)}
               disabled={isJoiningLiveKit}
               className="student-touch-target min-h-[48px] px-6 py-3 rounded-xl bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white font-bold text-sm transition-all flex items-center justify-center space-x-2.5 shadow-md transform hover:scale-[1.01] cursor-pointer ring-2 ring-emerald-400/30"
               title={`Join your assigned tutor's live classroom (${resolvedTutorSlug})`}
@@ -700,7 +701,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               <div className="pt-1 flex flex-wrap items-center justify-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => handleJoinLiveKitTestClass(resolvedTutorDisplayId)}
+                  onClick={() => handleJoinLiveKitTestClass(undefined, resolvedTutorDisplayId)}
                   disabled={isJoiningLiveKit}
                   className="student-touch-target min-h-[44px] px-5 py-2.5 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 cursor-pointer shadow-xs"
                 >
@@ -782,7 +783,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => handleJoinLiveKitTestClass(cls.tutorId)}
+                        onClick={() => handleJoinLiveKitTestClass(undefined, cls.tutorId)}
                         disabled={isJoiningLiveKit}
                         className="student-touch-target min-h-[44px] w-full py-2.5 px-3 bg-[#2D8B5C] hover:bg-[#1E5C3D] text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
                       >
