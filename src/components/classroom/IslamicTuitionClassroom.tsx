@@ -464,6 +464,11 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
   // Active Token Data state (updates with valid LiveKit JWT upon admission from Waiting Room)
   const [activeTokenData, setActiveTokenData] = useState<LiveKitRoomTokenResponse>(tokenData);
 
+  useEffect(() => {
+    setActiveTokenData(tokenData);
+    setIsStudentInWaitingLounge(Boolean(!isTutor && (tokenData.inWaitingRoom || !tokenData.token)));
+  }, [tokenData, isTutor]);
+
   // Student "Next Student Lounge" & "Waiting for Tutor Lounge" State + Live Remaining Time Countdown
   const [isStudentInWaitingLounge, setIsStudentInWaitingLounge] = useState<boolean>(
     Boolean(!isTutor && (tokenData.inWaitingRoom || !tokenData.token))
@@ -4634,7 +4639,7 @@ export const IslamicTuitionClassroom: React.FC<IslamicTuitionClassroomProps> = (
                               <button
                                 type="button"
                                 onClick={() => handleWaitingRoomAction(w.id, 'KEEP_WAITING')}
-                                className="py-1 px-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold cursor-pointer transition-colors shadow-sm"
+                                className="py-1 px-2 rounded-md bg-slate-600 hover:bg-slate-700 text-white text-[10px] font-bold cursor-pointer transition-colors shadow-sm"
                                 title="Keep student in waiting room until ready"
                               >
                                 <span>Keep Waiting</span>
